@@ -1,31 +1,27 @@
 'use strict';
 
 /*
-  Pixel-art artist sprites — "Pokémon-style" chibi characters that dance to the
-  music in the bottom band of the overlay.
+  Pixel-art artist sprites — "Pokémon-style" chibi characters that roam across
+  the bottom of the overlay and dance to the music.
 
-  Design:
-  - A sprite is a grid of single-char cells; each char maps to a *role*
-    (skin / hoodie / cap / accent …), not a fixed colour. Recolouring a role
-    yields a new artist look from the same body, so one authored body covers
-    everyone. Roles are resolved to hex per artist by `ArtistRegistry`.
-  - Known groups (e.g. Seedhe Maut) resolve to *multiple* actors (a duo shows
-    two dancers). Unknown artists get a deterministic look seeded from a hash of
-    their name, so the same artist always looks the same.
-  - `SpriteActor` owns the animation: an idle bob plus a small move state machine
-    (sway / pump / spin / point) and a forced jump on drops. Everything is drawn
-    with `fillRect` so it stays crisp pixel art at any scale.
+  v2:
+  - EVERY collaborator on a track gets their own dancer, parsed from the artist
+    string ("Seedhe Maut x DJ SA", "A & B", "X feat. Y", …). Known groups expand
+    to their members (Seedhe Maut => a duo). Each dancer is NAMED on screen.
+  - Dancers ROAM: each has its own X position that drifts across the stage and
+    bounces off the edges, faster when the music is intense.
+  - A dozen named dance moves (bob / sway / pump / spin / wave / headbang / dab /
+    shuffle / moonwalk / hop / kick / point), picked at random and biased toward
+    the energetic ones when the track is hyped. A drop forces a jump.
 
   Exposed on `window.ArtistSprites`:
-    - actorsFor(artist, seedHash) -> SpriteActor[]   (1 for solo, 2 for a duo)
-    - the SpriteActor class (update(now, env) / draw(ctx, x, y, unit))
+    - actorsFor(artistString, seedHash) -> { label, actors: SpriteActor[] }
+    - SpriteActor (update(now, env, w) / draw(ctx, w, h, unit, now, env))
 */
 
 (function () {
   /* ------------------------------------------------------------- sprite body */
 
-  // Neutral chibi rapper: big head + cap, hoodie torso, chain, short legs.
-  // Every row is the same width; `padGrid` normalises defensively anyway.
   // Legend: '.' transparent · o outline · k cap · b brim · s skin · e eye
   //         h hoodie · H hoodie-shadow · c chain/accent · p pants · w shoe
   const BODY = [
@@ -50,10 +46,6 @@
     '...owwo.owwo....',
   ];
 
-  /**
-   * Pad every row to the grid's max width so a mis-authored row can't shift
-   * columns. @param {string[]} rows @returns {string[]}
-   */
   function padGrid(rows) {
     const w = rows.reduce((m, r) => Math.max(m, r.length), 0);
     return rows.map((r) => r.padEnd(w, '.'));
@@ -65,39 +57,37 @@
 
   /* ------------------------------------------------------------ colour roles */
 
-  /**
-   * A "look" maps sprite roles to hex colours. `accent` doubles as the chain and
-   * the cap logo, so a group's brand colour reads instantly.
-   * @typedef {{name:string, skin:string, cap:string, brim:string,
-   *   hoodie:string, hoodieDark:string, accent:string, pants:string, shoe:string}} Look
-   */
-
-  /** Resolve a role char to a hex colour for a given look. */
   function colorFor(ch, look) {
     switch (ch) {
-      case 'o': return '#0b0b12';               // outline
+      case 'o': return '#0b0b12';
       case 'k': return look.cap;
       case 'b': return look.brim;
       case 's': return look.skin;
-      case 'e': return '#0b0b12';               // eyes
+      case 'e': return '#0b0b12';
       case 'h': return look.hoodie;
       case 'H': return look.hoodieDark;
       case 'c': return look.accent;
       case 'p': return look.pants;
       case 'w': return look.shoe;
-      default: return null;                      // '.' transparent
+      default: return null;
     }
   }
 
-  /* --------------------------------------------------------- artist registry */
+  function hsl(h, s, l) {
+    const sf = s / 100;
+    const lf = l / 100;
+    const a = sf * Math.min(lf, 1 - lf);
+    const f = (n) => {
+      const k = (n + h / 30) % 12;
+      const c = lf - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round(255 * Math.max(0, Math.min(1, c))).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  }
 
   const SKINS = ['#c9895e', '#a56a42', '#e0aa7a', '#8a5a38', '#d79b6b'];
 
-  /**
-   * Deterministic look from a name hash, so unknown artists are stable and
-   * distinct. Hues are spread across the wheel; hoodie/cap/accent stay legible.
-   * @param {string} name @param {number} hash @returns {Look}
-   */
+  /** Deterministic distinct look from a name hash. */
   function proceduralLook(name, hash) {
     const h = hash % 360;
     const accentH = (h + 150) % 360;
@@ -114,213 +104,237 @@
     };
   }
 
-  function hsl(h, s, l) {
-    const sf = s / 100;
-    const lf = l / 100;
-    const a = sf * Math.min(lf, 1 - lf);
-    const f = (n) => {
-      const k = (n + h / 30) % 12;
-      const c = lf - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-      return Math.round(255 * Math.max(0, Math.min(1, c))).toString(16).padStart(2, '0');
-    };
-    return `#${f(0)}${f(8)}${f(4)}`;
-  }
+  /* --------------------------------------------------------- artist registry */
 
-  /**
-   * Hand-tuned looks for artists worth recognising. `match` is a lowercase
-   * substring tested against the reported artist string; `members` yields one
-   * actor per look (a duo => two dancers). Extend freely — unknown artists fall
-   * back to a procedural look, so this list only needs the ones worth branding.
-   */
   const REGISTRY = [
     {
       match: 'seedhe maut',
       label: 'Seedhe Maut',
       members: [
-        { // Encore ABJ — warm/gold energy
-          name: 'Encore ABJ', skin: '#b9784c', cap: '#1b1b22', brim: '#111117',
-          hoodie: '#2a2a34', hoodieDark: '#1c1c24', accent: '#ffcf3f',
-          pants: '#15151b', shoe: '#f2f2f2',
-        },
-        { // Calm — cool/teal energy
-          name: 'Calm', skin: '#a06238', cap: '#0f2a2e', brim: '#0a1e21',
-          hoodie: '#123b3f', hoodieDark: '#0c2a2d', accent: '#39e6c8',
-          pants: '#101418', shoe: '#e8e8e8',
-        },
+        { name: 'Encore ABJ', skin: '#b9784c', cap: '#1b1b22', brim: '#111117', hoodie: '#2a2a34', hoodieDark: '#1c1c24', accent: '#ffcf3f', pants: '#15151b', shoe: '#f2f2f2' },
+        { name: 'Calm', skin: '#a06238', cap: '#0f2a2e', brim: '#0a1e21', hoodie: '#123b3f', hoodieDark: '#0c2a2d', accent: '#39e6c8', pants: '#101418', shoe: '#e8e8e8' },
       ],
     },
-    {
-      match: 'divine',
-      label: 'DIVINE',
-      members: [{
-        name: 'DIVINE', skin: '#a5673d', cap: '#111117', brim: '#0b0b10',
-        hoodie: '#20242c', hoodieDark: '#15181e', accent: '#ff4d4d',
-        pants: '#14161c', shoe: '#f2f2f2',
-      }],
-    },
-    {
-      match: 'krsna',
-      label: 'KR$NA',
-      members: [{
-        name: 'KR$NA', skin: '#c08552', cap: '#101018', brim: '#0a0a12',
-        hoodie: '#23252d', hoodieDark: '#16181f', accent: '#c0c0c0',
-        pants: '#131319', shoe: '#eaeaea',
-      }],
-    },
-    {
-      match: 'prabh deep',
-      label: 'Prabh Deep',
-      members: [{
-        name: 'Prabh Deep', skin: '#b57843', cap: '#241a2e', brim: '#180f20',
-        hoodie: '#2e2140', hoodieDark: '#1f1630', accent: '#b487ff',
-        pants: '#171320', shoe: '#efefef',
-      }],
-    },
+    { match: 'divine', label: 'DIVINE', members: [{ name: 'DIVINE', skin: '#a5673d', cap: '#111117', brim: '#0b0b10', hoodie: '#20242c', hoodieDark: '#15181e', accent: '#ff4d4d', pants: '#14161c', shoe: '#f2f2f2' }] },
+    { match: 'krsna', label: 'KR$NA', members: [{ name: 'KR$NA', skin: '#c08552', cap: '#101018', brim: '#0a0a12', hoodie: '#23252d', hoodieDark: '#16181f', accent: '#c0c0c0', pants: '#131319', shoe: '#eaeaea' }] },
+    { match: 'prabh deep', label: 'Prabh Deep', members: [{ name: 'Prabh Deep', skin: '#b57843', cap: '#241a2e', brim: '#180f20', hoodie: '#2e2140', hoodieDark: '#1f1630', accent: '#b487ff', pants: '#171320', shoe: '#efefef' }] },
+    { match: 'raftaar', label: 'Raftaar', members: [{ name: 'Raftaar', skin: '#c58a55', cap: '#0e1a12', brim: '#081109', hoodie: '#12301f', hoodieDark: '#0c2016', accent: '#43e06a', pants: '#111813', shoe: '#f0f0f0' }] },
+    { match: 'mc stan', label: 'MC STΔN', members: [{ name: 'MC STΔN', skin: '#b07440', cap: '#1a1220', brim: '#100a15', hoodie: '#241830', hoodieDark: '#180f22', accent: '#ff6fd8', pants: '#141019', shoe: '#ededed' }] },
   ];
 
-  /**
-   * Case/spacing-insensitive artist match. Handles "A x B", "A, B", "A & B"
-   * collab strings by testing the whole reported artist as a haystack.
-   * @param {string} artist @returns {{label:string, looks:Look[]}|null}
-   */
-  function lookupRegistry(artist) {
-    const hay = (artist || '').toLowerCase();
+  /** Substring match against the (already-isolated) artist token. */
+  function lookupRegistry(token) {
+    const hay = token.toLowerCase();
     for (const entry of REGISTRY) {
-      if (hay.includes(entry.match)) {
-        return { label: entry.label, looks: entry.members };
-      }
+      if (hay.includes(entry.match)) return entry;
     }
     return null;
   }
 
+  /**
+   * Split a raw artist string into individual collaborators. Handles the usual
+   * separators seen on Spotify/YouTube ("x", "&", ",", "feat.", "ft.", "with",
+   * "prod.", "vs", "×", "/", "+"). @param {string} raw @returns {string[]}
+   */
+  function splitArtists(raw) {
+    if (!raw) return [];
+    const marked = raw
+      .replace(/\s*\b(feat\.?|ft\.?|featuring|with|prod\.?|vs\.?|x|and)\b\s*/gi, '|')
+      .replace(/[×,&+/]/g, '|');
+    const seen = new Set();
+    const out = [];
+    for (const part of marked.split('|')) {
+      const name = part.trim().replace(/\s+/g, ' ');
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    }
+    return out;
+  }
+
+  /** Stable small hash of a string, for procedural looks. */
+  function hashOf(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i += 1) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    return h >>> 0;
+  }
+
+  const MAX_ACTORS = 6; // keep the stage readable even on posse cuts
+
   /* -------------------------------------------------------------- move engine */
 
-  const MOVES = ['bob', 'sway', 'pump', 'spin', 'point'];
+  const MOVES = ['bob', 'sway', 'pump', 'spin', 'point', 'wave', 'headbang', 'dab', 'shuffle', 'moonwalk', 'hop', 'kick'];
+  const HYPE_MOVES = ['pump', 'spin', 'shuffle', 'hop', 'wave', 'headbang', 'kick'];
 
-  /** One dancing pixel character. */
+  /** One roaming, dancing pixel character. */
   class SpriteActor {
     /**
-     * @param {Look} look
-     * @param {number} phase Per-actor phase offset so a duo isn't in lockstep.
+     * @param {object} look role→colour look with a `name`
+     * @param {number} index position in the lineup
+     * @param {number} total lineup size
      */
-    constructor(look, phase) {
+    constructor(look, index, total) {
       this.look = look;
-      this.phase = phase || 0;
-      this.move = 'bob';
+      this.name = look.name || '';
+      this.x = (index + 0.5) / total;               // normalised stage X
+      this.dir = index % 2 ? 1 : -1;                // roam direction
+      this.speed = 0.00003 + Math.random() * 0.00004;
+      this.phase = index * 1.7;
+      this.tempo = 5.4 + Math.random() * 1.6;       // personal dance tempo
+      this.move = MOVES[(Math.random() * MOVES.length) | 0];
       this.moveUntil = 0;
-      this.jump = 0;        // 0..1 airborne factor, kicked to 1 on a drop
-      this.facing = 1;      // scaleX target for spins
+      this.jump = 0;
+      this.facing = 1;
       this.facingCur = 1;
-      this.armRaise = 0;    // 0..1, mic/point arm lift
       this.lastDrop = 0;
+      this.lastNow = 0;
     }
 
     /**
-     * Advance animation state.
-     * @param {number} now performance.now() ms
-     * @param {{intensity:number, pulse:number, drop:number, buildup:number}} env
+     * Advance roaming + move selection.
+     * @param {number} now @param {{intensity:number,buildup:number,drop:number}} env
      */
     update(now, env) {
-      // Pick a new random move periodically; hype (intensity) shortens the hold
-      // and biases toward energetic moves.
+      const dt = this.lastNow ? Math.min(50, now - this.lastNow) : 16;
+      this.lastNow = now;
+
+      // Roam across the stage; faster when the track is intense. Bounce at edges.
+      const spd = this.speed * (1 + env.intensity * 2.4 + env.buildup) * dt;
+      this.x += this.dir * spd;
+      if (this.x < 0.05) { this.x = 0.05; this.dir = 1; }
+      if (this.x > 0.95) { this.x = 0.95; this.dir = -1; }
+
+      // Pick a new random move periodically; hype shortens holds + biases moves.
       if (now >= this.moveUntil) {
-        const energetic = env.intensity > 0.4 || env.buildup > 0.5;
-        const pool = energetic ? ['pump', 'spin', 'sway', 'pump'] : MOVES;
+        const hyped = env.intensity > 0.4 || env.buildup > 0.5;
+        const pool = hyped ? HYPE_MOVES : MOVES;
         this.move = pool[(Math.random() * pool.length) | 0];
-        const hold = energetic ? 700 + Math.random() * 700 : 1200 + Math.random() * 1400;
-        this.moveUntil = now + hold;
+        this.moveUntil = now + (hyped ? 650 + Math.random() * 700 : 1100 + Math.random() * 1500);
         if (this.move === 'spin') this.facing *= -1;
       }
 
-      // A rising drop edge forces a jump with arms up.
-      if (env.drop > 0.6 && this.lastDrop <= 0.6) {
-        this.jump = 1;
-        this.armRaise = 1;
-      }
+      // Moonwalkers face against their travel; everyone else faces where they go.
+      const wantFace = this.move === 'moonwalk' ? -this.dir : this.dir;
+      if (this.move !== 'spin') this.facing = wantFace >= 0 ? 1 : -1;
+
+      // Drop => jump with a whipping motion.
+      if (env.drop > 0.6 && this.lastDrop <= 0.6) this.jump = 1;
       this.lastDrop = env.drop;
-
       this.jump *= 0.88;
-      this.facingCur += (this.facing - this.facingCur) * 0.2;
-
-      const wantArm = this.move === 'point' || this.move === 'pump' ? 1 : 0;
-      const armTarget = Math.max(wantArm, env.buildup * 0.8, this.jump);
-      this.armRaise += (armTarget - this.armRaise) * 0.15;
+      this.facingCur += (this.facing - this.facingCur) * 0.25;
     }
 
     /**
-     * Draw the actor. Origin (x, y) is the sprite's *feet* centre.
-     * @param {CanvasRenderingContext2D} ctx
-     * @param {number} x feet centre X (px)
-     * @param {number} y feet centre Y (px)
-     * @param {number} unit pixel size (px per sprite cell)
-     * @param {number} now
-     * @param {{intensity:number, pulse:number, drop:number, buildup:number}} env
+     * Compute the animated pose (in sprite cells) for the current move.
+     * @returns {{dx:number,dy:number,rot:number,sq:number,armL:number,armR:number}}
      */
-    draw(ctx, x, y, unit, now, env) {
+    pose(t, env) {
+      const b = Math.sin(t * this.tempo);
+      const b2 = Math.sin(t * this.tempo * 2);
+      const e = 0.6 + env.intensity * 1.1 + env.pulse * 0.6;
+      const p = { dx: 0, dy: b * 0.35 * e, rot: 0, sq: 1 + b2 * 0.05 * e, armL: 0, armR: 0 };
+      switch (this.move) {
+        case 'sway': p.dx = Math.sin(t * 3) * 1.4; p.rot = Math.sin(t * 3) * 0.08; break;
+        case 'pump': p.armR = 0.5 + 0.5 * Math.abs(b); p.armL = 0.3 * Math.abs(b2); p.dy = Math.abs(b) * 0.6 * e; break;
+        case 'point': p.armR = 0.9; p.rot = 0.05; break;
+        case 'wave': p.armL = 0.5 + 0.5 * b; p.armR = 0.5 - 0.5 * b; break;
+        case 'headbang': p.rot = Math.sin(t * this.tempo * 1.6) * 0.28; p.dy = Math.abs(b) * 0.5 * e; break;
+        case 'dab': p.armR = 1; p.armL = 0.4; p.rot = -0.22; p.dy = 0.2; break;
+        case 'shuffle': p.dx = Math.sin(t * 9) * 0.7; p.dy = Math.abs(Math.sin(t * 9)) * 0.5 * e; break;
+        case 'moonwalk': p.armL = 0.4 + 0.3 * b; p.armR = 0.4 - 0.3 * b; p.rot = 0.05 * b; break;
+        case 'hop': p.dy = Math.max(0, Math.sin(t * this.tempo)) * 1.4 * e; break;
+        case 'kick': p.dx = Math.sin(t * 4) * 0.5; p.rot = Math.sin(t * 4) * 0.12; p.armL = 0.4; break;
+        case 'spin': break; // spin handled via facing flip
+        default: break;     // bob
+      }
+      return p;
+    }
+
+    /**
+     * Draw the actor at its roamed X in the bottom band.
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {number} w @param {number} h viewport size (px)
+     * @param {number} unit pixel-cell size (px)
+     * @param {number} now
+     * @param {{intensity:number,pulse:number,drop:number,buildup:number}} env
+     */
+    draw(ctx, w, h, unit, now, env) {
       const t = now / 1000 + this.phase;
-      const beat = 0.5 + 0.5 * Math.sin(t * 6.0);          // fast dance bob
-      const life = 0.4 + env.intensity * 0.9 + env.pulse * 0.6;
+      const pose = this.pose(t, env);
+      const jumpY = -this.jump * unit * 6.5;
 
-      // Vertical motion: idle bob + jump arc; horizontal sway for the "sway" move.
-      const bob = Math.sin(t * 6.0) * unit * (0.25 + life * 0.5);
-      const jumpY = -this.jump * unit * 6;
-      const sway = this.move === 'sway' ? Math.sin(t * 3.0) * unit * 1.4 : 0;
-      const squash = 1 + Math.sin(t * 6.0) * 0.06 * (0.5 + life); // breathe/pump
-
+      const x = this.x * w;
+      const feetY = h * 0.9;
       const spriteH = GRID_H * unit;
       const spriteW = GRID_W * unit;
 
       ctx.save();
-      // Soft ground shadow that tightens as the actor jumps.
-      const shW = spriteW * 0.5 * (1 - this.jump * 0.4);
-      ctx.globalAlpha = 0.28 * (1 - this.jump * 0.5);
+
+      // Ground shadow, tightening on jumps.
+      ctx.globalAlpha = 0.26 * (1 - this.jump * 0.5);
       ctx.fillStyle = '#000';
       ctx.beginPath();
-      ctx.ellipse(x, y, shW, unit * 1.1, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, feetY, spriteW * 0.45 * (1 - this.jump * 0.4), unit * 1.1, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // Move to feet centre, apply sway/jump, spin (scaleX), and squash/stretch.
-      ctx.translate(x + sway, y + bob + jumpY);
-      ctx.scale(this.facingCur, squash);
+      // Move to feet, apply pose (dx/dy/jump/rotation/facing/squash).
+      ctx.translate(x + pose.dx * unit, feetY + pose.dy * unit + jumpY);
+      ctx.rotate(pose.rot);
+      ctx.scale(this.facingCur, pose.sq);
 
-      // Draw the body grid (feet at local y=0, so top-left is up-and-left).
       const left = -spriteW / 2;
       const top = -spriteH;
-      // Faint accent rim-glow on drops so the character "pops" with the flash.
-      if (env.drop > 0.05) {
-        ctx.shadowColor = this.look.accent;
-        ctx.shadowBlur = 18 * env.drop;
-      }
+
+      if (env.drop > 0.05) { ctx.shadowColor = this.look.accent; ctx.shadowBlur = 18 * env.drop; }
       for (let r = 0; r < GRID_H; r += 1) {
         const row = GRID[r];
         for (let c = 0; c < GRID_W; c += 1) {
           const col = colorFor(row[c], this.look);
           if (!col) continue;
           ctx.fillStyle = col;
-          // +0.5 overdraw removes hairline seams between cells when scaled.
           ctx.fillRect(left + c * unit, top + r * unit, unit + 0.5, unit + 0.5);
         }
       }
       ctx.shadowBlur = 0;
 
-      // Animated raised arm (mic / fist-pump / point) drawn over the body.
-      if (this.armRaise > 0.05) {
-        const ax = left + GRID_W * unit * 0.80;
-        const ay = top + GRID_H * unit * 0.52;
-        const lift = this.armRaise * unit * 3.2;
-        ctx.fillStyle = this.look.hoodie;
-        ctx.fillRect(ax, ay - lift, unit * 1.4, lift + unit * 1.2);   // forearm
-        ctx.fillStyle = this.look.skin;
-        ctx.fillRect(ax - unit * 0.1, ay - lift - unit, unit * 1.6, unit * 1.4); // fist
-        // A little accent spark at the fist on strong lifts (mic light / energy).
-        if (this.armRaise > 0.7) {
-          ctx.fillStyle = this.look.accent;
-          ctx.fillRect(ax + unit * 0.3, ay - lift - unit * 1.6, unit * 0.8, unit * 0.8);
-        }
-      }
+      // Animated arms (drawn over the body; flip with facing automatically).
+      this.drawArm(ctx, left + spriteW * 0.80, top + spriteH * 0.52, pose.armR, unit);
+      this.drawArm(ctx, left + spriteW * 0.20 - unit * 1.4, top + spriteH * 0.52, pose.armL, unit);
 
       ctx.restore();
+
+      // Name plate above the head (drawn unscaled so text stays upright/legible).
+      if (this.name) {
+        const label = this.name;
+        const ny = feetY + pose.dy * unit + jumpY - spriteH - unit * 1.6;
+        ctx.font = `700 ${Math.max(10, Math.round(unit * 1.5))}px "Segoe UI", system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(label).width;
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = 'rgba(0,0,0,0.42)';
+        ctx.fillRect(x - tw / 2 - unit * 0.6, ny - unit, tw + unit * 1.2, unit * 2);
+        ctx.fillStyle = this.look.accent;
+        ctx.fillText(label, x, ny);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    /** Draw one raised forearm+fist when `raise` > 0. */
+    drawArm(ctx, ax, ay, raise, unit) {
+      if (raise <= 0.05) return;
+      const lift = raise * unit * 3.4;
+      ctx.fillStyle = this.look.hoodie;
+      ctx.fillRect(ax, ay - lift, unit * 1.4, lift + unit * 1.2);
+      ctx.fillStyle = this.look.skin;
+      ctx.fillRect(ax - unit * 0.1, ay - lift - unit, unit * 1.6, unit * 1.4);
+      if (raise > 0.7) {
+        ctx.fillStyle = this.look.accent;
+        ctx.fillRect(ax + unit * 0.3, ay - lift - unit * 1.6, unit * 0.8, unit * 0.8);
+      }
     }
   }
 
@@ -328,19 +342,34 @@
 
   window.ArtistSprites = {
     SpriteActor,
+    splitArtists,
     /**
-     * Build the actors for an artist string. Known groups map to their branded
-     * duo/solo looks; anyone else gets one deterministic procedural dancer.
-     * @param {string} artist
-     * @param {number} seedHash stable hash of the artist name
+     * Build one dancer per collaborator on the track.
+     * @param {string} artistString raw artist field
      * @returns {{label:string, actors:SpriteActor[]}}
      */
-    actorsFor(artist, seedHash) {
-      const known = lookupRegistry(artist);
-      const looks = known ? known.looks : [proceduralLook(artist || 'unknown', seedHash >>> 0)];
-      const label = known ? known.label : (artist || '');
-      const actors = looks.map((look, i) => new SpriteActor(look, i * 1.9));
-      return { label, actors };
+    actorsFor(artistString) {
+      const tokens = splitArtists(artistString);
+      /** @type {object[]} */
+      const looks = [];
+      const labels = [];
+      for (const token of tokens) {
+        const known = lookupRegistry(token);
+        if (known) {
+          labels.push(known.label);
+          for (const m of known.members) looks.push(m);
+        } else {
+          labels.push(token);
+          looks.push(proceduralLook(token, hashOf(token)));
+        }
+        if (looks.length >= MAX_ACTORS) break;
+      }
+      // Fallback: nothing parsed → a single anonymous dancer so the stage isn't empty.
+      if (looks.length === 0) looks.push(proceduralLook(artistString || 'artist', hashOf(artistString || 'artist')));
+
+      const total = looks.length;
+      const actors = looks.slice(0, MAX_ACTORS).map((look, i) => new SpriteActor(look, i, total));
+      return { label: labels.join(' · '), actors };
     },
   };
 })();

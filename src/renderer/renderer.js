@@ -53,6 +53,23 @@ let targetCenterPx = 0;
 
 const MAX_WORD_SPREAD_MS = 8000;
 
+/* 24 per-word entrance animations (see styles.css). One is chosen per line, and
+   the per-word stagger mode is randomised too, so words fire "at different
+   times" and the look never repeats. Energetic lines draw from the punchy pool. */
+const WORD_ANIMS = [
+  'w-wave', 'w-pop', 'w-blur', 'w-glitch', 'w-spin', 'w-flip', 'w-fall', 'w-rise',
+  'w-zoomout', 'w-slidel', 'w-slider', 'w-squash', 'w-swing', 'w-bounce', 'w-roll',
+  'w-fold', 'w-type', 'w-neon', 'w-shake', 'w-tilt', 'w-jelly', 'w-fadescale',
+  'w-zoomblur', 'w-skid',
+];
+const HYPE_WORD_ANIMS = ['w-pop', 'w-glitch', 'w-spin', 'w-bounce', 'w-shake', 'w-skid', 'w-zoomblur', 'w-flip', 'w-jelly'];
+/** Continuous, non-transform effects layered onto the active line. */
+const LINE_FX = ['lc-glow', 'lc-hue', 'lc-none', 'lc-none'];
+/** 0 sequential · 1 reverse · 2 random · 3 centre-out — set per line. */
+let wordDelayMode = 0;
+/** Per-line base stagger step (ms), randomised so timing varies line to line. */
+let wordDelayStep = 45;
+
 /** Smoothed lyric energy (0..1); drives font size and star reactivity. */
 let intensity = 0;
 /** Short-lived kick on each new line, for the star/glow pulse. */
@@ -159,6 +176,12 @@ function triggerDrop() {
   dropFlash = 1;
   pulse = 1.6;
   hueShift = (Math.random() < 0.5 ? -1 : 1) * (25 + Math.random() * 35);
+  bgHue = (bgHue + 40 + Math.random() * 80) % 360; // big colour jump on the drop
+  // Force an energetic scene and fire the celebratory particles.
+  scene.rays = true;
+  scene.eq = true;
+  spawnRipple(1);
+  spawnConfetti(window.innerWidth, window.innerHeight, shiftHex((palette && palette[3]) || '#e94560', bgHue));
   const stage = document.getElementById('stage');
   if (stage) {
     stage.classList.remove('fx-shake');
@@ -190,14 +213,23 @@ function renderWords(el, index) {
   const timings = buildWordTimings(cue.text, cue.timeMs, endMs);
 
   el.textContent = '';
+  const n = timings.length;
   timings.forEach((timing, i) => {
     const span = document.createElement('span');
     span.className = 'word';
     span.textContent = timing.word;
     span.dataset.start = String(timing.startMs);
     span.dataset.end = String(timing.endMs);
-    // Stagger the entrance so words cascade in (wave/pop/glitch styles read it).
-    span.style.animationDelay = `${i * 45}ms`;
+    // Stagger the entrance so words fire at different times; the mode is picked
+    // per line (sequential / reverse / random / centre-out).
+    let d;
+    switch (wordDelayMode) {
+      case 1: d = (n - 1 - i) * wordDelayStep; break;
+      case 2: d = Math.random() * n * wordDelayStep; break;
+      case 3: d = Math.abs(i - (n - 1) / 2) * wordDelayStep; break;
+      default: d = i * wordDelayStep;
+    }
+    span.style.animationDelay = `${Math.round(d)}ms`;
     el.appendChild(span);
   });
 }
@@ -236,6 +268,7 @@ function setActive(index) {
   const energy = lineEnergy(index);
   intensity = intensity * 0.4 + energy * 0.6;
   pulse = 1;
+  spawnRipple(energy); // an expanding ring pings out on every new line
   const chars = (cues[index].text || '').length;
   const fit = Math.max(0.6, Math.min(1, 26 / Math.max(1, chars)));
   const activeScale = Math.min(2.0, (1.35 + intensity * 0.85) * fit);
@@ -263,14 +296,20 @@ function setActive(index) {
     }
   });
 
-  // Vary the text "moment": which per-word entrance animation this line uses.
-  // Energetic lines get punchier styles; the set cycles so it never feels samey.
-  const animSet = energy > 0.55 ? ['w-pop', 'w-glitch'] : ['w-wave', 'w-blur', 'w-pop'];
-  const animCls = animSet[index % animSet.length];
+  // Vary the text "moment": pick a random per-word entrance (punchier pool when
+  // the line is energetic), a random stagger mode + step, and a random
+  // continuous line effect — so no two lines animate the same way.
+  const pool = energy > 0.55 ? HYPE_WORD_ANIMS : WORD_ANIMS;
+  const animCls = pool[(Math.random() * pool.length) | 0];
+  wordDelayMode = (Math.random() * 4) | 0;
+  wordDelayStep = 28 + Math.random() * 45;
   const line = lineEls[index];
-  line.classList.remove('w-wave', 'w-pop', 'w-blur', 'w-glitch');
+  WORD_ANIMS.forEach((c) => line.classList.remove(c));
+  LINE_FX.forEach((c) => line.classList.remove(c));
   void line.offsetWidth; // restart animations even on the same class
   line.classList.add(animCls);
+  const lfx = LINE_FX[(Math.random() * LINE_FX.length) | 0];
+  if (lfx !== 'lc-none') line.classList.add(lfx);
 
   renderWords(line, index);
   updateTranslation(index);
@@ -344,6 +383,20 @@ let palette = ['#0d0d1a', '#4361ee', '#7209b7', '#4cc9f0'];
 let baseTint = '#0d0d1a';
 let vignette = null; // cached gradient, rebuilt on resize
 
+/* Extra reactive background layers. Everything below scales with the energy
+   envelope (intensity/pulse/buildup/drop) and a slowly drifting global hue, so
+   the backdrop keeps changing instead of settling. */
+let bokeh = [];      // soft floating orbs
+let ripples = [];    // expanding rings, one per lyric line + drops
+let confetti = [];   // particle burst on drops
+let bars = [];       // equalizer bar seeds
+let bgHue = 0;       // global hue drift (deg) added to live-coloured layers
+let lastBackNow = 0; // for per-frame dt in the backdrop loop
+let sceneTimer = 0;  // countdown to the next random scene shuffle
+/* Which optional layers are currently on. Reshuffled every few seconds so the
+   background composition itself keeps changing. */
+let scene = { aurora: true, bokeh: true, eq: false, rays: false };
+
 function resizeCanvas() {
   // Cap DPR: on 4K / high-DPI displays a 1:1 canvas is enormous and the main
   // cause of lag. 1.25 keeps it crisp enough while cutting pixel count sharply.
@@ -362,6 +415,8 @@ function resizeCanvas() {
   targetCenterPx = window.innerHeight * 0.44;
   document.documentElement.style.setProperty('--slot', `${slotPx}px`);
   seedStars();
+  seedBokeh();
+  seedBars();
 
   // Re-center after a resize.
   const idx = activeIndex;
@@ -437,6 +492,205 @@ function seedGlows(colors) {
   }));
 }
 
+/* ------------------------------------------------- colour + layer utilities */
+
+/** HSL (s,l in %) → #rrggbb. */
+function hslToHex(h, s, l) {
+  const sf = s / 100;
+  const lf = l / 100;
+  const a = sf * Math.min(lf, 1 - lf);
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    const c = lf - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * Math.max(0, Math.min(1, c))).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** Rotate a hex colour's hue by `deg`, preserving saturation/lightness. */
+function shiftHex(hex, deg) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = ((n >> 16) & 255) / 255;
+  let g = ((n >> 8) & 255) / 255;
+  let b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return hslToHex((h + deg) % 360, s * 100, l * 100);
+}
+
+/** Seed floating bokeh orbs, scaled to the viewport. */
+function seedBokeh() {
+  const count = Math.min(40, Math.round((window.innerWidth * window.innerHeight) / 60000));
+  bokeh = Array.from({ length: count }, () => ({
+    x: Math.random(),
+    y: Math.random(),
+    r: 0.01 + Math.random() * 0.03,
+    spd: 0.0005 + Math.random() * 0.001,
+    drift: (Math.random() - 0.5) * 0.0006,
+    hue: Math.random() * 60 - 30,
+    a: 0.05 + Math.random() * 0.12,
+  }));
+}
+
+/** Seed equalizer bar phases across the bottom. */
+function seedBars() {
+  const n = 40;
+  bars = Array.from({ length: n }, (_, i) => ({
+    f: 0.6 + (i / n) * 3.2,       // pseudo-frequency
+    ph: Math.random() * Math.PI * 2,
+    j: 0.5 + Math.random() * 0.5, // per-bar jitter weight
+  }));
+}
+
+/** Spawn an expanding ring from screen centre. */
+function spawnRipple(strength) {
+  ripples.push({ r: 0, a: Math.min(0.6, 0.25 + strength * 0.4), v: 6 + strength * 10 });
+  if (ripples.length > 12) ripples.shift();
+}
+
+/** Burst confetti from centre-top on a drop. */
+function spawnConfetti(w, h, accent) {
+  const n = 70;
+  for (let i = 0; i < n; i += 1) {
+    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
+    const sp = 6 + Math.random() * 12;
+    confetti.push({
+      x: w / 2, y: h * 0.42,
+      vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      s: 3 + Math.random() * 5, life: 1,
+      col: Math.random() < 0.5 ? accent : shiftHex(accent, 40 + Math.random() * 280),
+      rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.4,
+    });
+  }
+  if (confetti.length > 400) confetti.splice(0, confetti.length - 400);
+}
+
+/* Wavy horizontal aurora bands, hue-shifted live so the wash keeps changing. */
+function drawAurora(now, w, h, life) {
+  ctx.globalCompositeOperation = 'lighter';
+  const bands = 3;
+  for (let bi = 0; bi < bands; bi += 1) {
+    const baseY = h * (0.3 + bi * 0.22);
+    const amp = h * (0.05 + 0.05 * life) * (bi + 1) * 0.5;
+    const col = shiftHex(palette[1 + (bi % 2)] || '#4361ee', bgHue + bi * 30);
+    ctx.fillStyle = hexA(col, 0.06 + 0.05 * life);
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let x = 0; x <= w; x += w / 24) {
+      const y = baseY + Math.sin(x / w * Math.PI * 3 + now / 1400 + bi) * amp
+        + Math.sin(x / w * Math.PI * 7 - now / 900) * amp * 0.3;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/* Soft drifting orbs. */
+function drawBokeh(now, w, h, motion, life) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (const o of bokeh) {
+    const k = 0.6 + motion * 0.4;
+    o.y -= o.spd * k;
+    o.x += o.drift * k;
+    if (o.y < -0.05) { o.y = 1.05; o.x = Math.random(); }
+    const col = shiftHex(palette[3] || '#4cc9f0', bgHue + o.hue);
+    ctx.fillStyle = hexA(col, o.a * (0.6 + life));
+    ctx.beginPath();
+    ctx.arc(o.x * w, o.y * h, o.r * Math.max(w, h) * (0.8 + life * 0.4), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* Bottom equalizer that reacts to the energy envelope (fake spectrum). */
+function drawEqualizer(now, w, h, life) {
+  ctx.globalCompositeOperation = 'lighter';
+  const n = bars.length;
+  const bw = w / n;
+  for (let i = 0; i < n; i += 1) {
+    const bar = bars[i];
+    const v = (0.5 + 0.5 * Math.sin(now / 240 * bar.f + bar.ph)) * bar.j;
+    const bh = h * (0.02 + v * (0.05 + life * 0.22));
+    const col = shiftHex(palette[3] || '#4cc9f0', bgHue + (i / n) * 120 - 60);
+    ctx.fillStyle = hexA(col, 0.12 + life * 0.18);
+    ctx.fillRect(i * bw + bw * 0.15, h - bh, bw * 0.7, bh);
+  }
+}
+
+/* Rotating light rays from centre — reserved for high-energy/drop scenes. */
+function drawRays(now, w, h, life) {
+  ctx.globalCompositeOperation = 'lighter';
+  const cx = w / 2;
+  const cy = h * 0.42;
+  const rays = 14;
+  const R = Math.max(w, h);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(now / 6000);
+  const col = shiftHex(palette[2] || '#7209b7', bgHue);
+  for (let i = 0; i < rays; i += 1) {
+    ctx.rotate((Math.PI * 2) / rays);
+    ctx.fillStyle = hexA(col, 0.04 + life * 0.05);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(R, -R * 0.03);
+    ctx.lineTo(R, R * 0.03);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* Expanding rings (per lyric line + drops) and confetti (drops). */
+function drawRipples(w, h) {
+  ctx.globalCompositeOperation = 'lighter';
+  const cx = w / 2;
+  const cy = h * 0.44;
+  for (const rp of ripples) {
+    rp.r += rp.v;
+    rp.a *= 0.96;
+    ctx.strokeStyle = hexA(shiftHex(palette[3] || '#4cc9f0', bgHue), rp.a);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rp.r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ripples = ripples.filter((rp) => rp.a > 0.02);
+}
+
+function drawConfetti() {
+  ctx.globalCompositeOperation = 'source-over';
+  for (const c of confetti) {
+    c.x += c.vx;
+    c.y += c.vy;
+    c.vy += 0.35;          // gravity
+    c.vx *= 0.99;
+    c.life -= 0.012;
+    c.rot += c.vr;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot);
+    ctx.globalAlpha = Math.max(0, c.life);
+    ctx.fillStyle = c.col;
+    ctx.fillRect(-c.s / 2, -c.s / 2, c.s, c.s * 0.6);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  confetti = confetti.filter((c) => c.life > 0);
+}
+
 let shootTimer = 0;
 let shooting = null;
 
@@ -452,6 +706,27 @@ function drawBackdrop(now) {
     const motion = 1 + baseEnergy * 1.4 + buildup * 1.6 + dropFlash * 1.2;
     const accent = (palette && palette[3]) || '#e94560';
 
+    // Per-frame dt (backdrop loop is independent of the lyric frame loop).
+    const dt = lastBackNow ? Math.min(60, now - lastBackNow) : 16;
+    lastBackNow = now;
+
+    // Slowly drift the global hue (faster when intense), and jump it on drops —
+    // this shifts the whole wash + live layers so the background never settles.
+    bgHue = (bgHue + dt * 0.01 * (0.6 + intensity + baseEnergy) + dropFlash * 0.6) % 360;
+
+    // Reshuffle which optional layers are on every few seconds, for variety.
+    sceneTimer -= dt;
+    if (sceneTimer <= 0) {
+      scene.aurora = Math.random() < 0.8;
+      scene.bokeh = Math.random() < 0.75;
+      scene.eq = Math.random() < 0.55;
+      scene.rays = Math.random() < 0.35;
+      sceneTimer = 5000 + Math.random() * 6000;
+    }
+
+    const accentLive = shiftHex(accent, bgHue);
+    const tintLive = shiftHex(baseTint, bgHue * 0.5);
+
     ctx.clearRect(0, 0, w, h);
 
     // Per-track wash across the whole screen. Opacity follows the chosen backdrop
@@ -461,10 +736,19 @@ function drawBackdrop(now) {
     const washAlpha = Math.min(1, level.alpha + buildup * 0.12 + dropFlash * 0.15);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = washAlpha;
-    ctx.fillStyle = baseTint;
+    ctx.fillStyle = tintLive;
     ctx.fillRect(0, 0, w, h);
     ctx.globalAlpha = 1;
-    // Depth vignette (cached gradient, rebuilt only on resize).
+
+    // Reactive background layers (each self-limits by scene flags + energy).
+    if (scene.aurora) drawAurora(now, w, h, life);
+    if (scene.bokeh) drawBokeh(now, w, h, motion, life);
+    if (scene.rays && (life > 0.4 || dropFlash > 0.1)) drawRays(now, w, h, life);
+    if (scene.eq) drawEqualizer(now, w, h, life);
+    // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
+    // 'source-over' — the layers above leave the composite op set to 'lighter',
+    // under which a black gradient would add nothing.
+    ctx.globalCompositeOperation = 'source-over';
     if (vignette) {
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, w, h);
@@ -529,12 +813,15 @@ function drawBackdrop(now) {
       if (shooting.life <= 0) shooting = null;
     }
 
+    // Expanding rings (spawned per lyric line + drops).
+    if (ripples.length) drawRipples(w, h);
+
     // Build-up bloom: an accent glow swells at centre as a drop approaches.
     if (buildup > 0.02) {
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = buildup * 0.6;
       const br = maxDim * (0.25 + buildup * 0.55);
-      const sprite = accentGlow(accent);
+      const sprite = accentGlow(accentLive);
       ctx.drawImage(sprite, w / 2 - br, h * 0.5 - br, br * 2, br * 2);
       ctx.globalAlpha = 1;
     }
@@ -544,7 +831,7 @@ function drawBackdrop(now) {
     if (dropFlash > 0.01) {
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.75, dropFlash * 0.75);
-      ctx.fillStyle = accent;
+      ctx.fillStyle = accentLive;
       ctx.fillRect(0, 0, w, h);
       if (dropFlash > 0.6) {
         ctx.globalAlpha = (dropFlash - 0.6) * 1.1;
@@ -560,21 +847,20 @@ function drawBackdrop(now) {
       ctx.stroke();
     }
 
-    // Pixel-art artist dancers along the bottom band. Solo sits bottom-right so
-    // it never covers lyrics; a duo flanks bottom-centre.
+    // Pixel-art artist dancers roaming the bottom band; each names + positions
+    // itself and reacts to the same energy envelope as the backdrop.
     ctx.globalCompositeOperation = 'source-over';
     if (spritesEnabled && spriteActors.length > 0 && window.ArtistSprites) {
       const env = { intensity, pulse, drop: dropFlash, buildup };
       const unit = Math.max(2, Math.round(h * 0.010));
-      const feetY = h * 0.9;
-      const n = spriteActors.length;
-      const step = Math.min(w * 0.16, unit * 22);
-      spriteActors.forEach((actor, i) => {
-        const fx = n === 1 ? w * 0.85 : w / 2 + (i - (n - 1) / 2) * step;
+      for (const actor of spriteActors) {
         actor.update(now, env);
-        actor.draw(ctx, fx, feetY, unit, now, env);
-      });
+        actor.draw(ctx, w, h, unit, now, env);
+      }
     }
+
+    // Confetti burst (drops) rendered last so it sits in front of the dancers.
+    if (confetti.length) drawConfetti();
 
     ctx.globalCompositeOperation = 'source-over';
   } catch (err) {
@@ -632,13 +918,10 @@ window.player.onTrack((track) => {
   buildup = 0;
   dropFlash = 0;
 
-  // Resolve dancing pixel actors for this artist (known groups → branded looks,
-  // everyone else → a deterministic procedural dancer).
+  // Resolve one dancing pixel actor per collaborator on the track (known groups
+  // → branded looks/duos, everyone else → a deterministic procedural dancer).
   if (window.ArtistSprites) {
-    const artist = track.artist || '';
-    let hash = 0;
-    for (let i = 0; i < artist.length; i += 1) hash = (hash * 31 + artist.charCodeAt(i)) >>> 0;
-    const resolved = window.ArtistSprites.actorsFor(artist, hash);
+    const resolved = window.ArtistSprites.actorsFor(track.artist || '');
     spriteActors = resolved.actors;
     artistLabel = resolved.label;
   }
