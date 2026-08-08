@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+    <title>Lyric Player</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <canvas id="backdrop" aria-hidden="true"></canvas>
+
+    <header id="topbar" class="topbar">
+      <div class="now-playing">
+        <div id="np-title" class="np-title"></div>
+        <div id="np-artist" class="np-artist"></div>
+      </div>
+      <div id="status" class="status" role="status"></div>
+    </header>
+
+    <!-- Apple Music-style scrolling column. All lines live here; the column
+         slides up so the active line stays near center. Lines fade with
+         distance so they never hard-cut at the screen edge. -->
+    <main id="stage" class="stage">
+      <div id="column" class="column"></div>
+      <!-- English translation of the current line, pinned just below center. -->
+      <div id="translation" class="translation" role="status"></div>
+    </main>
+
+    <footer id="hud" class="hud">
+      <div class="hud__group">
+        <button id="btn-script" class="chip" type="button">अ</button>
+        <button id="btn-translate" class="chip" type="button">EN</button>
+        <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity">◐ vivid</button>
+        <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻</button>
+        <span id="hud-offset" class="chip chip--muted"></span>
+      </div>
+      <div id="hud-progress" class="progress">
+        <div id="hud-progress-fill" class="progress__fill"></div>
+      </div>
+      <div class="hud__group hud__hint">
+        <span>Ctrl+Alt+← / → sync</span>
+        <span>Ctrl+Alt+H hide</span>
+      </div>
+    </footer>
+
+    <script src="sprites.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

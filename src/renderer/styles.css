@@ -1,0 +1,337 @@
+:root {
+  --accent: #e94560;
+  --ink: #ffffff;
+  --ink-dim: rgba(255, 255, 255, 0.4);
+  --ink-mid: rgba(255, 255, 255, 0.6);
+  --shadow: 0 2px 24px rgba(0, 0, 0, 0.8), 0 0 50px rgba(0, 0, 0, 0.45);
+  --chip-bg: rgba(255, 255, 255, 0.08);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: var(--ink);
+  cursor: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+}
+
+body.show-cursor {
+  cursor: default;
+}
+
+body.lang-devanagari .lyric-line {
+  font-family: "Nirmala UI", "Segoe UI", system-ui, sans-serif;
+}
+
+#backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 2.2vh 3vw;
+  z-index: 4;
+}
+
+.np-title {
+  font-size: clamp(1rem, 1.5vw, 1.4rem);
+  font-weight: 700;
+  text-shadow: var(--shadow);
+  max-width: 60vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.np-artist {
+  font-size: clamp(0.8rem, 1.1vw, 1.05rem);
+  color: var(--ink-mid);
+  text-shadow: var(--shadow);
+}
+
+.status {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  text-shadow: var(--shadow);
+  text-align: right;
+}
+
+/* ---- Apple Music-style scrolling column ---- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+}
+
+.column {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* translateY + transition duration are set from JS (duration adapts to
+     lyric speed). This is the smooth "climb". */
+  transform: translateY(0px);
+  transition: transform 360ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+.ln {
+  /* Permanent 80%-of-screen container: text lives in the middle 80vw, leaving
+     10vw padding each side, so even auto-enlarged lines stay on screen. */
+  width: 80vw;
+  max-width: 80vw;
+  margin: 0 auto;
+  height: var(--slot, 11vh);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4em 0;
+  text-align: center;
+  line-height: 1.16;
+  font-weight: 700;
+  /* A bit bigger than before. */
+  font-size: clamp(1.6rem, 3.1vw, 3rem);
+  color: var(--ink);
+  text-shadow: var(--shadow);
+  /* Long lines wrap within the 80% box instead of overflowing horizontally. */
+  overflow-wrap: anywhere;
+  /* Opacity is set per-line from JS by distance to the active line, so lines
+     fade out gracefully instead of hard-cutting at the edges. */
+  opacity: 0;
+  transform: scale(0.86);
+  transform-origin: center center;
+  transition: opacity 380ms ease, transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              color 380ms ease;
+}
+
+/* The running line: bright, bold, scaled up. --active-scale carries the
+   intensity-driven auto-enlarge for fast/intense bars. */
+.ln.is-active {
+  color: #fff;
+  font-weight: 800;
+  opacity: 1;
+  transform: scale(var(--active-scale, 1.4));
+}
+
+/* Words: even spacing via margin so scaling/uppercasing never shifts rhythm. */
+.word {
+  display: inline-block;
+  margin: 0 0.14em;
+  opacity: 0.6;
+  transform: translateY(0) scale(1);
+  transform-origin: center bottom;
+  transition: transform 150ms cubic-bezier(0.34, 1.56, 0.64, 1),
+              color 150ms ease, opacity 150ms ease;
+}
+
+.word--sung {
+  opacity: 1;
+}
+
+/* Focus + capitalize on the word being sung, filled with a vertical gradient
+   (white → accent) for a richer highlight. text-shadow can't show through a
+   clipped-text fill, so legibility comes from drop-shadow filters instead. */
+.word--active {
+  opacity: 1;
+  text-transform: uppercase;
+  transform: translateY(-1px) scale(1.06);
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    color-mix(in srgb, var(--accent) 40%, #ffffff) 45%,
+    var(--accent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.7))
+          drop-shadow(0 0 24px color-mix(in srgb, var(--accent) 60%, transparent));
+}
+
+body.lang-devanagari .word--active {
+  text-transform: none;
+}
+
+/* English translation of the current line, pinned just below center. */
+.translation {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 58%;
+  z-index: 3;
+  padding: 0 14vw;
+  text-align: center;
+  font-size: clamp(0.95rem, 1.5vw, 1.5rem);
+  font-weight: 500;
+  font-style: italic;
+  color: color-mix(in srgb, var(--accent) 55%, #ffffff);
+  text-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
+.translation.is-visible {
+  opacity: 0.9;
+}
+
+/* ---- Text "moment" animations ----
+   Per-word entrance styles chosen per line by JS (w-wave / w-pop / w-blur /
+   w-glitch). animation-delay is set inline per word so they cascade in. All use
+   `backwards` fill so a word is hidden until its delay, then reverts to the base
+   `.word` state — letting `.word--sung/--active` colour it normally afterwards. */
+.ln.w-wave .word {
+  animation: wWave 440ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+}
+.ln.w-pop .word {
+  animation: wPop 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+.ln.w-blur .word {
+  animation: wBlur 460ms ease backwards;
+}
+.ln.w-glitch .word {
+  animation: wGlitch 360ms steps(2, end) backwards;
+}
+
+@keyframes wWave {
+  from { opacity: 0; transform: translateY(0.6em); }
+  to   { opacity: 0.6; transform: translateY(0); }
+}
+@keyframes wPop {
+  0%   { opacity: 0; transform: scale(0.3); }
+  60%  { opacity: 0.6; transform: scale(1.18); }
+  100% { opacity: 0.6; transform: scale(1); }
+}
+@keyframes wBlur {
+  from { opacity: 0; filter: blur(12px); }
+  to   { opacity: 0.6; filter: blur(0); }
+}
+@keyframes wGlitch {
+  0%   { opacity: 0; transform: translate(-6px, 2px) skewX(12deg); }
+  40%  { opacity: 0.6; transform: translate(5px, -2px) skewX(-8deg); }
+  70%  { transform: translate(-3px, 1px) skewX(4deg); }
+  100% { opacity: 0.6; transform: none; }
+}
+
+/* Drop shake: the whole stage jolts when a drop lands. */
+.stage.fx-shake {
+  animation: stageShake 480ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes stageShake {
+  10%  { transform: translate(-5px, 3px); }
+  25%  { transform: translate(6px, -4px); }
+  40%  { transform: translate(-6px, 2px); }
+  55%  { transform: translate(5px, -2px); }
+  70%  { transform: translate(-3px, 2px); }
+  85%  { transform: translate(2px, -1px); }
+  100% { transform: none; }
+}
+
+/* ---- HUD ---- */
+
+.hud {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2vw;
+  padding: 2vh 3vw;
+  z-index: 5;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+
+body.show-cursor .hud {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.hud__group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.hud__hint {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  gap: 1.2rem;
+}
+
+.chip {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--chip-bg);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chip--muted {
+  color: var(--ink-mid);
+  cursor: default;
+}
+
+.chip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: var(--accent);
+}
+
+.progress {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 220ms linear;
+}
