@@ -52,6 +52,32 @@ for the full phased plan.
   instant hash palette only, same as the Windows app before an LLM key is
   configured.
 
+## Quick preview with Expo Go (no build required)
+
+For the fastest way to see the visuals (not the Apple Music/Spotify
+detection — Expo Go can't load the custom native Swift modules for that; see
+below): install the free **Expo Go** app from the App Store, then from
+`packages/mobile` run `npm run start:go` and scan the QR code **using Expo
+Go's own in-app scanner**, not the regular Camera/Photos app — scanning with
+the plain Camera app can open the URL in Safari instead of handing off to
+Expo Go, which fails with a `CommandError: Must specify "expo-platform"
+header` error.
+
+**Expo Go only ever supports the single latest SDK version** (there's no way
+to install an older Expo Go build for iOS) — this project tracks that SDK
+version for exactly this reason (currently SDK 54, React Native 0.81,
+React 19). If you ever see "Project is incompatible with this version of
+Expo Go," it means Expo Go itself has moved to a newer SDK than this project
+targets — re-run `npx expo install expo@latest && npx expo install --fix`
+from `packages/mobile` to catch up (this is exactly what fixed it going from
+SDK 52 → 54; `react-native-reanimated` jumped a major version in the process
+and pulled in a new required peer, `react-native-worklets` — watch for
+`npm error ERESOLVE` during that fix and add whatever peer it's asking for).
+
+For the full app with real music detection, you need the custom dev
+client/standalone build below — Expo Go's fixed set of bundled native
+modules doesn't include `MusicKitBridge`/`SpotifyAppRemoteBridge`.
+
 ## Getting a build onto your iPhone (no Mac required)
 
 Building doesn't need a local Mac — [EAS Build](https://docs.expo.dev/build/introduction/)
