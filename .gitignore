@@ -1,6 +1,13 @@
 node_modules/
 dist/
 out/
+
+# packages/core's dist/ IS committed (see packages/core/dist/README.md) —
+# npm workspace scripts that build it before Metro starts have proven
+# unreliable to trigger consistently (npx vs npm run, missed hooks), so the
+# built output ships in git instead. Rebuild + recommit after any change to
+# packages/core/src.
+!packages/core/dist/
 *.log
 .DS_Store
 
