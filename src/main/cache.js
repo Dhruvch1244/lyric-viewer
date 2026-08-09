@@ -30,7 +30,7 @@ const MAX_ENTRIES = 600;
 /** Debounce window (ms) so bursts of writes coalesce into one disk flush. */
 const WRITE_DEBOUNCE_MS = 400;
 /** Fields merged/persisted per entry. Only defined keys overwrite on merge. */
-const PERSISTED_FIELDS = ['cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap'];
+const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap'];
 
 /** @typedef {{cues?: Array|null, source?: string|null, indic?: boolean, cuesEnglish?: Array|null, language?: string, cuesDevanagari?: Array|null, mood?: object|null, updatedAt: number}} CacheEntry */
 
@@ -65,6 +65,23 @@ class LlmCache {
    */
   get(key) {
     return Object.prototype.hasOwnProperty.call(this.entries, key) ? this.entries[key] : null;
+  }
+
+  /**
+   * Summarise every cached song for the "synced library" UI, newest first.
+   * @returns {Array<{key:string, title:string|null, artist:string|null, hasCues:boolean, hasBeatmap:boolean, updatedAt:number}>}
+   */
+  list() {
+    return Object.entries(this.entries)
+      .map(([key, e]) => ({
+        key,
+        title: e.title || null,
+        artist: e.artist || null,
+        hasCues: Array.isArray(e.cues) && e.cues.length > 0,
+        hasBeatmap: Boolean(e.beatmap),
+        updatedAt: e.updatedAt || 0,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /**

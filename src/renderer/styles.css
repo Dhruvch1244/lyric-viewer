@@ -381,6 +381,41 @@ body.lang-devanagari .word--active {
   76%  { opacity: 0.95; }
 }
 
+/* Hero variation cycling (set by JS every few seconds during long instrumental
+   stretches). Each variant swaps the title's animation set so the song name keeps
+   reinventing itself instead of looping one motion for minutes. v-1 is the base
+   above (no class). */
+.np-hero.v-2 .np-hero__title {
+  animation: heroGlow 6.1s ease-in-out infinite,
+             heroSway 4.2s ease-in-out infinite,
+             heroSpace 7s ease-in-out infinite;
+}
+.np-hero.v-3 .np-hero__title {
+  animation: heroGlow 5s ease-in-out infinite,
+             heroWobble 3.8s ease-in-out infinite,
+             heroFlicker 5.1s linear infinite;
+}
+.np-hero.v-4 .np-hero__title {
+  animation: heroHue 8s linear infinite,
+             heroPulse 3.4s ease-in-out infinite;
+}
+@keyframes heroSway {
+  0%, 100% { transform: translateX(-2.5%) scale(0.98); }
+  50%      { transform: translateX(2.5%) scale(1.04); }
+}
+@keyframes heroSpace {
+  0%, 100% { letter-spacing: 0.02em; }
+  50%      { letter-spacing: 0.16em; }
+}
+@keyframes heroWobble {
+  0%, 100% { transform: rotate(-1.6deg) scale(0.96); }
+  50%      { transform: rotate(1.6deg) scale(1.08); }
+}
+@keyframes heroHue {
+  0%   { filter: brightness(1.1) hue-rotate(0deg); }
+  100% { filter: brightness(1.1) hue-rotate(360deg); }
+}
+
 /* ---- Text "moment" animations ----
    Per-word entrance styles chosen per line by JS (w-wave / w-pop / w-blur /
    w-glitch). animation-delay is set inline per word so they cascade in. All use
@@ -616,6 +651,54 @@ body.keybox-open .hud {
   color: var(--ink-dim);
 }
 
+.listbox__synced {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 0.6rem;
+}
+
+.synced-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 30vh;
+  overflow-y: auto;
+  font-size: 0.8rem;
+}
+
+.synced-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.2rem 0.1rem;
+  color: var(--ink);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.synced-list .synced-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.synced-list .synced-artist {
+  color: var(--ink-dim);
+}
+
+.synced-list .synced-badges {
+  color: var(--accent);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+.synced-list .synced-empty {
+  color: var(--ink-dim);
+  padding: 0.4rem 0.1rem;
+}
+
 .hud__group {
   display: flex;
   align-items: center;
@@ -648,6 +731,18 @@ body.keybox-open .hud {
 .chip--muted {
   color: var(--ink-mid);
   cursor: default;
+}
+
+/* Draggable offset chip: horizontal-resize cursor hints the scrub gesture. */
+.chip--drag {
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none; /* let pointermove drive the drag instead of scrolling */
+}
+.chip--drag.is-dragging {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
+  color: var(--ink);
 }
 
 .chip[aria-pressed="true"] {

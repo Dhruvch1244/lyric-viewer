@@ -18,6 +18,7 @@ const els = {
   title: document.getElementById('np-title'),
   artist: document.getElementById('np-artist'),
   offset: document.getElementById('hud-offset'),
+  fps: document.getElementById('hud-fps'),
   syncEarlierBtn: document.getElementById('btn-sync-earlier'),
   syncLaterBtn: document.getElementById('btn-sync-later'),
   progressFill: document.getElementById('hud-progress-fill'),
@@ -34,6 +35,9 @@ const els = {
   presyncInput: document.getElementById('presync-input'),
   presyncRun: document.getElementById('presync-run'),
   presyncStatus: document.getElementById('presync-status'),
+  syncedList: document.getElementById('synced-list'),
+  syncedCount: document.getElementById('synced-count'),
+  source: document.getElementById('hud-source'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -619,14 +623,17 @@ let lastLyricHue = -999;
    so the overlay stays fluid on weaker GPUs. */
 let fpsEMA = 60;
 let quality = 1;
+/** Throttle for the on-screen FPS readout. */
+let lastFpsShownAt = 0;
 /** Timestamp of the last *drawn* backdrop frame, for adaptive frame-skipping. */
 let lastDrawnAt = 0;
 
 function resizeCanvas() {
-  // Cap DPR: on 4K / high-DPI displays a 1:1 canvas is enormous and the main
-  // cause of lag. 1.25 keeps it crisp enough while cutting pixel count sharply;
-  // Lite mode drops to 1.0 to roughly halve the pixel work on hi-DPI screens.
-  const dpr = Math.min(window.devicePixelRatio || 1, liteMode ? 1.0 : 1.25);
+  // Cap DPR at 1.0 for the backdrop canvas: it is all soft glows, gradients and
+  // blur, so rendering at native hi-DPI resolution is pure wasted fill-rate (the
+  // single biggest cause of lag on 4K screens). Lyrics stay crisp — they're DOM,
+  // unaffected by the canvas backing-store resolution.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
   els.canvas.width = Math.floor(window.innerWidth * dpr);
   els.canvas.height = Math.floor(window.innerHeight * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -655,8 +662,8 @@ function resizeCanvas() {
 function seedStars() {
   // Fewer stars than before — the previous density was a needless cost. Lite
   // mode thins them further (denser fields cost more fill + arc calls per frame).
-  const cap = liteMode ? 90 : 180;
-  const div = liteMode ? 22000 : 12000;
+  const cap = liteMode ? 80 : 130;
+  const div = liteMode ? 24000 : 16000;
   const count = Math.min(cap, Math.round((window.innerWidth * window.innerHeight) / div));
   stars = Array.from({ length: count }, () => ({
     x: Math.random() * window.innerWidth,
@@ -762,7 +769,7 @@ function shiftHex(hex, deg) {
 
 /** Seed floating bokeh orbs, scaled to the viewport. */
 function seedBokeh() {
-  const count = Math.min(liteMode ? 16 : 40, Math.round((window.innerWidth * window.innerHeight) / 60000));
+  const count = Math.min(liteMode ? 12 : 28, Math.round((window.innerWidth * window.innerHeight) / 80000));
   bokeh = Array.from({ length: count }, () => ({
     x: Math.random(),
     y: Math.random(),
@@ -1130,6 +1137,12 @@ function drawBackdrop(now) {
     const qTarget = fpsEMA > 55 ? 1 : fpsEMA > 45 ? 0.8 : fpsEMA > 32 ? 0.6 : 0.45;
     quality += (qTarget - quality) * 0.02;
 
+    // Live FPS readout (throttled to ~3/s to avoid needless DOM writes).
+    if (els.fps && now - lastFpsShownAt > 350) {
+      lastFpsShownAt = now;
+      els.fps.textContent = `${Math.round(fpsEMA)} fps`;
+    }
+
     // Slowly drift the global hue (faster when intense), and jump it on drops —
     // this shifts the whole wash + live layers so the background never settles.
     bgHue = (bgHue + dt * 0.01 * (0.6 + intensity + baseEnergy) + dropFlash * 0.6) % 360;
@@ -1243,7 +1256,9 @@ function drawBackdrop(now) {
     // Wash opacity follows the level and swells with build-up/drop so colour
     // change reads even through a transparent overlay. When a cover photo is
     // present the wash is thinned so the photo stays visible beneath the colour.
-    const washAlpha = Math.min(1, level.alpha * (1 - artAlpha * 0.5) + buildup * 0.12 + dropFlash * 0.15);
+    // With a cover present, thin the colour wash hard so the poster shows through
+    // (the scrim already handles lyric legibility); without one, keep it full.
+    const washAlpha = Math.min(1, level.alpha * (1 - artAlpha * 0.85) + buildup * 0.12 + dropFlash * 0.15);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = washAlpha;
     ctx.fillStyle = tintLive;
@@ -1259,7 +1274,9 @@ function drawBackdrop(now) {
     // figure + constellation web ride on top — all beat-reactive "moments".
     // The 260-point galaxy is the single most expensive always-on layer, so Lite
     // mode drops it entirely.
-    if (!liteMode) drawGalaxy(now, w, h, life);
+    // The 260-point galaxy is the heaviest always-on layer; auto-drop it when the
+    // frame rate sags (in addition to Lite mode) so weak GPUs recover toward 60.
+    if (!liteMode && fpsEMA > 40) drawGalaxy(now, w, h, life);
     if (scene.math) drawMathCurves(now, w, h, life, motion);
     if (scene.web) drawConstellation(now, w, h, life);
     // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
@@ -1299,10 +1316,11 @@ function drawBackdrop(now) {
       }
       const tw = 0.55 + 0.45 * Math.sin(now * s.twSpeed + s.twPhase);
       const alpha = Math.min(1, s.baseAlpha * tw * boost);
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r * (1 + intensity * 0.5), 0, Math.PI * 2);
+      // fillRect is cheaper than beginPath+arc+fill for tiny dots, and there are
+      // dozens per frame — a real saving at no visible cost at this size.
+      const d = s.r * (1 + intensity * 0.5) * 2;
       ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-      ctx.fill();
+      ctx.fillRect(s.x - d / 2, s.y - d / 2, d, d);
     }
 
     // Occasional shooting star; likelier during intense moments.
@@ -1531,17 +1549,51 @@ function maybeEnrichArtists(artistName) {
   }
 }
 
+/* Hero animation variations. While the song-name hero lingers (instrumentals,
+   slow/Deadmau5-style sections), we rotate a variant class every few seconds so it
+   never looks static for minutes: v-1 is the base glow/pulse, v-2..v-4 reshape the
+   motion (sway + letter-spacing, wobble, hue drift). */
+const HERO_VARIANTS = 4;
+const HERO_VARIANT_MS = 6500;
+let heroVariant = 1;
+let heroVariantTimer = null;
+
+function applyHeroVariant() {
+  for (let i = 2; i <= HERO_VARIANTS; i += 1) {
+    els.hero.classList.toggle(`v-${i}`, i === heroVariant);
+  }
+}
+
+function startHeroVariants() {
+  if (heroVariantTimer) return;
+  applyHeroVariant();
+  heroVariantTimer = setInterval(() => {
+    heroVariant = (heroVariant % HERO_VARIANTS) + 1;
+    applyHeroVariant();
+  }, HERO_VARIANT_MS);
+}
+
+function stopHeroVariants() {
+  if (!heroVariantTimer) return;
+  clearInterval(heroVariantTimer);
+  heroVariantTimer = null;
+}
+
 /**
- * Show a big glowing title + artist when no lyric line is active — an
- * instrumental track, a track with no synced lyrics, or the intro before the
- * first line. Hidden the moment a lyric line takes focus.
+ * Show a big glowing title + artist when there is no lyric line to show — an
+ * instrumental track, a track with no synced lyrics, the intro before the first
+ * line, OR when the user has toggled lyrics off (no-lyric mode). While visible it
+ * cycles animation variations so long slow sections stay alive.
  */
 function updateHero() {
   const noActiveLine = cues.length === 0 || activeIndex < 0 || instrumentalGap;
-  const show = Boolean(currentTrack) && noActiveLine;
+  const show = Boolean(currentTrack) && (!lyricsVisible || noActiveLine);
   if (show) {
     els.heroTitle.textContent = currentTrack.title || '';
     els.heroArtist.textContent = artistLabel || currentTrack.artist || '';
+    startHeroVariants();
+  } else {
+    stopHeroVariants();
   }
   els.hero.classList.toggle('is-visible', show);
 }
@@ -1626,7 +1678,12 @@ function applyArtPalette() {
   window.ArtistSprites.recolorFromArt(spriteClones, artPalette);
 }
 
-/** Bake a heavy blur + darken into a small offscreen canvas once (cheap redraw). */
+/** Cached legibility scrim (rebuilt on viewport-height change). */
+let artScrim = null;
+let artScrimH = 0;
+
+/** Bake a light blur + gentle darken into a small offscreen canvas once. A softer
+    treatment than before so the cover is actually recognisable in the backdrop. */
 function buildBlurredArt() {
   if (!artImage) return;
   const size = 512;
@@ -1634,7 +1691,7 @@ function buildBlurredArt() {
   c.width = c.height = size;
   const g = c.getContext('2d');
   if (!g) return;
-  g.filter = 'blur(24px) brightness(0.62) saturate(1.25)';
+  g.filter = 'blur(9px) brightness(0.9) saturate(1.2)';
   // Overscan slightly so the blur doesn't reveal transparent edges.
   g.drawImage(artImage, -size * 0.08, -size * 0.08, size * 1.16, size * 1.16);
   g.filter = 'none';
@@ -1642,7 +1699,9 @@ function buildBlurredArt() {
 }
 
 /**
- * Paint the pre-blurred album art as a full-screen cover behind the wash.
+ * Paint the pre-blurred album art as a full-screen cover behind the wash. Instead
+ * of a flat blackout (which hid the cover), a vertical scrim darkens only the
+ * centre band where the lyric sits, so the poster stays visible top and bottom.
  * @param {number} w @param {number} h viewport px @param {number} alpha 0..1
  */
 function drawArtCover(w, h, alpha) {
@@ -1654,9 +1713,19 @@ function drawArtCover(w, h, alpha) {
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = alpha;
   ctx.drawImage(artBlurred, dx, dy, s, s);
-  // Extra darken so the centred lyric stays legible over bright covers.
-  ctx.globalAlpha = alpha * 0.42;
-  ctx.fillStyle = '#000';
+
+  // Legibility scrim: darkest through the middle (behind the centred lyric),
+  // fading toward the top/bottom edges so the cover reads there.
+  if (!artScrim || artScrimH !== h) {
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0,0,0,0.12)');
+    grad.addColorStop(0.5, 'rgba(0,0,0,0.62)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.28)');
+    artScrim = grad;
+    artScrimH = h;
+  }
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = artScrim;
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
   ctx.globalAlpha = 1;
@@ -1706,6 +1775,7 @@ window.player.onTrack((track) => {
   clearColumn();
   els.title.textContent = track.title || '';
   els.artist.textContent = track.artist || '';
+  if (els.source) els.source.hidden = true; // cleared until this track's lyrics land
 
   // Reset mood/energy; the sentiment analysis (if available) upgrades this soon.
   baseEnergy = typeof track.energy === 'number' ? track.energy : 0.35;
@@ -1803,10 +1873,30 @@ window.player.onLyrics((payload) => {
     case 'error': setStatus('lyric lookup failed'); clearColumn(); break;
     default: setStatus('');
   }
+  if (payload.status === 'ok') showSourceBadge(payload.origin);
   applyScript();
   refreshButtons();
   updateHero();
 });
+
+/**
+ * Badge where the current lyrics loaded from, so a preloaded (offline/instant)
+ * hit is visible proof the pre-sync/cache paid off.
+ * @param {'memory'|'disk'|'network'|undefined} origin
+ */
+function showSourceBadge(origin) {
+  if (!els.source) return;
+  const map = {
+    disk: { text: '⚡ preloaded', title: 'Loaded instantly from the on-disk cache (offline)' },
+    memory: { text: '⚡ cached', title: 'Reused from this session — no re-fetch' },
+    network: { text: '↓ fetched', title: 'Fetched from the network just now' },
+  };
+  const info = map[origin];
+  if (!info) { els.source.hidden = true; return; }
+  els.source.textContent = info.text;
+  els.source.title = info.title;
+  els.source.hidden = false;
+}
 
 window.player.onTranslation((payload) => {
   if (currentTrack && payload.track && payload.track.title !== currentTrack.title) return;
@@ -1871,11 +1961,56 @@ window.player.onOffset((data) => {
   applyOffsetLabel(data.offsetMs || 0);
 });
 
-// On-screen timing nudge: shift the current song's lyrics earlier / later, or
-// click the offset chip to snap back to in-sync (mirrors Ctrl+Alt+←/→/0).
+// On-screen timing nudge: the ⏪/⏩ chips step by 100ms; the offset chip itself is
+// DRAGGABLE — drag left/right to scrub the sync live — and a plain click resets it.
 els.syncEarlierBtn.addEventListener('click', () => setSyncOffset(currentOffsetMs - OFFSET_STEP_MS));
 els.syncLaterBtn.addEventListener('click', () => setSyncOffset(currentOffsetMs + OFFSET_STEP_MS));
-els.offset.addEventListener('click', () => setSyncOffset(0));
+
+/* Drag-to-scrub the sync offset on the offset chip. 4ms per pixel, snapped to
+   10ms; committed live (throttled) so the lyrics move as you drag. A drag that
+   actually moved suppresses the trailing click so it doesn't reset to zero. */
+const DRAG_MS_PER_PX = 4;
+let offsetDragging = false;
+let dragStartX = 0;
+let dragStartOffset = 0;
+let dragMoved = false;
+let lastDragCommitAt = 0;
+
+els.offset.addEventListener('pointerdown', (e) => {
+  offsetDragging = true;
+  dragMoved = false;
+  dragStartX = e.clientX;
+  dragStartOffset = currentOffsetMs;
+  try { els.offset.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  els.offset.classList.add('is-dragging');
+});
+
+els.offset.addEventListener('pointermove', (e) => {
+  if (!offsetDragging) return;
+  const dx = e.clientX - dragStartX;
+  if (Math.abs(dx) > 3) dragMoved = true;
+  const next = Math.round((dragStartOffset + dx * DRAG_MS_PER_PX) / 10) * 10;
+  applyOffsetLabel(next); // live label + local mirror
+  const now = performance.now();
+  if (now - lastDragCommitAt > 80) { // throttle the IPC while dragging
+    lastDragCommitAt = now;
+    window.player.setOffset(next);
+  }
+});
+
+function endOffsetDrag() {
+  if (!offsetDragging) return;
+  offsetDragging = false;
+  els.offset.classList.remove('is-dragging');
+  setSyncOffset(currentOffsetMs); // final commit + reflect the stored value
+}
+els.offset.addEventListener('pointerup', endOffsetDrag);
+els.offset.addEventListener('pointercancel', endOffsetDrag);
+
+els.offset.addEventListener('click', () => {
+  if (dragMoved) { dragMoved = false; return; } // ignore the click that ends a drag
+  setSyncOffset(0);
+});
 
 els.scriptBtn.addEventListener('click', async () => {
   const next = script === 'devanagari' ? 'latin' : 'devanagari';
@@ -1954,6 +2089,7 @@ els.spritesBtn.addEventListener('click', () => {
 function applyLyricsVisibility() {
   document.body.classList.toggle('lyrics-hidden', !lyricsVisible);
   els.lyricsBtn.setAttribute('aria-pressed', String(lyricsVisible));
+  updateHero(); // no-lyric mode shows the animated song-name hero instead
 }
 els.lyricsBtn.addEventListener('click', () => {
   lyricsVisible = !lyricsVisible;
@@ -2051,12 +2187,54 @@ function closePresync() {
   document.body.classList.remove('keybox-open');
 }
 
+/**
+ * Fetch the synced-songs library from main and render it into the panel. Each row
+ * shows title · artist and badges: ✓ lyrics cached, ♪ beat map learned.
+ */
+async function refreshSyncedList() {
+  if (!els.syncedList || !window.player.listSynced) return;
+  let items = [];
+  try {
+    items = await window.player.listSynced();
+  } catch { /* leave the list as-is on failure */ }
+
+  els.syncedList.textContent = '';
+  if (els.syncedCount) els.syncedCount.textContent = items.length ? `(${items.length})` : '';
+
+  if (items.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'synced-empty';
+    li.textContent = 'Nothing synced yet — play or pre-sync some songs.';
+    els.syncedList.appendChild(li);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const it of items) {
+    const li = document.createElement('li');
+    const title = document.createElement('span');
+    title.className = 'synced-title';
+    title.textContent = it.title || it.key;
+    const artist = document.createElement('span');
+    artist.className = 'synced-artist';
+    artist.textContent = it.artist || '';
+    const badges = document.createElement('span');
+    badges.className = 'synced-badges';
+    badges.textContent = `${it.hasCues ? '✓' : '·'}${it.hasBeatmap ? ' ♪' : ''}`;
+    badges.title = `${it.hasCues ? 'lyrics cached' : 'no lyrics'}${it.hasBeatmap ? ' · beat map learned' : ''}`;
+    li.append(title, artist, badges);
+    frag.appendChild(li);
+  }
+  els.syncedList.appendChild(frag);
+}
+
 els.presyncBtn.addEventListener('click', () => {
   const willShow = els.presync.hasAttribute('hidden');
   if (willShow) {
     els.presync.removeAttribute('hidden');
     document.body.classList.add('keybox-open'); // pin the HUD open while typing
     els.presyncInput.focus();
+    refreshSyncedList(); // show the current library each time the panel opens
   } else {
     closePresync();
   }
@@ -2084,6 +2262,7 @@ window.player.onPresyncProgress((data) => {
   if (!data) return;
   if (data.status === 'done') {
     els.presyncStatus.textContent = data.summary || 'done';
+    refreshSyncedList(); // reflect the newly-cached songs
     return;
   }
   const label = data.current ? ` · ${data.current}` : '';

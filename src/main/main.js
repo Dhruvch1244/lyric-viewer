@@ -270,6 +270,8 @@ async function presyncOne(track) {
 
   const indic = detectIndic(result.cues).indic || Boolean(result.cuesDevanagari);
   llmCache.merge(key, {
+    title: track.title || null,
+    artist: track.artist || null,
     cues: result.cues,
     cuesDevanagari: result.cuesDevanagari || null,
     source: result.source,
@@ -288,7 +290,10 @@ async function loadLyricsFor(track) {
 
   if (lyricCache.has(key)) {
     const cached = lyricCache.get(key);
-    send('lyrics', { track, ...cached });
+    // `origin` tells the renderer where the lyrics came from so it can badge a
+    // preloaded/offline hit: 'memory' (this session), 'disk' (preloaded from a
+    // previous session or pre-sync), or 'network' (fetched now).
+    send('lyrics', { track, ...cached, origin: 'memory' });
     maybeAutoTranslate(key, track, token);
     maybeAnalyzeSentiment(key, track, token);
     return;
@@ -311,7 +316,7 @@ async function loadLyricsFor(track) {
       translationAvailable: isTranslationAvailable(),
     };
     lyricCache.set(key, payload);
-    send('lyrics', { track, ...payload });
+    send('lyrics', { track, ...payload, origin: 'disk' });
     maybeAutoTranslate(key, track, token);
     maybeAnalyzeSentiment(key, track, token);
     return;
@@ -335,7 +340,7 @@ async function loadLyricsFor(track) {
       source: null, status: 'not-found', indic: false,
     };
     lyricCache.set(key, payload);
-    send('lyrics', { track, ...payload });
+    send('lyrics', { track, ...payload, origin: 'network' });
     return;
   }
 
@@ -360,10 +365,13 @@ async function loadLyricsFor(track) {
   };
 
   lyricCache.set(key, payload);
-  send('lyrics', { track, ...payload });
+  send('lyrics', { track, ...payload, origin: 'network' });
 
-  // Persist the raw synced cues so the next play of this song is instant/offline.
+  // Persist the raw synced cues (+ display title/artist) so the next play of this
+  // song is instant/offline and it shows in the synced-songs library.
   llmCache.merge(key, {
+    title: track.title || null,
+    artist: track.artist || null,
     cues: result.cues,
     cuesDevanagari: payload.cuesDevanagari,
     language: payload.language,
@@ -616,9 +624,12 @@ app.whenReady().then(() => {
     const track = payload && payload.track;
     const beatmap = payload && payload.beatmap;
     if (!track || !beatmap) return { status: 'ignored' };
-    llmCache.merge(trackKey(track), { beatmap });
+    llmCache.merge(trackKey(track), { beatmap, title: track.title || null, artist: track.artist || null });
     return { status: 'ok' };
   });
+
+  /* Snapshot of every cached song for the synced-songs library UI. */
+  ipcMain.handle('list-synced', () => llmCache.list());
 
   ipcMain.handle('get-provider-status', () => ({ provider: activeProvider() }));
 

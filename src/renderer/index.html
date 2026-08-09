@@ -45,8 +45,10 @@
         <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
-        <span id="hud-offset" class="chip chip--muted" title="Click to reset sync"></span>
+        <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
         <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
+        <span id="hud-fps" class="chip chip--muted" title="Frames per second"></span>
+        <span id="hud-source" class="chip chip--muted" title="Where the current lyrics loaded from" hidden></span>
       </div>
 
       <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user
@@ -69,6 +71,10 @@
         <div class="listbox__row">
           <button id="presync-run" class="chip" type="button">Pre-sync</button>
           <span id="presync-status" class="listbox__status" role="status"></span>
+        </div>
+        <div class="listbox__synced">
+          <div class="listbox__label">Synced library <span id="synced-count" class="listbox__status"></span></div>
+          <ul id="synced-list" class="synced-list"></ul>
         </div>
       </div>
       <div id="hud-progress" class="progress">

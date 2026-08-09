@@ -28,4 +28,5 @@ contextBridge.exposeInMainWorld('player', {
   setApiKey: (name, value) => ipcRenderer.invoke('set-api-key', name, value),
   saveBeatmap: (payload) => ipcRenderer.invoke('save-beatmap', payload),
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
+  listSynced: () => ipcRenderer.invoke('list-synced'),
 });
