@@ -6,11 +6,9 @@ Expo/React Native + `@shopify/react-native-skia`, reusing
 LLM-prompt logic.
 
 See `/root/.claude/plans/foamy-prancing-karp.md` (or ask for the plan again)
-for the full phased plan. This package currently covers **Phase 1's
-scaffold**: the detection-source architecture and a minimal text player
-shell, not yet the full visual system (Phase 2) or on-device AI (Phase 3).
+for the full phased plan.
 
-## Current state — what's real vs. stubbed
+## Current state — what's real vs. stubbed vs. simplified
 
 - **Real, shared, and parity-tested**: everything imported from
   `@lyric-viewer/core` — lyric matching against LRCLIB, LRC parsing, Indic
@@ -29,10 +27,30 @@ shell, not yet the full visual system (Phase 2) or on-device AI (Phase 3).
   real build errors on the first EAS Build; each file's header comment flags
   what's riskiest (Spotify's SDK method signatures shift between versions,
   in particular).
-- **Not started**: the Skia-based visual system (starfield, glow, drop
-  flash, word-focus gradient, pixel-art dancers — see
-  `src/renderer/renderer.js` and `sprites.js` in the repo root for what
-  Phase 2 needs to match) and the on-device AI integration (Phase 3).
+- **Written and type-checked, but not visually run**: the Phase 2 visual
+  system — `src/visuals/Starfield.tsx` (Skia canvas: per-track colour wash,
+  drifting glow orbs, twinkling starfield, vignette, build-up bloom, drop
+  flash + shockwave ring) and `src/visuals/LyricColumn.tsx` (active-line
+  centering, distance-based fade, cadence-adaptive scroll speed, per-word
+  highlight), tied together by `src/useLyricEngine.ts`. `tsc --noEmit` passes
+  clean against the real `@shopify/react-native-skia` /
+  `react-native-reanimated` type declarations, which is a real signal (it
+  means every API call used actually exists with the shape this code
+  expects) — but nothing has been rendered on a device or simulator, so
+  visual bugs (timing feel, layout, colour) are expected on first run.
+  **Deliberately simplified or not ported** from
+  `src/renderer/renderer.js`/`sprites.js` (documented in each file's header,
+  not silently dropped): aurora bands, bokeh, the equalizer, light rays,
+  ripples, confetti, shooting stars, the pixel-art artist dancers, the pool
+  of 24 per-word entrance animations (down to one), and true gradient-fill
+  word text (down to a colour+scale highlight). These are lower-priority
+  per the original phased plan ("scrolling column + word focus" and
+  "starfield/glow + drop flash" were called out as priorities 1-2; dancers
+  as priority 3, decorative particle layers weren't prioritized at all).
+- **Not started**: on-device AI (Phase 3) — sentiment-driven palette,
+  on-device transliteration/translation. Every track currently uses the
+  instant hash palette only, same as the Windows app before an LLM key is
+  configured.
 
 ## Getting a build onto your iPhone (no Mac required)
 

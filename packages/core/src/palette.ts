@@ -77,3 +77,35 @@ export function paletteFromSentiment(s: Sentiment): Palette {
 export function trackKey(track: TrackIdentity): string {
   return `${(track.artist || '').trim()}|${(track.title || '').trim()}`.toLowerCase();
 }
+
+/**
+ * Rotate a hex colour's hue by `deg`, preserving saturation/lightness. Used
+ * to drift the backdrop's live colours over time. Ported from
+ * src/renderer/renderer.js's `shiftHex`.
+ */
+export function shiftHex(hex: string, deg: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return hslHex((h + deg) % 360, s * 100, l * 100);
+}
+
+/** #rrggbb + alpha (0-1) → rgba() string. Ported from renderer.js's `hexA`. */
+export function hexA(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, alpha))})`;
+}
