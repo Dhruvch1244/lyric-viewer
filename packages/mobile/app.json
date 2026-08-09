@@ -5,6 +5,7 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "scheme": "lyricplayer",
     "ios": {
       "bundleIdentifier": "com.example.lyricplayer",
       "supportsTablet": false,
@@ -13,6 +14,6 @@
         "UIBackgroundModes": ["audio"]
       }
     },
-    "plugins": ["expo-dev-client"]
+    "plugins": ["expo-dev-client", "./plugins/withNativeSources.js"]
   }
 }

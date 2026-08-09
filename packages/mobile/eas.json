@@ -1,0 +1,17 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "distribution": "internal",
+      "developmentClient": true,
+      "ios": { "simulator": false }
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": { "simulator": false }
+    }
+  }
+}
