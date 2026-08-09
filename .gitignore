@@ -1,8 +1,12 @@
 node_modules/
 dist/
+dist-installer/
 out/
 *.log
 .DS_Store
 
 # Machine-specific Claude Code local settings
 .claude/settings.local.json
+
+# Shipped API keys — bundled into the installer, never committed
+src/main/secrets.js

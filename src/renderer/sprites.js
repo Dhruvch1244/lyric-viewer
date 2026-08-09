@@ -85,6 +85,74 @@
     return `#${f(0)}${f(8)}${f(4)}`;
   }
 
+  /** #rrggbb + alpha → rgba() string (for the teleport flash gradient). */
+  function hexAlpha(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, a))})`;
+  }
+
+  /** Deterministic 0..1 value per sprite cell, for the pixel-materialize reveal. */
+  function cellNoise(r, c) {
+    const h = ((r * 73856093) ^ (c * 19349663)) >>> 0;
+    return (h % 1000) / 1000;
+  }
+
+  /** Multiply a #rrggbb colour toward black by `f` (0..1) → a darker shade. */
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.round(((n >> 16) & 255) * f);
+    const g = Math.round(((n >> 8) & 255) * f);
+    const b = Math.round((n & 255) * f);
+    return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
+  }
+
+  /* ---------------------------------------------------- pre-rendered body cache
+
+     The body is a 16×19 pixel grid. Filling it cell-by-cell every frame cost up
+     to ~150 fillRect calls per dancer (× up to 8 dancers × 60fps ≈ 70k/sec). We
+     instead render each distinct colour-look ONCE to a small offscreen canvas and
+     blit it with a single drawImage per dancer per frame — ~150× fewer draw calls.
+     The per-cell path is kept only for the brief materialize reveal on spawn. */
+  const BASE_CELL = 6;                 // px per grid cell in the cache bitmap
+  const BODY_CACHE_MAX = 48;           // bound memory across a long, many-artist session
+  const bodyCache = new Map();
+
+  /** Stable cache key from a look's colour roles. */
+  function lookSig(look) {
+    return `${look.skin}|${look.cap}|${look.brim}|${look.hoodie}|${look.hoodieDark}|${look.accent}|${look.pants}|${look.shoe}`;
+  }
+
+  /**
+   * Get (or build) the pre-rendered body bitmap for a look.
+   * @param {object} look role→colour look
+   * @returns {HTMLCanvasElement}
+   */
+  function bodyCanvas(look) {
+    const key = lookSig(look);
+    const cached = bodyCache.get(key);
+    if (cached) return cached;
+
+    const cv = document.createElement('canvas');
+    cv.width = GRID_W * BASE_CELL;
+    cv.height = GRID_H * BASE_CELL;
+    const g = cv.getContext('2d');
+    for (let r = 0; r < GRID_H; r += 1) {
+      const row = GRID[r];
+      for (let c = 0; c < GRID_W; c += 1) {
+        const col = colorFor(row[c], look);
+        if (!col) continue;
+        g.fillStyle = col;
+        g.fillRect(c * BASE_CELL, r * BASE_CELL, BASE_CELL, BASE_CELL);
+      }
+    }
+
+    if (bodyCache.size >= BODY_CACHE_MAX) {
+      bodyCache.delete(bodyCache.keys().next().value); // evict oldest (FIFO)
+    }
+    bodyCache.set(key, cv);
+    return cv;
+  }
+
   const SKINS = ['#c9895e', '#a56a42', '#e0aa7a', '#8a5a38', '#d79b6b'];
 
   /** Deterministic distinct look from a name hash. */
@@ -93,6 +161,7 @@
     const accentH = (h + 150) % 360;
     return {
       name,
+      procedural: true, // eligible for album-art recolouring (branded looks are not)
       skin: SKINS[hash % SKINS.length],
       cap: hsl(h, 70, 42),
       brim: hsl(h, 70, 30),
@@ -139,7 +208,9 @@
   function splitArtists(raw) {
     if (!raw) return [];
     const marked = raw
-      .replace(/\s*\b(feat\.?|ft\.?|featuring|with|prod\.?|vs\.?|x|and)\b\s*/gi, '|')
+      // Word-boundary before the keyword, then an OPTIONAL trailing dot the old
+      // pattern failed to swallow (left a stray "." token from "feat.").
+      .replace(/\s*\b(feat|ft|featuring|with|prod|vs|x|and)\b\.?\s*/gi, '|')
       .replace(/[×,&+/]/g, '|');
     const seen = new Set();
     const out = [];
@@ -161,12 +232,41 @@
     return h >>> 0;
   }
 
-  const MAX_ACTORS = 6; // keep the stage readable even on posse cuts
+  const MAX_ACTORS = 8; // keep the stage readable even on posse cuts
+
+  /* Sprites roam this stage band (normalised viewport Y). It now spans a tall
+     lower region — from just under the centred lyric down to the HUD — so dancers
+     genuinely travel in BOTH axes and across the full width, instead of hugging a
+     thin strip along the very bottom. The sprite unit is kept small (see renderer)
+     so even a dancer near BAND_TOP stays clear of the big lyric line. */
+  const BAND_TOP = 0.60;
+  const BAND_BOTTOM = 0.96;
 
   /* -------------------------------------------------------------- move engine */
 
-  const MOVES = ['bob', 'sway', 'pump', 'spin', 'point', 'wave', 'headbang', 'dab', 'shuffle', 'moonwalk', 'hop', 'kick'];
-  const HYPE_MOVES = ['pump', 'spin', 'shuffle', 'hop', 'wave', 'headbang', 'kick'];
+  /* A big roster of named moves. The pose() switch below animates each one; new
+     entries fall back to the base bob until given a case, so the list is safe to
+     extend. Energetic tracks bias toward the HYPE pool. */
+  const MOVES = [
+    'bob', 'sway', 'pump', 'spin', 'point', 'wave', 'headbang', 'dab', 'shuffle',
+    'moonwalk', 'hop', 'kick', 'robot', 'floss', 'twist', 'jumpingjack', 'breakdance',
+    'wobble', 'charleston', 'vogue', 'skank', 'crumporch',
+  ];
+  const HYPE_MOVES = [
+    'pump', 'spin', 'shuffle', 'hop', 'wave', 'headbang', 'kick', 'jumpingjack',
+    'breakdance', 'floss', 'crumporch', 'skank',
+  ];
+
+  /* Entrance / teleport-switch animations played when a dancer spawns, when it
+     takes the mic (teleport), and on every drop (a mixed re-appear). Seven
+     styles so a re-spawn of the whole troupe looks varied — corners fly-in,
+     warp-slide from the sides, drop-in from above, pixel-materialize, spiral-in,
+     elastic pop, and on-the-spot teleport with a flash. */
+  const SPAWN_ANIMS = ['teleport', 'corners', 'materialize', 'dropin', 'warpslide', 'popscale', 'spiral'];
+  /** Shared no-op modifier once an entrance has finished (avoids per-frame allocs). */
+  const SPAWN_IDLE = { ox: 0, oy: 0, scale: 1, alpha: 1, reveal: 1, flash: 0 };
+  /** Fully hidden — used while an actor waits out its staggered spawn delay. */
+  const SPAWN_HIDDEN = { ox: 0, oy: 0, scale: 1, alpha: 0, reveal: 0, flash: 0 };
 
   /** One roaming, dancing pixel character. */
   class SpriteActor {
@@ -179,48 +279,179 @@
       this.look = look;
       this.name = look.name || '';
       this.x = (index + 0.5) / total;               // normalised stage X
-      this.dir = index % 2 ? 1 : -1;                // roam direction
-      this.speed = 0.00003 + Math.random() * 0.00004;
+      this.y = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP); // start in the bottom band
+      this.active = index === 0;                    // "on the mic" flag; renderer rotates it per line
+      this.dir = index % 2 ? 1 : -1;                // horizontal roam direction
+      this.speed = 0.00004 + Math.random() * 0.00006;
+      this.speedY = 0.00002 + Math.random() * 0.00004;
       this.phase = index * 1.7;
       this.tempo = 5.4 + Math.random() * 1.6;       // personal dance tempo
+      // Wander target: each actor lazily steers toward a roaming point, kept
+      // inside the bottom band so nobody drifts up over the lyric.
+      this.tx = Math.random();
+      this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
+      this.retargetAt = 0;
       this.move = MOVES[(Math.random() * MOVES.length) | 0];
       this.moveUntil = 0;
       this.jump = 0;
       this.facing = 1;
       this.facingCur = 1;
+      this.scale = 0.8 + Math.random() * 0.25;      // per-actor size variety (kept small to clear the lyric)
       this.lastDrop = 0;
       this.lastNow = 0;
+
+      // Clone lifespan: a drop clone is created with ttl > 0 and retires (expired)
+      // when it elapses. Regular dancers keep ttl = 0 and live forever.
+      this.ttl = 0;
+      this.expired = false;
+
+      // Entrance / teleport animation state (see triggerSpawn + spawnMod). A
+      // negative spawnStart means "play an intro the first time I'm updated".
+      this.spawnType = 'popscale';
+      this.spawnStart = -1;
+      this.spawnDur = 0;
+      this.spawnDelay = index * 130;                // stagger so a troupe pops in one-by-one
+      this.sox = 0;                                 // spawn origin offset (normalised viewport)
+      this.soy = 0;
     }
 
     /**
-     * Advance roaming + move selection.
+     * Begin an entrance/teleport animation. Picks a random style unless one is
+     * named, and seeds the travel origin for the flying-in styles.
+     * @param {number} now @param {?string} type one of SPAWN_ANIMS, or null for random
+     */
+    triggerSpawn(now, type) {
+      this.spawnType = type || SPAWN_ANIMS[(Math.random() * SPAWN_ANIMS.length) | 0];
+      this.spawnStart = now + (this.spawnDelay || 0);
+      this.spawnDur = 480 + Math.random() * 360;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      if (this.spawnType === 'corners') { this.sox = side * (0.5 + Math.random() * 0.4); this.soy = -(0.4 + Math.random() * 0.5); }
+      else if (this.spawnType === 'warpslide') { this.sox = side * (0.8 + Math.random() * 0.5); this.soy = 0; }
+      else if (this.spawnType === 'dropin') { this.sox = 0; this.soy = -(0.6 + Math.random() * 0.5); }
+      else { this.sox = 0; this.soy = 0; }
+    }
+
+    /**
+     * Sample the current entrance animation as draw modifiers.
+     * @param {number} now
+     * @returns {{ox:number,oy:number,scale:number,alpha:number,reveal:number,flash:number}}
+     */
+    spawnMod(now) {
+      if (this.spawnStart < 0 || !this.spawnDur) return SPAWN_IDLE;
+      const p = (now - this.spawnStart) / this.spawnDur;
+      if (p >= 1) return SPAWN_IDLE;
+      if (p < 0) return SPAWN_HIDDEN;               // still waiting out its stagger delay
+      const t = p;
+      const eo = 1 - Math.pow(1 - t, 3);            // ease-out cubic
+      const alpha = Math.min(1, t * 1.6);
+      switch (this.spawnType) {
+        case 'corners':
+          return { ox: this.sox * (1 - eo), oy: this.soy * (1 - eo), scale: 0.7 + 0.3 * eo, alpha, reveal: 1, flash: 0 };
+        case 'dropin': {
+          const bounce = eo - Math.sin(t * Math.PI) * 0.06 * (1 - t);
+          return { ox: 0, oy: this.soy * (1 - bounce), scale: 1, alpha, reveal: 1, flash: 0 };
+        }
+        case 'warpslide':
+          return { ox: this.sox * (1 - eo), oy: 0, scale: 1, alpha, reveal: 1, flash: 0 };
+        case 'materialize':
+          return { ox: 0, oy: 0, scale: 1, alpha: 1, reveal: t, flash: 0 };
+        case 'spiral': {
+          const rad = (1 - eo) * 0.45;
+          const ang = t * Math.PI * 4;
+          return { ox: Math.cos(ang) * rad, oy: Math.sin(ang) * rad * 0.5, scale: 0.5 + 0.5 * eo, alpha, reveal: 1, flash: 0 };
+        }
+        case 'popscale': {
+          // Elastic overshoot: scales past 1 then settles.
+          const s = 1 - Math.pow(2, -10 * t) * Math.cos((t * 10 - 0.75) * ((2 * Math.PI) / 3));
+          return { ox: 0, oy: 0, scale: Math.max(0.02, s), alpha, reveal: 1, flash: 0 };
+        }
+        case 'teleport':
+        default: {
+          // Rematerialize on the spot: over-scale collapses to 1 while a strobe
+          // flicker fades the body in and a flash ring pings (drawn in draw()).
+          const flick = 0.5 + 0.5 * Math.sin(t * 40);
+          return { ox: 0, oy: 0, scale: 1 + (1 - eo) * 0.5, alpha: alpha * (0.4 + 0.6 * flick), reveal: 1, flash: 1 - t };
+        }
+      }
+    }
+
+    /**
+     * Advance roaming + move selection. The active dancer (the vocalist on the
+     * current line) roams the bottom band and cycles the full move set; every
+     * other dancer just stands on the baseline and slides along X.
      * @param {number} now @param {{intensity:number,buildup:number,drop:number}} env
      */
     update(now, env) {
+      if (this.spawnStart < 0) this.triggerSpawn(now, null); // play the intro on first update
       const dt = this.lastNow ? Math.min(50, now - this.lastNow) : 16;
       this.lastNow = now;
 
-      // Roam across the stage; faster when the track is intense. Bounce at edges.
-      const spd = this.speed * (1 + env.intensity * 2.4 + env.buildup) * dt;
-      this.x += this.dir * spd;
-      if (this.x < 0.05) { this.x = 0.05; this.dir = 1; }
-      if (this.x > 0.95) { this.x = 0.95; this.dir = -1; }
-
-      // Pick a new random move periodically; hype shortens holds + biases moves.
-      if (now >= this.moveUntil) {
-        const hyped = env.intensity > 0.4 || env.buildup > 0.5;
-        const pool = hyped ? HYPE_MOVES : MOVES;
-        this.move = pool[(Math.random() * pool.length) | 0];
-        this.moveUntil = now + (hyped ? 650 + Math.random() * 700 : 1100 + Math.random() * 1500);
-        if (this.move === 'spin') this.facing *= -1;
+      // Clone retirement: count down and mark expired so the renderer drops it.
+      if (this.ttl > 0) {
+        this.ttl -= dt;
+        if (this.ttl <= 0) { this.expired = true; return; }
       }
 
-      // Moonwalkers face against their travel; everyone else faces where they go.
-      const wantFace = this.move === 'moonwalk' ? -this.dir : this.dir;
-      if (this.move !== 'spin') this.facing = wantFace >= 0 ? 1 : -1;
+      const energy = 1 + env.intensity * 2.6 + env.buildup * 1.5 + env.drop * 2;
 
-      // Drop => jump with a whipping motion.
-      if (env.drop > 0.6 && this.lastDrop <= 0.6) this.jump = 1;
+      if (this.active) {
+        // Vocalist: roam left–right across the bottom band with a gentle bob, and
+        // cycle the full (hype-biased) move set. Targets stay inside the band so
+        // it never drifts up over the lyric.
+        if (now >= this.retargetAt) {
+          this.tx = 0.06 + Math.random() * 0.88;
+          this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
+          this.retargetAt = now + 1400 + Math.random() * 2200;
+        }
+        const spdX = this.speed * energy * dt;
+        const spdY = this.speedY * energy * dt;
+        const ddx = this.tx - this.x;
+        const ddy = this.ty - this.y;
+        this.dir = ddx >= 0 ? 1 : -1;
+        this.x += Math.max(-spdX, Math.min(spdX, ddx * 0.06));
+        this.y += Math.max(-spdY, Math.min(spdY, ddy * 0.06));
+        this.x += Math.sin(now / 1700 + this.phase) * 0.00035 * energy; // curved path
+
+        if (now >= this.moveUntil) {
+          const hyped = env.intensity > 0.4 || env.buildup > 0.5;
+          const pool = hyped ? HYPE_MOVES : MOVES;
+          this.move = pool[(Math.random() * pool.length) | 0];
+          this.moveUntil = now + (hyped ? 650 + Math.random() * 700 : 1100 + Math.random() * 1500);
+          if (this.move === 'spin') this.facing *= -1;
+        }
+        const wantFace = this.move === 'moonwalk' ? -this.dir : this.dir;
+        if (this.move !== 'spin') this.facing = wantFace >= 0 ? 1 : -1;
+
+        if (env.drop > 0.6 && this.lastDrop <= 0.6) this.jump = 1; // pop on the drop
+      } else {
+        // Off the mic: still roam the band in BOTH axes, just calmer than the
+        // vocalist — idle dancers travel up/down and side to side too.
+        if (now >= this.retargetAt) {
+          this.tx = 0.06 + Math.random() * 0.88;
+          this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
+          this.retargetAt = now + 2200 + Math.random() * 2800;
+        }
+        const spdX = this.speed * (0.5 + energy * 0.25) * dt;
+        const spdY = this.speedY * (0.5 + energy * 0.25) * dt;
+        const ddx = this.tx - this.x;
+        const ddy = this.ty - this.y;
+        this.dir = ddx >= 0 ? 1 : -1;
+        this.x += Math.max(-spdX, Math.min(spdX, ddx * 0.05));
+        this.y += Math.max(-spdY, Math.min(spdY, ddy * 0.05));
+
+        if (now >= this.moveUntil) {
+          this.move = Math.random() < 0.5 ? 'bob' : 'sway'; // calm idle moves only
+          this.moveUntil = now + 1300 + Math.random() * 1500;
+        }
+        this.facing = this.dir >= 0 ? 1 : -1;
+      }
+
+      // Shared clamps: keep everyone inside the bottom band and on-screen.
+      if (this.x < 0.04) { this.x = 0.04; this.tx = 0.2 + Math.random() * 0.2; }
+      if (this.x > 0.96) { this.x = 0.96; this.tx = 0.6 + Math.random() * 0.2; }
+      if (this.y < BAND_TOP) this.y = BAND_TOP;
+      if (this.y > BAND_BOTTOM) this.y = BAND_BOTTOM;
+
       this.lastDrop = env.drop;
       this.jump *= 0.88;
       this.facingCur += (this.facing - this.facingCur) * 0.25;
@@ -246,6 +477,16 @@
         case 'moonwalk': p.armL = 0.4 + 0.3 * b; p.armR = 0.4 - 0.3 * b; p.rot = 0.05 * b; break;
         case 'hop': p.dy = Math.max(0, Math.sin(t * this.tempo)) * 1.4 * e; break;
         case 'kick': p.dx = Math.sin(t * 4) * 0.5; p.rot = Math.sin(t * 4) * 0.12; p.armL = 0.4; break;
+        case 'robot': p.armR = b > 0 ? 0.8 : 0.2; p.armL = b2 > 0 ? 0.6 : 0.1; p.dx = Math.round(Math.sin(t * 2)) * 0.6; break;
+        case 'floss': p.dx = Math.sin(t * 8) * 1.1; p.armR = 0.5 + 0.5 * Math.sin(t * 8); p.armL = 0.5 - 0.5 * Math.sin(t * 8); break;
+        case 'twist': p.rot = Math.sin(t * 5) * 0.16; p.sq = 1 + Math.sin(t * 10) * 0.08; p.dy = Math.abs(b) * 0.4 * e; break;
+        case 'jumpingjack': p.dy = Math.max(0, Math.sin(t * this.tempo)) * 1.2 * e; { const j = Math.abs(Math.sin(t * this.tempo)); p.armR = j; p.armL = j; } break;
+        case 'breakdance': p.rot = t * 6; p.dy = 0.4 + Math.abs(b) * 0.6; p.sq = 1 + b2 * 0.1; break;
+        case 'wobble': p.rot = Math.sin(t * 3.5) * 0.2; p.dx = Math.sin(t * 3.5) * 0.9; break;
+        case 'charleston': p.dx = Math.sin(t * 6) * 0.8; p.rot = -Math.sin(t * 6) * 0.1; p.armR = 0.4 + 0.3 * b; p.armL = 0.4 - 0.3 * b; break;
+        case 'vogue': p.armR = 0.6 + 0.4 * b; p.armL = 0.9; p.rot = 0.1 * b; break;
+        case 'skank': p.dy = Math.abs(b) * 0.9 * e; p.armR = 0.6 * Math.abs(b); p.armL = 0.6 * Math.abs(b2); p.dx = Math.sin(t * this.tempo) * 0.5; break;
+        case 'crumporch': p.dx = Math.sin(t * 11) * 0.9; p.armR = Math.abs(b); p.armL = Math.abs(b2); p.rot = Math.sin(t * 7) * 0.14; p.dy = Math.abs(b) * 0.7 * e; break;
         case 'spin': break; // spin handled via facing flip
         default: break;     // bob
       }
@@ -253,7 +494,7 @@
     }
 
     /**
-     * Draw the actor at its roamed X in the bottom band.
+     * Draw the actor at its roamed X/Y anywhere on screen.
      * @param {CanvasRenderingContext2D} ctx
      * @param {number} w @param {number} h viewport size (px)
      * @param {number} unit pixel-cell size (px)
@@ -261,27 +502,57 @@
      * @param {{intensity:number,pulse:number,drop:number,buildup:number}} env
      */
     draw(ctx, w, h, unit, now, env) {
+      const sm = this.spawnMod(now);              // entrance/teleport draw modifiers
+      if (sm.alpha <= 0.001) return;              // still hidden (waiting out its stagger)
+
+      // Drop clones fade out over their final ~500ms of ttl.
+      const fade = this.ttl > 0 && this.ttl < 500 ? Math.max(0, this.ttl / 500) : 1;
+
       const t = now / 1000 + this.phase;
       const pose = this.pose(t, env);
-      const jumpY = -this.jump * unit * 6.5;
 
-      const x = this.x * w;
-      const feetY = h * 0.9;
-      const spriteH = GRID_H * unit;
-      const spriteW = GRID_W * unit;
+      // Depth scale (subtle in the narrow band) × entrance scale. Per-actor
+      // `scale` adds size variety.
+      const depth = 0.72 + this.y * 0.42;
+      const su = unit * this.scale * depth * sm.scale;
+      const jumpY = -this.jump * su * 6.5;
+      const x = (this.x + sm.ox) * w;             // sm.ox/oy carry the entrance travel
+      const feetY = (this.y + sm.oy) * h;
+      const spriteH = GRID_H * su;
+      const spriteW = GRID_W * su;
+
+      // Teleport flash: an accent ring + vertical beam pings as the body forms.
+      if (sm.flash > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = sm.flash * 0.8;
+        ctx.strokeStyle = this.look.accent;
+        ctx.lineWidth = 2 + sm.flash * 3;
+        ctx.beginPath();
+        ctx.arc(x, feetY - spriteH * 0.5, spriteW * (0.4 + (1 - sm.flash) * 0.9), 0, Math.PI * 2);
+        ctx.stroke();
+        const bw = spriteW * 0.5 * sm.flash;
+        const grad = ctx.createLinearGradient(x, feetY - spriteH * 1.4, x, feetY);
+        grad.addColorStop(0, hexAlpha(this.look.accent, 0));
+        grad.addColorStop(0.5, hexAlpha(this.look.accent, sm.flash * 0.5));
+        grad.addColorStop(1, hexAlpha(this.look.accent, 0));
+        ctx.fillStyle = grad;
+        ctx.fillRect(x - bw / 2, feetY - spriteH * 1.4, bw, spriteH * 1.4);
+        ctx.restore();
+      }
 
       ctx.save();
 
-      // Ground shadow, tightening on jumps.
-      ctx.globalAlpha = 0.26 * (1 - this.jump * 0.5);
+      // Ground shadow, tightening on jumps; fades in with the entrance.
+      ctx.globalAlpha = 0.26 * (1 - this.jump * 0.5) * depth * sm.alpha * fade;
       ctx.fillStyle = '#000';
       ctx.beginPath();
-      ctx.ellipse(x, feetY, spriteW * 0.45 * (1 - this.jump * 0.4), unit * 1.1, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, feetY, spriteW * 0.45 * (1 - this.jump * 0.4), su * 1.1, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 1;
 
-      // Move to feet, apply pose (dx/dy/jump/rotation/facing/squash).
-      ctx.translate(x + pose.dx * unit, feetY + pose.dy * unit + jumpY);
+      // Move to feet, apply pose; body + arms inherit the entrance alpha.
+      ctx.globalAlpha = sm.alpha * fade;
+      ctx.translate(x + pose.dx * su, feetY + pose.dy * su + jumpY);
       ctx.rotate(pose.rot);
       ctx.scale(this.facingCur, pose.sq);
 
@@ -289,51 +560,60 @@
       const top = -spriteH;
 
       if (env.drop > 0.05) { ctx.shadowColor = this.look.accent; ctx.shadowBlur = 18 * env.drop; }
-      for (let r = 0; r < GRID_H; r += 1) {
-        const row = GRID[r];
-        for (let c = 0; c < GRID_W; c += 1) {
-          const col = colorFor(row[c], this.look);
-          if (!col) continue;
-          ctx.fillStyle = col;
-          ctx.fillRect(left + c * unit, top + r * unit, unit + 0.5, unit + 0.5);
+      const reveal = sm.reveal;                   // < 1 during a pixel-materialize
+      if (reveal < 1) {
+        // Transient spawn reveal: per-cell materialize (slow path, spawn only).
+        for (let r = 0; r < GRID_H; r += 1) {
+          const row = GRID[r];
+          for (let c = 0; c < GRID_W; c += 1) {
+            const col = colorFor(row[c], this.look);
+            if (!col) continue;
+            if (cellNoise(r, c) > reveal) continue;
+            ctx.fillStyle = col;
+            ctx.fillRect(left + c * su, top + r * su, su + 0.5, su + 0.5);
+          }
         }
+      } else {
+        // Steady state: one blit of the pre-rendered body (was ~150 fillRects).
+        ctx.imageSmoothingEnabled = false;        // keep the pixels crisp when scaled
+        ctx.drawImage(bodyCanvas(this.look), left, top, spriteW, spriteH);
       }
       ctx.shadowBlur = 0;
 
       // Animated arms (drawn over the body; flip with facing automatically).
-      this.drawArm(ctx, left + spriteW * 0.80, top + spriteH * 0.52, pose.armR, unit);
-      this.drawArm(ctx, left + spriteW * 0.20 - unit * 1.4, top + spriteH * 0.52, pose.armL, unit);
+      this.drawArm(ctx, left + spriteW * 0.80, top + spriteH * 0.52, pose.armR, su);
+      this.drawArm(ctx, left + spriteW * 0.20 - su * 1.4, top + spriteH * 0.52, pose.armL, su);
 
       ctx.restore();
 
       // Name plate above the head (drawn unscaled so text stays upright/legible).
       if (this.name) {
         const label = this.name;
-        const ny = feetY + pose.dy * unit + jumpY - spriteH - unit * 1.6;
-        ctx.font = `700 ${Math.max(10, Math.round(unit * 1.5))}px "Segoe UI", system-ui, sans-serif`;
+        const ny = feetY + pose.dy * su + jumpY - spriteH - su * 1.6;
+        ctx.font = `700 ${Math.max(9, Math.round(su * 1.5))}px "Segoe UI", system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         const tw = ctx.measureText(label).width;
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = 0.9 * sm.alpha;
         ctx.fillStyle = 'rgba(0,0,0,0.42)';
-        ctx.fillRect(x - tw / 2 - unit * 0.6, ny - unit, tw + unit * 1.2, unit * 2);
+        ctx.fillRect(x - tw / 2 - su * 0.6, ny - su, tw + su * 1.2, su * 2);
         ctx.fillStyle = this.look.accent;
         ctx.fillText(label, x, ny);
         ctx.globalAlpha = 1;
       }
     }
 
-    /** Draw one raised forearm+fist when `raise` > 0. */
-    drawArm(ctx, ax, ay, raise, unit) {
+    /** Draw one raised forearm+fist when `raise` > 0. `su` is the depth-scaled cell. */
+    drawArm(ctx, ax, ay, raise, su) {
       if (raise <= 0.05) return;
-      const lift = raise * unit * 3.4;
+      const lift = raise * su * 3.4;
       ctx.fillStyle = this.look.hoodie;
-      ctx.fillRect(ax, ay - lift, unit * 1.4, lift + unit * 1.2);
+      ctx.fillRect(ax, ay - lift, su * 1.4, lift + su * 1.2);
       ctx.fillStyle = this.look.skin;
-      ctx.fillRect(ax - unit * 0.1, ay - lift - unit, unit * 1.6, unit * 1.4);
+      ctx.fillRect(ax - su * 0.1, ay - lift - su, su * 1.6, su * 1.4);
       if (raise > 0.7) {
         ctx.fillStyle = this.look.accent;
-        ctx.fillRect(ax + unit * 0.3, ay - lift - unit * 1.6, unit * 0.8, unit * 0.8);
+        ctx.fillRect(ax + su * 0.3, ay - lift - su * 1.6, su * 0.8, su * 0.8);
       }
     }
   }
@@ -343,6 +623,29 @@
   window.ArtistSprites = {
     SpriteActor,
     splitArtists,
+    /**
+     * Recolour procedurally-generated dancers from the album-art palette, so an
+     * unknown artist auto-themes to the current cover. Branded registry looks
+     * (Seedhe Maut, DIVINE, …) are left untouched. Mutating the look colours makes
+     * the next draw build/reuse a cache entry for the new palette automatically.
+     * @param {SpriteActor[]} actors dancers to recolour in place
+     * @param {string[]} colors 2+ #rrggbb colours sampled from the artwork (vibrant→muted)
+     */
+    recolorFromArt(actors, colors) {
+      if (!Array.isArray(actors) || !Array.isArray(colors) || colors.length < 2) return;
+      const accent = colors[0];
+      const hoodie = colors[1] || colors[0];
+      for (const a of actors) {
+        const look = a && a.look;
+        if (!look || !look.procedural) continue; // keep branded looks intact
+        look.accent = accent;
+        look.hoodie = hoodie;
+        look.hoodieDark = shade(hoodie, 0.68);
+        look.cap = shade(hoodie, 0.82);
+        look.brim = shade(hoodie, 0.55);
+        look.pants = shade(hoodie, 0.45);
+      }
+    },
     /**
      * Build one dancer per collaborator on the track.
      * @param {string} artistString raw artist field

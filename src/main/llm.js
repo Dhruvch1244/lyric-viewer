@@ -4,6 +4,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const { getKey } = require('./keys');
+
 /**
  * Provider-neutral LLM layer for structured (JSON) text conversion.
  *
@@ -11,26 +13,63 @@ const path = require('path');
  * provider is chosen by which credential is present, so a free Gemini key works
  * exactly like an Anthropic key with no code change at the call sites.
  *
- * Precedence: Gemini (if GEMINI_API_KEY) → Claude (if Anthropic creds) → none.
- * Override with LYRIC_OVERLAY_PROVIDER=gemini|claude.
+ * Precedence: Gemini → Groq → HuggingFace → Claude → none. Override with
+ * LYRIC_OVERLAY_PROVIDER=gemini|groq|huggingface|claude.
  *
- * SECURITY: credentials are read from the environment only. Never hardcode a key.
+ * Credentials resolve through keys.js (env → in-app 🔑 panel → shipped secret),
+ * so the LLM features work in the packaged installer, not just a dev shell.
+ *
+ * Groq offers a generous free tier (fast Llama/GPT-OSS models) and is an ideal
+ * fallback when the Gemini free quota is exhausted — get a key at
+ * https://console.groq.com/keys and set GROQ_API_KEY.
+ *
+ * HuggingFace uses the OpenAI-compatible Inference-Providers router
+ * (https://router.huggingface.co/v1) — set HF_API_KEY (a fine-grained token with
+ * "Make calls to Inference Providers" permission).
  */
 
 const GEMINI_MODEL = process.env.LYRIC_OVERLAY_GEMINI_MODEL || 'gemini-flash-latest';
+const GROQ_MODEL = process.env.LYRIC_OVERLAY_GROQ_MODEL || 'llama-3.3-70b-versatile';
+const HF_MODEL = process.env.LYRIC_OVERLAY_HF_MODEL || 'meta-llama/Llama-3.3-70B-Instruct';
 const CLAUDE_MODEL = process.env.LYRIC_OVERLAY_MODEL || 'claude-opus-5';
+
+/** @returns {string} The resolved Gemini key, or ''. */
+function geminiKey() {
+  return getKey('GEMINI_API_KEY', 'GOOGLE_API_KEY');
+}
+
+/** @returns {string} The resolved Groq key, or ''. */
+function groqKey() {
+  return getKey('GROQ_API_KEY');
+}
+
+/** @returns {string} The resolved HuggingFace token, or ''. */
+function hfKey() {
+  return getKey('HF_API_KEY', 'HUGGINGFACE_API_KEY', 'HF_TOKEN');
+}
 
 /** @returns {boolean} */
 function hasGemini() {
-  return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+  return Boolean(geminiKey());
+}
+
+/** @returns {boolean} */
+function hasGroq() {
+  return Boolean(groqKey());
+}
+
+/** @returns {boolean} */
+function hasHuggingFace() {
+  return Boolean(hfKey());
 }
 
 /**
- * Anthropic credentials may live in an env var or an `ant auth login` profile.
+ * Anthropic credentials may live in an env var, the in-app panel, or an
+ * `ant auth login` profile.
  * @returns {boolean}
  */
 function hasClaude() {
-  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return true;
+  if (getKey('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')) return true;
   const configDir =
     process.env.ANTHROPIC_CONFIG_DIR ||
     (process.platform === 'win32'
@@ -44,13 +83,17 @@ function hasClaude() {
 }
 
 /**
- * @returns {'gemini'|'claude'|null} The active provider.
+ * @returns {'gemini'|'groq'|'huggingface'|'claude'|null} The active provider.
  */
 function activeProvider() {
   const forced = (process.env.LYRIC_OVERLAY_PROVIDER || '').toLowerCase();
   if (forced === 'gemini') return hasGemini() ? 'gemini' : null;
+  if (forced === 'groq') return hasGroq() ? 'groq' : null;
+  if (forced === 'huggingface' || forced === 'hf') return hasHuggingFace() ? 'huggingface' : null;
   if (forced === 'claude') return hasClaude() ? 'claude' : null;
   if (hasGemini()) return 'gemini';
+  if (hasGroq()) return 'groq';
+  if (hasHuggingFace()) return 'huggingface';
   if (hasClaude()) return 'claude';
   return null;
 }
@@ -95,7 +138,7 @@ function toGeminiSchema(schema) {
  * @returns {Promise<object>}
  */
 async function callGemini({ system, user, schema }) {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  const apiKey = geminiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
   const body = {
@@ -136,6 +179,135 @@ async function callGemini({ system, user, schema }) {
   } catch {
     throw new Error('Gemini returned unparseable JSON.');
   }
+}
+
+/**
+ * Call Groq (OpenAI-compatible Chat Completions) and return the parsed object.
+ *
+ * Groq's JSON mode guarantees syntactically valid JSON but does not enforce the
+ * schema, so the schema is described in the system prompt and the call sites
+ * validate shape (e.g. line counts) themselves.
+ *
+ * @param {object} args
+ * @param {string} args.system
+ * @param {string} args.user
+ * @param {object} args.schema JSON Schema (draft form).
+ * @returns {Promise<object>}
+ */
+async function callGroq({ system, user, schema }) {
+  const apiKey = groqKey();
+  const url = 'https://api.groq.com/openai/v1/chat/completions';
+
+  const body = {
+    model: GROQ_MODEL,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          `${system}\n\nReturn ONLY a JSON object that conforms to this JSON Schema ` +
+          `(no markdown, no commentary):\n${JSON.stringify(schema)}`,
+      },
+      { role: 'user', content: user },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Groq responded ${response.status}: ${detail.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices && data.choices[0] && data.choices[0].message
+    ? data.choices[0].message.content || ''
+    : '';
+  if (!text) throw new Error('Empty response from Groq.');
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('Groq returned unparseable JSON.');
+  }
+}
+
+/**
+ * Best-effort JSON extraction from a chat completion that may wrap the object in
+ * prose or a ```json fence (HF providers don't uniformly honour json_object).
+ * @param {string} text
+ * @returns {object}
+ */
+function parseJsonLoose(text) {
+  const trimmed = (text || '').trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Strip a leading/trailing markdown fence, then grab the outermost braces.
+    const unfenced = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    const start = unfenced.indexOf('{');
+    const end = unfenced.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      return JSON.parse(unfenced.slice(start, end + 1));
+    }
+    throw new Error('HuggingFace returned unparseable JSON.');
+  }
+}
+
+/**
+ * Call HuggingFace via the OpenAI-compatible Inference-Providers router and
+ * return the parsed object. The schema is described in the system prompt (the
+ * router does not enforce a response schema), and the call sites validate shape.
+ *
+ * @param {object} args
+ * @param {string} args.system
+ * @param {string} args.user
+ * @param {object} args.schema JSON Schema (draft form).
+ * @returns {Promise<object>}
+ */
+async function callHuggingFace({ system, user, schema }) {
+  const apiKey = hfKey();
+  const url = 'https://router.huggingface.co/v1/chat/completions';
+
+  const body = {
+    model: HF_MODEL,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          `${system}\n\nReturn ONLY a JSON object that conforms to this JSON Schema ` +
+          `(no markdown, no commentary):\n${JSON.stringify(schema)}`,
+      },
+      { role: 'user', content: user },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(45_000),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`HuggingFace responded ${response.status}: ${detail.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices && data.choices[0] && data.choices[0].message
+    ? data.choices[0].message.content || ''
+    : '';
+  if (!text) throw new Error('Empty response from HuggingFace.');
+  return parseJsonLoose(text);
 }
 
 /**
@@ -187,8 +359,10 @@ async function callClaude({ system, user, schema }) {
 async function convert({ system, user, schema }) {
   const provider = activeProvider();
   if (provider === 'gemini') return callGemini({ system, user, schema });
+  if (provider === 'groq') return callGroq({ system, user, schema });
+  if (provider === 'huggingface') return callHuggingFace({ system, user, schema });
   if (provider === 'claude') return callClaude({ system, user, schema });
-  throw new Error('No LLM provider configured. Set GEMINI_API_KEY or ANTHROPIC_API_KEY.');
+  throw new Error('No LLM provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, HF_API_KEY, or ANTHROPIC_API_KEY.');
 }
 
 module.exports = { convert, isLLMAvailable, activeProvider };

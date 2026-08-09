@@ -1,10 +1,48 @@
+/* Bundled display face — Bebas Neue (SIL OFL 1.1; see fonts/OFL.txt). The CSP now
+   allows font-src 'self' and these woff2 files ship in fonts/. Bebas is an
+   all-caps condensed face, giving the lyrics a tall "poster" / lyric-video look.
+   Devanagari has no glyphs here, so those lines fall back to Nirmala UI below. */
+@font-face {
+  font-family: "Bebas Neue";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/BebasNeue-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Bebas Neue";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/BebasNeue-latinext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
   --accent: #e94560;
+  /* Live colours driven per-frame from JS (drift through the song + on drops).
+     Fallback to the static accent until the backdrop loop sets them. */
+  --accent-live: var(--accent);
+  --accent-live2: #4cc9f0;
+  --beat: 0;               /* 0..~2 beat/drop pulse from JS */
   --ink: #ffffff;
   --ink-dim: rgba(255, 255, 255, 0.4);
   --ink-mid: rgba(255, 255, 255, 0.6);
   --shadow: 0 2px 24px rgba(0, 0, 0, 0.8), 0 0 50px rgba(0, 0, 0, 0.45);
   --chip-bg: rgba(255, 255, 255, 0.08);
+  /* Lyric display face: bundled Bebas Neue (tall condensed all-caps) leads, with
+     Bahnschrift as the graceful fallback and Nirmala UI kept in the stack so
+     Devanagari glyphs (which neither Bebas nor Bahnschrift cover) still resolve. */
+  --font-display: "Bebas Neue", "Bahnschrift", "Segoe UI Variable Display",
+    "Segoe UI Black", "Nirmala UI", "Segoe UI", "Segoe UI Symbol",
+    "Segoe UI Emoji", system-ui, sans-serif;
+  --font-ui: "Segoe UI Variable Display", "Segoe UI", "Segoe UI Symbol",
+    "Segoe UI Emoji", system-ui, sans-serif;
 }
 
 * {
@@ -26,15 +64,24 @@ body {
 }
 
 body {
-  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui);
 }
 
 body.show-cursor {
   cursor: default;
 }
 
-body.lang-devanagari .lyric-line {
-  font-family: "Nirmala UI", "Segoe UI", system-ui, sans-serif;
+/* Devanagari lyrics need a script-capable face; force Nirmala UI (the fix also
+   corrects the old selector, which targeted a class that never existed). */
+body.lang-devanagari .ln {
+  font-family: "Nirmala UI", var(--font-display);
+  /* Nirmala UI is a normal multi-weight face, so restore real weight and drop the
+     Bebas-tuned tracking that would over-space Devanagari conjuncts. */
+  font-weight: 600;
+  letter-spacing: normal;
+}
+body.lang-devanagari .ln.is-active {
+  font-weight: 800;
 }
 
 #backdrop {
@@ -58,8 +105,10 @@ body.lang-devanagari .lyric-line {
 }
 
 .np-title {
+  font-family: var(--font-display);
   font-size: clamp(1rem, 1.5vw, 1.4rem);
   font-weight: 700;
+  letter-spacing: 0.01em;
   text-shadow: var(--shadow);
   max-width: 60vw;
   white-space: nowrap;
@@ -102,8 +151,27 @@ body.lang-devanagari .lyric-line {
   /* translateY + transition duration are set from JS (duration adapts to
      lyric speed). This is the smooth "climb". */
   transform: translateY(0px);
-  transition: transform 360ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform 360ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 500ms ease;
   will-change: transform;
+}
+
+/* Instrumental stretch ("lyrics paused, music playing"): fade the lyric column
+   and any lingering translation out, so the flickering song-name hero owns the
+   centre. Higher specificity than `.translation.is-visible`, so it wins. */
+body.is-instrumental .column {
+  opacity: 0;
+}
+body.is-instrumental .translation {
+  opacity: 0;
+}
+
+/* Lyrics hidden (user toggle): drop the text entirely and let the reactive
+   backdrop + dancers run as a pure visualiser. `visibility` (not just opacity)
+   removes it from hit-testing too. */
+body.lyrics-hidden .column,
+body.lyrics-hidden .translation {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .ln {
@@ -114,40 +182,65 @@ body.lang-devanagari .lyric-line {
   margin: 0 auto;
   height: var(--slot, 11vh);
   display: flex;
+  /* Wrap within the 80% box so an over-long line becomes two centred rows instead
+     of spilling off both edges and colliding with the neighbouring lines. */
+  flex-wrap: wrap;
   align-items: center;
+  align-content: center;
   justify-content: center;
   padding: 0.4em 0;
   text-align: center;
-  line-height: 1.16;
-  font-weight: 700;
-  /* A bit bigger than before. */
-  font-size: clamp(1.6rem, 3.1vw, 3rem);
+  line-height: 1.06;
+  font-family: var(--font-display);
+  /* Bebas is a single-weight face, so inactive lines stay at its true 400 (no
+     synthetic bold); the active line below steps to 700 for real contrast on the
+     Bahnschrift/Devanagari fallbacks. Wider tracking suits the condensed caps. */
+  font-weight: 400;
+  letter-spacing: 0.018em;
+  /* Base size for all lines; the active line multiplies this by --active-scale
+     (which is itself clamped by the `fit` guard in JS so long lyrics still fit). */
+  font-size: clamp(1.85rem, 3.6vw, 3.55rem);
   color: var(--ink);
   text-shadow: var(--shadow);
   /* Long lines wrap within the 80% box instead of overflowing horizontally. */
   overflow-wrap: anywhere;
   /* Opacity is set per-line from JS by distance to the active line, so lines
-     fade out gracefully instead of hard-cutting at the edges. */
+     fade out gracefully instead of hard-cutting at the edges. Neighbour lines
+     are shrunk hard so the active line reads MUCH larger than its context. */
   opacity: 0;
-  transform: scale(0.86);
+  transform: scale(0.62);
   transform-origin: center center;
+  /* Inactive lines carry a soft blur (set inline per distance from JS); the
+     active line clears it, so a line "sharpens in" from the same blur as its
+     neighbours as it takes focus. `filter` is transitioned for that blur-in. */
+  filter: blur(4px);
   transition: opacity 380ms ease, transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1),
-              color 380ms ease;
+              color 380ms ease, filter 420ms ease;
 }
 
-/* The running line: bright, bold, scaled up. --active-scale carries the
-   intensity-driven auto-enlarge for fast/intense bars. */
+/* The running line: a live-tinted colour (drifts through the song via
+   --accent-live2) so the lyric recolours as the track plays, scaled up.
+   --active-scale carries the intensity-driven auto-enlarge; --beat adds a
+   rhythmic glow that throbs in time with the music. The colour is set with
+   `color` (not a clipped text-fill) so the child word spans inherit it cleanly —
+   not-yet-sung words show this tint, and the active/sung words override it. */
 .ln.is-active {
-  color: #fff;
-  font-weight: 800;
+  color: color-mix(in srgb, var(--accent-live2) 30%, #ffffff);
+  font-weight: 700;
   opacity: 1;
-  transform: scale(var(--active-scale, 1.4));
+  transform: scale(var(--active-scale, 1.9));
+  /* Crisp — clears the neighbour blur (transitioned, so it "sharpens in"). The
+     glow lives in text-shadow now, leaving `filter` free for the blur-in. */
+  filter: blur(0);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.78),
+               0 0 calc(12px + var(--beat) * 30px)
+                 color-mix(in srgb, var(--accent-live) 72%, transparent);
 }
 
 /* Words: even spacing via margin so scaling/uppercasing never shifts rhythm. */
 .word {
   display: inline-block;
-  margin: 0 0.14em;
+  margin: 0 0.09em;
   opacity: 0.6;
   transform: translateY(0) scale(1);
   transform-origin: center bottom;
@@ -165,19 +258,26 @@ body.lang-devanagari .lyric-line {
 .word--active {
   opacity: 1;
   text-transform: uppercase;
-  transform: translateY(-1px) scale(1.06);
+  transform: translateY(-1px) scale(1.09);
   background: linear-gradient(
     180deg,
     #ffffff 0%,
-    color-mix(in srgb, var(--accent) 40%, #ffffff) 45%,
-    var(--accent) 100%
+    color-mix(in srgb, var(--accent-live) 45%, #ffffff) 45%,
+    var(--accent-live) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
   filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.7))
-          drop-shadow(0 0 24px color-mix(in srgb, var(--accent) 60%, transparent));
+          drop-shadow(0 0 calc(18px + var(--beat) * 20px)
+                      color-mix(in srgb, var(--accent-live) 65%, transparent));
+}
+
+/* Already-sung words carry a soft tint of the live colour so the whole line reads
+   as one shifting gradient rather than plain white behind the focus word. */
+.word--sung {
+  color: color-mix(in srgb, var(--accent-live2) 26%, #ffffff);
 }
 
 body.lang-devanagari .word--active {
@@ -205,6 +305,80 @@ body.lang-devanagari .word--active {
 
 .translation.is-visible {
   opacity: 0.9;
+}
+
+/* ---- Idle "now playing" hero ----
+   Shown centred when no lyric line is active (instrumental, no synced lyrics, or
+   intro). The title glows and slowly shifts colour through the live accent, so an
+   instrumental stretch still feels alive. */
+.np-hero {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 44%;
+  transform: translateY(-50%) scale(0.96);
+  z-index: 3;
+  padding: 0 8vw;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 600ms ease, transform 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.np-hero.is-visible {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+.np-hero__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-size: clamp(2.6rem, 7vw, 7rem);
+  line-height: 1.02;
+  color: var(--accent-live2);
+  transform-origin: center center;
+  will-change: transform, opacity, filter;
+  /* Three independent, differently-timed loops so an instrumental stretch feels
+     alive: heroGlow cycles the accent colour + brightness (filter), heroPulse
+     swells the type small→large→small (transform), and heroFlicker gives it a
+     neon sign's irregular flicker (opacity). Different properties, so none
+     override each other; prime-ish durations keep them from resyncing. */
+  animation: heroGlow 5.5s ease-in-out infinite,
+             heroPulse 3.4s ease-in-out infinite,
+             heroFlicker 4.3s linear infinite;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.7),
+               0 0 calc(24px + var(--beat) * 40px)
+                 color-mix(in srgb, var(--accent-live) 80%, transparent);
+}
+.np-hero__artist {
+  margin-top: 0.4em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: clamp(1rem, 2.2vw, 2rem);
+  color: color-mix(in srgb, var(--accent-live) 60%, #ffffff);
+  text-shadow: var(--shadow);
+}
+@keyframes heroGlow {
+  0%, 100% { color: var(--accent-live2); filter: brightness(1); }
+  50%      { color: var(--accent-live); filter: brightness(1.28); }
+}
+/* Small → large → small "type" swell, with a gentle drift folded in so the float
+   and the size pulse share one transform (two transform animations would fight). */
+@keyframes heroPulse {
+  0%   { transform: translateY(0.6%)  scale(0.84); }
+  50%  { transform: translateY(-1.2%) scale(1.14); }
+  100% { transform: translateY(0.6%)  scale(0.84); }
+}
+/* Neon-sign flicker: mostly lit, with a few sharp irregular dips. */
+@keyframes heroFlicker {
+  0%, 8%, 10%, 34%, 36%, 59%, 61%, 100% { opacity: 1; }
+  9%   { opacity: 0.35; }
+  35%  { opacity: 0.62; }
+  60%  { opacity: 0.28; }
+  72%  { opacity: 0.92; }
+  74%  { opacity: 0.5; }
+  76%  { opacity: 0.95; }
 }
 
 /* ---- Text "moment" animations ----
@@ -304,15 +478,16 @@ body.lang-devanagari .word--active {
 
 /* Drop shake: the whole stage jolts when a drop lands. */
 .stage.fx-shake {
-  animation: stageShake 480ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  animation: stageShake 560ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
 }
 @keyframes stageShake {
-  10%  { transform: translate(-5px, 3px); }
-  25%  { transform: translate(6px, -4px); }
-  40%  { transform: translate(-6px, 2px); }
-  55%  { transform: translate(5px, -2px); }
-  70%  { transform: translate(-3px, 2px); }
-  85%  { transform: translate(2px, -1px); }
+  8%   { transform: translate(-10px, 6px) rotate(-0.4deg); }
+  20%  { transform: translate(12px, -8px) rotate(0.4deg); }
+  33%  { transform: translate(-11px, 5px) rotate(-0.3deg); }
+  46%  { transform: translate(9px, -5px) rotate(0.25deg); }
+  60%  { transform: translate(-6px, 4px); }
+  74%  { transform: translate(4px, -3px); }
+  88%  { transform: translate(-2px, 1px); }
   100% { transform: none; }
 }
 
@@ -334,9 +509,111 @@ body.lang-devanagari .word--active {
   transition: opacity 240ms ease, transform 240ms ease;
 }
 
-body.show-cursor .hud {
+body.show-cursor .hud,
+body.keybox-open .hud {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* API-key panel — floats just above the HUD chip row when revealed. Positioned
+   absolutely so toggling it never reflows the chip row. */
+.keybox {
+  position: absolute;
+  left: 3vw;
+  bottom: 8vh;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  background: color-mix(in srgb, #000 62%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.keybox[hidden] {
+  display: none;
+}
+
+.keybox__label {
+  font-size: 0.72rem;
+  color: var(--ink-mid);
+}
+
+.keybox__input {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  width: 20rem;
+  max-width: 40vw;
+  outline: none;
+}
+
+.keybox__input:focus {
+  border-color: var(--accent);
+}
+
+.keybox__status {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  min-width: 8rem;
+}
+
+/* Pre-sync panel — a taller variant of the key panel with a paste area. */
+.listbox {
+  position: absolute;
+  left: 3vw;
+  bottom: 8vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem;
+  background: color-mix(in srgb, #000 62%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.listbox[hidden] {
+  display: none;
+}
+
+.listbox__label {
+  font-size: 0.72rem;
+  color: var(--ink-mid);
+}
+
+.listbox__input {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  width: 26rem;
+  max-width: 60vw;
+  resize: vertical;
+  outline: none;
+}
+
+.listbox__input:focus {
+  border-color: var(--accent);
+}
+
+.listbox__row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.listbox__status {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
 }
 
 .hud__group {
