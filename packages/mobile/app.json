@@ -11,9 +11,16 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSAppleMusicUsageDescription": "Lyric Player reads what's currently playing in Apple Music to show synced lyrics.",
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
-    "plugins": ["expo-dev-client", "./plugins/withNativeSources.js"]
+    "plugins": [
+      "expo-dev-client",
+      "./plugins/withNativeSources.js",
+      "expo-asset",
+      "expo-font"
+    ]
   }
 }
