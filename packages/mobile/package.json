@@ -5,9 +5,14 @@
   "main": "index.js",
   "private": true,
   "scripts": {
+    "build:core": "npm run build --workspace=@lyric-viewer/core",
+    "prestart": "npm run build:core",
     "start": "expo start --dev-client",
+    "prestart:go": "npm run build:core",
     "start:go": "expo start",
+    "preios": "npm run build:core",
     "ios": "expo run:ios",
+    "pretypecheck": "npm run build:core",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
