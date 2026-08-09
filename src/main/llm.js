@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { callGemini: coreCallGemini } = require('@lyric-viewer/core');
 
 /**
  * Provider-neutral LLM layer for structured (JSON) text conversion.
@@ -61,33 +62,10 @@ function isLLMAvailable() {
 }
 
 /**
- * Convert a JSON Schema (draft form) into Gemini's responseSchema dialect:
- * uppercase type names, and drop keys Gemini rejects (additionalProperties).
- * @param {object} schema
- * @returns {object}
- */
-function toGeminiSchema(schema) {
-  if (!schema || typeof schema !== 'object') return schema;
-  const out = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === 'additionalProperties') continue;
-    if (key === 'type' && typeof value === 'string') {
-      out.type = value.toUpperCase();
-    } else if (key === 'properties' && value && typeof value === 'object') {
-      out.properties = Object.fromEntries(
-        Object.entries(value).map(([k, v]) => [k, toGeminiSchema(v)])
-      );
-    } else if (key === 'items') {
-      out.items = toGeminiSchema(value);
-    } else {
-      out[key] = value;
-    }
-  }
-  return out;
-}
-
-/**
  * Call Gemini with a structured-output schema and return the parsed object.
+ * The request/response handling itself lives in packages/core (shared with
+ * the iOS app's on-device-first/cloud-fallback chain); this just supplies
+ * the Electron-specific API key lookup.
  * @param {object} args
  * @param {string} args.system
  * @param {string} args.user
@@ -96,46 +74,7 @@ function toGeminiSchema(schema) {
  */
 async function callGemini({ system, user, schema }) {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
-  const body = {
-    system_instruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: user }] }],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-      responseSchema: toGeminiSchema(schema),
-    },
-  };
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Gemini responded ${response.status}: ${detail.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-
-  const blockReason = data.promptFeedback && data.promptFeedback.blockReason;
-  if (blockReason) throw new Error(`Gemini blocked the request (${blockReason}).`);
-
-  const candidate = data.candidates && data.candidates[0];
-  const text = candidate && candidate.content && candidate.content.parts
-    ? candidate.content.parts.map((p) => p.text || '').join('')
-    : '';
-  if (!text) throw new Error('Empty response from Gemini.');
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error('Gemini returned unparseable JSON.');
-  }
+  return coreCallGemini({ system, user, schema }, apiKey, GEMINI_MODEL);
 }
 
 /**

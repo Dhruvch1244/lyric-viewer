@@ -1,0 +1,16 @@
+{
+  "name": "@lyric-viewer/core",
+  "version": "0.1.0",
+  "description": "Platform-agnostic lyric matching, sync, word-timing, palette, and LLM-prompt logic shared by the Electron (Windows) app and the React Native (iOS) app.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

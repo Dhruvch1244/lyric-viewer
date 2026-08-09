@@ -1,0 +1,23 @@
+{
+  "name": "@lyric-viewer/mobile",
+  "version": "0.1.0",
+  "description": "iOS (first) cross-platform Lyric Player, built with Expo/React Native + react-native-skia. Reuses @lyric-viewer/core for lyric matching, sync, word-timing, palette, and LLM-prompt logic.",
+  "main": "expo/AppEntry.js",
+  "private": true,
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lyric-viewer/core": "*",
+    "@shopify/react-native-skia": "^1.5.0",
+    "expo": "~52.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "^5.9.3"
+  }
+}

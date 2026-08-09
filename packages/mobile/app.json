@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Lyric Player",
+    "slug": "lyric-player",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.example.lyricplayer",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppleMusicUsageDescription": "Lyric Player reads what's currently playing in Apple Music to show synced lyrics.",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "plugins": ["expo-dev-client"]
+  }
+}

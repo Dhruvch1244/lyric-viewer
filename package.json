@@ -3,9 +3,15 @@
   "version": "0.2.0",
   "description": "Beat-aware synced lyric overlay for Windows. Detects any media app via SMTC.",
   "main": "src/main/main.js",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
+    "build:core": "npm run build --workspace=@lyric-viewer/core",
+    "prestart": "npm run build:core",
     "start": "electron .",
     "probe": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File src/main/smtc-poll.ps1 -Once",
+    "prepackage": "npm run build:core",
     "package": "electron-packager . LyricPlayer --platform=win32 --arch=x64 --out=dist --overwrite --asar=false --app-copyright=\"Lyric Player\" --ignore=\"^/dist\" --ignore=\"^/\\.gitignore\""
   },
   "license": "MIT",
