@@ -1,0 +1,11 @@
+Bebas Neue
+Copyright (c) 2010 by Ryoichi Tsunekawa / Dharma Type (dharmatype.com).
+
+This font is licensed under the SIL Open Font License, Version 1.1.
+The bundled files (BebasNeue-latin.woff2, BebasNeue-latinext.woff2) are the
+Latin and Latin-Extended subsets served by Google Fonts.
+
+The SIL Open Font License permits free use, study, modification, and
+redistribution (including bundling inside an application) provided the fonts
+are not sold by themselves and this notice is retained. The full license text
+is available at: https://openfontlicense.org (SIL OFL 1.1).

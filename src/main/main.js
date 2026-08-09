@@ -1,7 +1,18 @@
 'use strict';
 
-const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen, session, desktopCapturer } = require('electron');
 const path = require('path');
+
+// GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
+// surface, so hardware acceleration matters. These switches force the GPU path
+// on even when Chromium's blocklist would fall back to software, and enable
+// zero-copy + accelerated raster for smoother compositing. Must be set before
+// app 'ready'. (We never call app.disableHardwareAcceleration().)
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
+app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, detectIndic } = require('./lyrics');
@@ -9,6 +20,10 @@ const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
+const { LlmCache } = require('./cache');
+const { fetchArtwork } = require('./artwork');
+const { activeProvider } = require('./llm');
+const { setKey } = require('./keys');
 
 /** @type {BrowserWindow|null} */
 let win = null;
@@ -16,11 +31,39 @@ let win = null;
 /** Persisted user settings (offsets, script preference). */
 const settings = new Settings();
 
+/**
+ * Disk-backed cache of LLM-derived data (translation / transliteration / mood).
+ * Survives restarts so each song is sent to the provider at most once, ever —
+ * this is what keeps a limited free-tier quota from being burned on replays.
+ */
+const llmCache = new LlmCache();
+
 /** In-memory lyric cache keyed by "artist|title". */
 const lyricCache = new Map();
 
+/**
+ * Persist the LLM-derived fields of an in-memory entry to the disk cache.
+ * @param {string} key trackKey
+ * @param {object} entry the lyricCache value
+ */
+function persistLlm(key, entry) {
+  if (!entry) return;
+  llmCache.merge(key, {
+    cuesEnglish: entry.cuesEnglish,
+    language: entry.language,
+    cuesDevanagari: entry.cuesDevanagari,
+    mood: entry.mood,
+  });
+}
+
 /** Guards against overlapping lookups when tracks change quickly. */
 let lookupToken = 0;
+
+/** Guards against overlapping artwork lookups when tracks change quickly. */
+let artworkToken = 0;
+
+/** Guards a bulk pre-sync run so a newer request supersedes an in-flight one. */
+let presyncToken = 0;
 
 /** The track currently playing, used to key per-track sync offsets. */
 let currentTrack = null;
@@ -174,6 +217,70 @@ function send(channel, payload) {
 }
 
 /**
+ * Fetch cover art + full artist credit for a track and push it to the renderer.
+ * Best-effort: on any failure the visuals simply keep their hash palette and the
+ * SMTC-reported artist. Guarded by `artworkToken` so a rapid track change wins.
+ * @param {{title: string, artist: string, durationMs: number}} track
+ */
+async function loadArtworkFor(track) {
+  const token = ++artworkToken;
+  try {
+    const art = await fetchArtwork(track);
+    if (token !== artworkToken || !art) return;
+    send('artwork', { track, ...art });
+  } catch (err) {
+    console.error('[artwork]', err.message);
+  }
+}
+
+/**
+ * Parse one pasted playlist line into a track. Accepts "Artist - Title" (with
+ * hyphen or en/em dash); a line without a separator is treated as a bare title.
+ * @param {string} line
+ * @returns {{title:string, artist:string, durationMs:number}|null}
+ */
+function parseTrackLine(line) {
+  const s = String(line || '').trim();
+  if (!s) return null;
+  const parts = s.split(/\s+[-–—]\s+/);
+  if (parts.length >= 2) {
+    return { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim(), durationMs: 0 };
+  }
+  return { artist: '', title: s, durationMs: 0 };
+}
+
+/**
+ * Fetch + cache synced lyrics for a single track without touching the renderer.
+ * Skips tracks whose cues are already on disk. Used by the bulk pre-sync run.
+ * @param {{title:string, artist:string, durationMs:number}} track
+ * @returns {Promise<'ok'|'cached'|'not-found'|'error'>}
+ */
+async function presyncOne(track) {
+  const key = trackKey(track);
+  const existing = llmCache.get(key);
+  if (existing && Array.isArray(existing.cues) && existing.cues.length > 0) return 'cached';
+
+  let result;
+  try {
+    result = await fetchSyncedLyrics(track);
+  } catch {
+    return 'error';
+  }
+  if (!result || !Array.isArray(result.cues) || result.cues.length === 0) return 'not-found';
+
+  const indic = detectIndic(result.cues).indic || Boolean(result.cuesDevanagari);
+  llmCache.merge(key, {
+    title: track.title || null,
+    artist: track.artist || null,
+    cues: result.cues,
+    cuesDevanagari: result.cuesDevanagari || null,
+    source: result.source,
+    indic,
+  });
+  return 'ok';
+}
+
+/**
  * Resolve lyrics for a track and kick off translation when it looks Indic.
  * @param {{title: string, artist: string, durationMs: number}} track
  */
@@ -183,7 +290,33 @@ async function loadLyricsFor(track) {
 
   if (lyricCache.has(key)) {
     const cached = lyricCache.get(key);
-    send('lyrics', { track, ...cached });
+    // `origin` tells the renderer where the lyrics came from so it can badge a
+    // preloaded/offline hit: 'memory' (this session), 'disk' (preloaded from a
+    // previous session or pre-sync), or 'network' (fetched now).
+    send('lyrics', { track, ...cached, origin: 'memory' });
+    maybeAutoTranslate(key, track, token);
+    maybeAnalyzeSentiment(key, track, token);
+    return;
+  }
+
+  // Disk cache: a song heard in a previous session replays instantly + offline,
+  // with any prior translation/transliteration/mood already attached.
+  const disk = llmCache.get(key);
+  if (disk && Array.isArray(disk.cues) && disk.cues.length > 0) {
+    const payload = {
+      cues: disk.cues,
+      cuesDevanagari: disk.cuesDevanagari || null,
+      cuesEnglish: disk.cuesEnglish || null,
+      language: disk.language,
+      mood: disk.mood || null,
+      source: disk.source || null,
+      status: 'ok',
+      indic: Boolean(disk.indic),
+      transliterationAvailable: isTransliterationAvailable(),
+      translationAvailable: isTranslationAvailable(),
+    };
+    lyricCache.set(key, payload);
+    send('lyrics', { track, ...payload, origin: 'disk' });
     maybeAutoTranslate(key, track, token);
     maybeAnalyzeSentiment(key, track, token);
     return;
@@ -207,16 +340,23 @@ async function loadLyricsFor(track) {
       source: null, status: 'not-found', indic: false,
     };
     lyricCache.set(key, payload);
-    send('lyrics', { track, ...payload });
+    send('lyrics', { track, ...payload, origin: 'network' });
     return;
   }
 
   const indic = detectIndic(result.cues).indic || Boolean(result.cuesDevanagari);
 
+  // Rehydrate any LLM work done for this track in a previous session, so we
+  // never re-send it to the provider. The `maybe*` helpers below see these
+  // fields already populated and short-circuit without a network call.
+  const saved = llmCache.get(key) || {};
+
   const payload = {
     cues: result.cues,
-    cuesDevanagari: result.cuesDevanagari,
-    cuesEnglish: null,
+    cuesDevanagari: saved.cuesDevanagari || result.cuesDevanagari,
+    cuesEnglish: saved.cuesEnglish || null,
+    language: saved.language,
+    mood: saved.mood || null,
     source: result.source,
     status: 'ok',
     indic,
@@ -225,7 +365,19 @@ async function loadLyricsFor(track) {
   };
 
   lyricCache.set(key, payload);
-  send('lyrics', { track, ...payload });
+  send('lyrics', { track, ...payload, origin: 'network' });
+
+  // Persist the raw synced cues (+ display title/artist) so the next play of this
+  // song is instant/offline and it shows in the synced-songs library.
+  llmCache.merge(key, {
+    title: track.title || null,
+    artist: track.artist || null,
+    cues: result.cues,
+    cuesDevanagari: payload.cuesDevanagari,
+    language: payload.language,
+    source: result.source,
+    indic,
+  });
 
   maybeAutoTranslate(key, track, token);
   maybeAnalyzeSentiment(key, track, token);
@@ -254,7 +406,9 @@ async function maybeAnalyzeSentiment(key, track, token) {
     const sentiment = await analyzeSentiment(entry.cues);
     if (token !== lookupToken) return;
     const mood = paletteFromSentiment(sentiment);
-    lyricCache.set(key, { ...entry, mood });
+    const updated = { ...entry, mood };
+    lyricCache.set(key, updated);
+    persistLlm(key, updated);
     send('mood', { track, ...mood });
   } catch (err) {
     // Sentiment is a visual nicety; the hash palette remains in place on failure.
@@ -278,6 +432,12 @@ async function maybeAutoTranslate(key, track, token) {
     send('translation', { track, status: 'ok', cues: entry.cuesEnglish, language: entry.language });
     return;
   }
+  // Already analysed and judged already-English in a prior session — don't spend
+  // another request re-confirming it.
+  if (entry.language === 'english') {
+    send('translation', { track, status: 'skipped', language: 'english' });
+    return;
+  }
   if (!entry.indic || !isTranslationAvailable()) return;
 
   send('translation', { track, status: 'translating' });
@@ -286,11 +446,15 @@ async function maybeAutoTranslate(key, track, token) {
     if (token !== lookupToken) return;
     // Skip showing a translation the model judged already-English.
     if (language === 'english') {
-      lyricCache.set(key, { ...entry, cuesEnglish: null, language });
+      const skipped = { ...entry, cuesEnglish: null, language };
+      lyricCache.set(key, skipped);
+      persistLlm(key, skipped);
       send('translation', { track, status: 'skipped', language });
       return;
     }
-    lyricCache.set(key, { ...entry, cuesEnglish: cues, language });
+    const updated = { ...entry, cuesEnglish: cues, language };
+    lyricCache.set(key, updated);
+    persistLlm(key, updated);
     send('translation', { track, status: 'ok', cues, language });
   } catch (err) {
     if (token !== lookupToken) return;
@@ -314,7 +478,9 @@ async function ensureDevanagari(key) {
   }
   try {
     const cues = await toDevanagari(entry.cues);
-    lyricCache.set(key, { ...entry, cuesDevanagari: cues });
+    const updated = { ...entry, cuesDevanagari: cues };
+    lyricCache.set(key, updated);
+    persistLlm(key, updated);
     return { status: 'ok', cues };
   } catch (err) {
     return { status: 'error', message: err.message };
@@ -334,6 +500,15 @@ function registerShortcuts() {
 }
 
 app.whenReady().then(() => {
+  // Route the renderer's getDisplayMedia() request to the primary screen with
+  // system-audio loopback, so the audio-reactive engine can analyse whatever is
+  // actually playing. Auto-approved (no picker) because the handler is set.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then((sources) => callback({ video: sources[0], audio: 'loopback' }))
+      .catch(() => callback({}));
+  });
+
   win = createWindow();
   registerShortcuts();
 
@@ -343,7 +518,11 @@ app.whenReady().then(() => {
     currentTrack = track;
     send('track', { ...track, ...paletteForTrack(track) });
     send('offset', { offsetMs: activeOffsetMs(), perTrack: true });
+    // Hand the renderer any learned beat map for this song (null on first listen).
+    const saved = llmCache.get(trackKey(track));
+    send('beatmap', { track, beatmap: (saved && saved.beatmap) || null });
     loadLyricsFor(track);
+    loadArtworkFor(track);
   });
 
   watcher.on('tick', (state) => {
@@ -392,8 +571,79 @@ app.whenReady().then(() => {
     if (entry.cuesEnglish) return { status: 'ok', cues: entry.cuesEnglish, language: entry.language };
     try {
       const { cues, language } = await toEnglish(entry.cues);
-      lyricCache.set(key, { ...entry, cuesEnglish: cues, language });
+      const updated = { ...entry, cuesEnglish: cues, language };
+      lyricCache.set(key, updated);
+      persistLlm(key, updated);
       return { status: 'ok', cues, language };
+    } catch (err) {
+      return { status: 'error', message: err.message };
+    }
+  });
+
+  // Report which LLM provider is currently active, so the 🔑 panel can show
+  // whether a key is wired up.
+  /* Bulk pre-sync: fetch + cache synced lyrics for a pasted "Artist - Title"
+     list, so those songs play instantly and offline later. Runs sequentially in
+     the background and streams progress to the renderer. */
+  ipcMain.handle('presync-list', async (_e, text) => {
+    const tracks = String(text || '')
+      .split(/\r?\n/)
+      .map(parseTrackLine)
+      .filter(Boolean);
+    const token = ++presyncToken;
+    const total = tracks.length;
+
+    if (total === 0) {
+      send('presync-progress', { done: 0, total: 0, status: 'done', summary: 'nothing to sync' });
+      return { status: 'empty' };
+    }
+
+    let done = 0;
+    let synced = 0;
+    let cached = 0;
+    let missed = 0;
+    for (const track of tracks) {
+      if (token !== presyncToken) return { status: 'cancelled' }; // superseded
+      const label = `${track.artist ? `${track.artist} - ` : ''}${track.title}`;
+      send('presync-progress', { done, total, status: 'running', current: label });
+      const outcome = await presyncOne(track);
+      if (outcome === 'ok') synced += 1;
+      else if (outcome === 'cached') cached += 1;
+      else missed += 1;
+      done += 1;
+      await new Promise((resolve) => setTimeout(resolve, 150)); // be polite to LRCLIB
+    }
+
+    const summary = `${synced} synced · ${cached} already cached · ${missed} not found`;
+    send('presync-progress', { done, total, status: 'done', summary });
+    return { status: 'ok', synced, cached, missed };
+  });
+
+  /* Persist a beat map the renderer learned from live audio, keyed by track. */
+  ipcMain.handle('save-beatmap', (_e, payload) => {
+    const track = payload && payload.track;
+    const beatmap = payload && payload.beatmap;
+    if (!track || !beatmap) return { status: 'ignored' };
+    llmCache.merge(trackKey(track), { beatmap, title: track.title || null, artist: track.artist || null });
+    return { status: 'ok' };
+  });
+
+  /* Snapshot of every cached song for the synced-songs library UI. */
+  ipcMain.handle('list-synced', () => llmCache.list());
+
+  ipcMain.handle('get-provider-status', () => ({ provider: activeProvider() }));
+
+  // Persist an API key typed into the 🔑 panel. `name` is a canonical key name
+  // (e.g. 'HF_API_KEY'); an empty value clears it. Returns the resulting active
+  // provider so the UI can reflect the change immediately.
+  ipcMain.handle('set-api-key', (_e, name, value) => {
+    const allowed = new Set([
+      'HF_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY',
+    ]);
+    if (!allowed.has(name)) return { status: 'error', message: 'Unknown key name.' };
+    try {
+      setKey(name, value);
+      return { status: 'ok', provider: activeProvider() };
     } catch (err) {
       return { status: 'error', message: err.message };
     }

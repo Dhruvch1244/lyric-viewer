@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self';" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -25,6 +25,12 @@
       <div id="column" class="column"></div>
       <!-- English translation of the current line, pinned just below center. -->
       <div id="translation" class="translation" role="status"></div>
+      <!-- Shown when no lyric line is active (instrumental / no synced lyrics /
+           intro): a big glowing, colour-shifting song title + artist. -->
+      <div id="np-hero" class="np-hero" aria-hidden="true">
+        <div id="np-hero-title" class="np-hero__title"></div>
+        <div id="np-hero-artist" class="np-hero__artist"></div>
+      </div>
     </main>
 
     <footer id="hud" class="hud">
@@ -32,8 +38,44 @@
         <button id="btn-script" class="chip" type="button">अ</button>
         <button id="btn-translate" class="chip" type="button">EN</button>
         <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity">◐ vivid</button>
+        <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true">🅰</button>
         <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻</button>
-        <span id="hud-offset" class="chip chip--muted"></span>
+        <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫</button>
+        <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false">⚡</button>
+        <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
+        <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
+        <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
+        <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
+        <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
+        <span id="hud-fps" class="chip chip--muted" title="Frames per second"></span>
+        <span id="hud-source" class="chip chip--muted" title="Where the current lyrics loaded from" hidden></span>
+      </div>
+
+      <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user
+           paste a HuggingFace token to enable translation / transliteration /
+           mood without editing files. -->
+      <div id="keybox" class="keybox" hidden>
+        <label class="keybox__label" for="keybox-input">HuggingFace API key</label>
+        <input id="keybox-input" class="keybox__input" type="password"
+               placeholder="hf_…" autocomplete="off" spellcheck="false" />
+        <button id="keybox-save" class="chip" type="button">Save</button>
+        <span id="keybox-status" class="keybox__status" role="status"></span>
+      </div>
+      <!-- Collapsible pre-sync panel, revealed by the 📋 chip. Paste a list of
+           "Artist - Title" lines (one per line) to fetch + cache their synced
+           lyrics ahead of time, so they play instantly and offline later. -->
+      <div id="presync" class="listbox" hidden>
+        <label class="listbox__label" for="presync-input">Paste tracks — one “Artist - Title” per line</label>
+        <textarea id="presync-input" class="listbox__input" rows="6" spellcheck="false"
+                  placeholder="Seedhe Maut - Nanchaku&#10;DIVINE - Mera Bhai&#10;KR$NA - Freeverse Feast"></textarea>
+        <div class="listbox__row">
+          <button id="presync-run" class="chip" type="button">Pre-sync</button>
+          <span id="presync-status" class="listbox__status" role="status"></span>
+        </div>
+        <div class="listbox__synced">
+          <div class="listbox__label">Synced library <span id="synced-count" class="listbox__status"></span></div>
+          <ul id="synced-list" class="synced-list"></ul>
+        </div>
       </div>
       <div id="hud-progress" class="progress">
         <div id="hud-progress-fill" class="progress__fill"></div>
@@ -45,6 +87,8 @@
     </footer>
 
     <script src="sprites.js"></script>
+    <script src="audio.js"></script>
+    <script src="beatmap.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>
