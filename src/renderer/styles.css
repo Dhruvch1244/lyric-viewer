@@ -117,22 +117,89 @@ body.lang-devanagari .ln.is-active {
   z-index: 4;
 }
 
+/* Title and artist read as one line, so the corner takes one row instead of
+   two and the indicator, the song and the artist share a centre line. */
+.now-playing {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;                 /* lets the title ellipsis actually engage */
+  max-width: 60vw;
+}
+
+/* Playing indicator: three bars sized from the surrounding text, so it stays
+   in proportion at any viewport rather than needing its own breakpoints. */
+.np-icon {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 0.78em;
+  font-size: clamp(1rem, 1.5vw, 1.4rem);
+  flex: none;
+}
+
+.np-icon i {
+  display: block;
+  width: 2px;
+  height: 100%;
+  background: var(--accent-live, var(--accent, #e94560));
+  border-radius: 1px;
+  transform-origin: bottom;
+  transform: scaleY(0.35);
+}
+
+/* Nothing playing means nothing to indicate; three static dashes beside an
+   empty corner read as a rendering fault. */
+.now-playing:has(.np-title:empty) .np-icon {
+  display: none;
+}
+
+/* Animated only while something is playing. A still indicator next to a paused
+   track is correct; bars bouncing over paused audio would be a lie. */
+body.is-playing .np-icon i {
+  animation: np-bars 900ms ease-in-out infinite;
+}
+
+body.is-playing .np-icon i:nth-child(2) { animation-delay: 150ms; }
+body.is-playing .np-icon i:nth-child(3) { animation-delay: 300ms; }
+
+@keyframes np-bars {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.is-playing .np-icon i { animation: none; }
+}
+
 .np-title {
   font-family: var(--font-display);
   font-size: clamp(1rem, 1.5vw, 1.4rem);
   font-weight: 700;
   letter-spacing: 0.01em;
   text-shadow: var(--shadow);
-  max-width: 60vw;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 auto;               /* the title yields first when space is tight */
 }
 
 .np-artist {
   font-size: clamp(0.8rem, 1.1vw, 1.05rem);
   color: var(--ink-mid);
   text-shadow: var(--shadow);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+/* A separator drawn in CSS rather than baked into the markup, so it cannot
+   appear on its own when a track has no artist. */
+.np-artist:not(:empty)::before {
+  content: "·";
+  margin-right: 0.5rem;
+  color: var(--ink-dim);
 }
 
 .status {
@@ -567,6 +634,58 @@ body.lang-devanagari .word--active {
   74%  { transform: translate(4px, -3px); }
   88%  { transform: translate(-2px, 1px); }
   100% { transform: none; }
+}
+
+/* ---- One-time capture nudge ----
+   Sits above where the HUD appears, and stays visible regardless of the HUD's
+   cursor-driven fade — the whole point is that it reaches someone who has not
+   discovered the chip row. */
+
+.nudge {
+  position: fixed;
+  left: 3vw;
+  bottom: 9vh;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(34rem, 60vw);
+  padding: 0.7rem 0.9rem;
+  background: color-mix(in srgb, #000 68%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: 3px solid var(--accent-live, var(--accent, #e94560));
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  animation: nudge-in 320ms ease both;
+}
+
+.nudge[hidden] {
+  display: none;
+}
+
+.nudge__text {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--ink-mid);
+}
+
+.nudge__text b {
+  color: var(--accent-live, var(--accent, #e94560));
+}
+
+/* The chip style wraps by default, which split "Enable ♫" over two lines. */
+.nudge .chip {
+  white-space: nowrap;
+  flex: none;
+}
+
+@keyframes nudge-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nudge { animation: none; }
 }
 
 /* ---- HUD ---- */

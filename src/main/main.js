@@ -579,9 +579,13 @@ app.whenReady().then(() => {
     currentTrack = track;
     send('track', { ...track, ...paletteForTrack(track) });
     send('offset', { offsetMs: activeOffsetMs(), perTrack: true });
-    // Hand the renderer any learned beat map for this song (null on first listen).
+    // Hand the renderer everything already learned about this song (null on a
+    // first listen): the beat map it fires drums from when capture is off, and
+    // the heat map it draws the song's shape from — and reads FORWARDS, so a
+    // drop can be anticipated instead of merely reacted to.
     const saved = llmCache.get(trackKey(track));
     send('beatmap', { track, beatmap: (saved && saved.beatmap) || null });
+    send('heatmap', { track, heatmap: (saved && saved.heatmap) || null });
     loadLyricsFor(track);
     loadArtworkFor(track);
   });
@@ -691,6 +695,23 @@ app.whenReady().then(() => {
     const beatmap = payload && payload.beatmap;
     if (!track || !beatmap) return { status: 'ignored' };
     llmCache.merge(trackKey(track), { beatmap, title: track.title || null, artist: track.artist || null });
+    return { status: 'ok' };
+  });
+
+  /*
+    Persist the heat map the renderer learned from live audio, keyed by track.
+
+    Separate from the beat map because they answer different questions and are
+    learned at different rates: the beat map is a list of onsets, the heat map is
+    the energy arc binned against position. Storing the arc is what makes it a
+    property of the SONG rather than of one playthrough — without this the whole
+    premise ("play it again and the shape is already known") does not hold.
+  */
+  ipcMain.handle('save-heatmap', (_e, payload) => {
+    const track = payload && payload.track;
+    const heatmap = payload && payload.heatmap;
+    if (!track || !heatmap || !Array.isArray(heatmap.bins)) return { status: 'ignored' };
+    llmCache.merge(trackKey(track), { heatmap, title: track.title || null, artist: track.artist || null });
     return { status: 'ok' };
   });
 

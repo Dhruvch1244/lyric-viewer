@@ -234,13 +234,31 @@
 
   const MAX_ACTORS = 8; // keep the stage readable even on posse cuts
 
-  /* Sprites roam this stage band (normalised viewport Y). It now spans a tall
-     lower region — from just under the centred lyric down to the HUD — so dancers
+  /* Sprites roam this stage band (normalised viewport Y). It spans a tall lower
+     region — from just under the centred lyric down to the HUD — so dancers
      genuinely travel in BOTH axes and across the full width, instead of hugging a
      thin strip along the very bottom. The sprite unit is kept small (see renderer)
-     so even a dancer near BAND_TOP stays clear of the big lyric line. */
-  const BAND_TOP = 0.60;
-  const BAND_BOTTOM = 0.96;
+     so even a dancer near the top of the band stays clear of the big lyric line.
+
+     Mutable, because Stage mode compresses the band onto its lit floor and
+     enlarges the dancers. Held as module state rather than passed per call: an
+     actor clamps itself to the band on every update, and threading the bounds
+     through update() and the wander targets would put the same two numbers in
+     five signatures. */
+  let BAND_TOP = 0.60;
+  let BAND_BOTTOM = 0.96;
+
+  /**
+   * Set the band the dancers roam within.
+   * @param {number} top @param {number} bottom normalised viewport Y
+   */
+  function setBand(top, bottom) {
+    const t = Number(top);
+    const b = Number(bottom);
+    if (!Number.isFinite(t) || !Number.isFinite(b) || b <= t) return;
+    BAND_TOP = Math.max(0, Math.min(0.95, t));
+    BAND_BOTTOM = Math.max(BAND_TOP + 0.02, Math.min(0.99, b));
+  }
 
   /* -------------------------------------------------------------- move engine */
 
@@ -285,12 +303,26 @@
       this.speed = 0.00004 + Math.random() * 0.00006;
       this.speedY = 0.00002 + Math.random() * 0.00004;
       this.phase = index * 1.7;
-      this.tempo = 5.4 + Math.random() * 1.6;       // personal dance tempo
+      this.tempo = 5.4 + Math.random() * 1.6;       // free-running fallback tempo
+
+      /* Musical time, in beats elapsed. This is what the pose oscillators run
+         on, so every move cycle is a whole number of beats and the troupe lands
+         on the music instead of near it. Advanced in update(): from the app's
+         measured beat clock when it has locked, otherwise from this actor's own
+         free-running tempo, which is what the dancers always used to do. */
+      this.beats = 0;
+      this.lastBeatPhase = 0;
+      /* A fraction of a beat of personal lateness, so a troupe reads as several
+         people feeling the same beat rather than one sprite drawn eight times.
+         Small enough (< 1/16 note) that nobody looks off-beat. */
+      this.beatOffset = (index % 4) * 0.03;
       // Wander target: each actor lazily steers toward a roaming point, kept
       // inside the bottom band so nobody drifts up over the lyric.
       this.tx = Math.random();
       this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
       this.retargetAt = 0;
+      /** Whether this dancer is currently drawing in for an expected drop. */
+      this.gathering = false;
       this.move = MOVES[(Math.random() * MOVES.length) | 0];
       this.moveUntil = 0;
       this.jump = 0;
@@ -392,14 +424,49 @@
         if (this.ttl <= 0) { this.expired = true; return; }
       }
 
+      /*
+        Advance musical time.
+
+        Locked: the app's beat clock is the source of truth, so count whole
+        beats by watching its phase wrap and add the fractional part. That keeps
+        the dancers phase-aligned with the music indefinitely — accumulating
+        dt/period instead would drift as soon as the measured tempo was refined.
+
+        Unlocked (no audio capture, or a passage with no usable percussion):
+        fall back to the actor's own tempo, converted from radians per second to
+        beats so the pose code has a single time base to read.
+      */
+      if (env.tempoLocked && env.beatPeriodMs > 0) {
+        const phase = env.beatPhase || 0;
+        if (phase < this.lastBeatPhase) this.beats = Math.floor(this.beats) + 1;
+        this.lastBeatPhase = phase;
+        this.beats = Math.floor(this.beats) + phase;
+      } else {
+        this.beats += (dt / 1000) * (this.tempo / (Math.PI * 2));
+      }
+
       const energy = 1 + env.intensity * 2.6 + env.buildup * 1.5 + env.drop * 2;
+
+      /*
+        Anticipation: the stored heat map says a drop is coming. The troupe
+        gathers toward the middle of the stage for it, so the drop scatters a
+        group that had already drawn together — the reason the moment reads is
+        the contrast, and that needs setting up before it lands.
+      */
+      const gathering = (env.anticipation || 0) > 0.35;
 
       if (this.active) {
         // Vocalist: roam left–right across the bottom band with a gentle bob, and
         // cycle the full (hype-biased) move set. Targets stay inside the band so
         // it never drifts up over the lyric.
-        if (now >= this.retargetAt) {
-          this.tx = 0.06 + Math.random() * 0.88;
+        // Retarget on the usual timer, and once more the moment the gather
+        // begins — testing `gathering` every frame would re-roll the target
+        // continuously and leave the dancer shivering in place.
+        if (now >= this.retargetAt || gathering !== this.gathering) {
+          this.gathering = gathering;
+          this.tx = gathering
+            ? 0.5 + (Math.random() - 0.5) * 0.24
+            : 0.06 + Math.random() * 0.88;
           this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
           this.retargetAt = now + 1400 + Math.random() * 2200;
         }
@@ -426,8 +493,11 @@
       } else {
         // Off the mic: still roam the band in BOTH axes, just calmer than the
         // vocalist — idle dancers travel up/down and side to side too.
-        if (now >= this.retargetAt) {
-          this.tx = 0.06 + Math.random() * 0.88;
+        if (now >= this.retargetAt || gathering !== this.gathering) {
+          this.gathering = gathering;
+          this.tx = gathering
+            ? 0.5 + (Math.random() - 0.5) * 0.30
+            : 0.06 + Math.random() * 0.88;
           this.ty = BAND_TOP + Math.random() * (BAND_BOTTOM - BAND_TOP);
           this.retargetAt = now + 2200 + Math.random() * 2800;
         }
@@ -459,36 +529,73 @@
 
     /**
      * Compute the animated pose (in sprite cells) for the current move.
+     *
+     * Every oscillator runs on MUSICAL time — `this.beats`, which the app's
+     * measured beat clock drives whenever it has locked. Each move therefore
+     * cycles a whole number of times per beat and lands with the drums. The
+     * multipliers below are cycles per beat: 1 is one motion per beat, 0.5 a
+     * slow two-beat sway, 2 a double-time shuffle.
+     *
+     * Before this, each dancer ran on a private free-running tempo of roughly
+     * one cycle a second, so the most closely-watched element on screen was the
+     * one least connected to the music. The free-running clock survives only as
+     * the fallback for when no tempo has been measured.
+     *
+     * @param {number} t seconds (kept for callers; motion now reads `this.beats`)
+     * @param {{intensity:number,pulse:number,drop:number,anticipation:number}} env
      * @returns {{dx:number,dy:number,rot:number,sq:number,armL:number,armR:number}}
      */
     pose(t, env) {
-      const b = Math.sin(t * this.tempo);
-      const b2 = Math.sin(t * this.tempo * 2);
+      // Beat angle: one full turn per beat, offset by this dancer's personal lag.
+      const a = (this.beats + this.beatOffset) * Math.PI * 2;
+      /** Oscillator at `k` cycles per beat. */
+      const osc = (k) => Math.sin(a * k);
+
+      const b = osc(1);
+      const b2 = osc(2);
       const e = 0.6 + env.intensity * 1.1 + env.pulse * 0.6;
       const p = { dx: 0, dy: b * 0.35 * e, rot: 0, sq: 1 + b2 * 0.05 * e, armL: 0, armR: 0 };
       switch (this.move) {
-        case 'sway': p.dx = Math.sin(t * 3) * 1.4; p.rot = Math.sin(t * 3) * 0.08; break;
+        case 'sway': p.dx = osc(0.5) * 1.4; p.rot = osc(0.5) * 0.08; break;
         case 'pump': p.armR = 0.5 + 0.5 * Math.abs(b); p.armL = 0.3 * Math.abs(b2); p.dy = Math.abs(b) * 0.6 * e; break;
         case 'point': p.armR = 0.9; p.rot = 0.05; break;
         case 'wave': p.armL = 0.5 + 0.5 * b; p.armR = 0.5 - 0.5 * b; break;
-        case 'headbang': p.rot = Math.sin(t * this.tempo * 1.6) * 0.28; p.dy = Math.abs(b) * 0.5 * e; break;
+        case 'headbang': p.rot = osc(2) * 0.28; p.dy = Math.abs(b) * 0.5 * e; break;
         case 'dab': p.armR = 1; p.armL = 0.4; p.rot = -0.22; p.dy = 0.2; break;
-        case 'shuffle': p.dx = Math.sin(t * 9) * 0.7; p.dy = Math.abs(Math.sin(t * 9)) * 0.5 * e; break;
+        case 'shuffle': p.dx = osc(2) * 0.7; p.dy = Math.abs(osc(2)) * 0.5 * e; break;
         case 'moonwalk': p.armL = 0.4 + 0.3 * b; p.armR = 0.4 - 0.3 * b; p.rot = 0.05 * b; break;
-        case 'hop': p.dy = Math.max(0, Math.sin(t * this.tempo)) * 1.4 * e; break;
-        case 'kick': p.dx = Math.sin(t * 4) * 0.5; p.rot = Math.sin(t * 4) * 0.12; p.armL = 0.4; break;
-        case 'robot': p.armR = b > 0 ? 0.8 : 0.2; p.armL = b2 > 0 ? 0.6 : 0.1; p.dx = Math.round(Math.sin(t * 2)) * 0.6; break;
-        case 'floss': p.dx = Math.sin(t * 8) * 1.1; p.armR = 0.5 + 0.5 * Math.sin(t * 8); p.armL = 0.5 - 0.5 * Math.sin(t * 8); break;
-        case 'twist': p.rot = Math.sin(t * 5) * 0.16; p.sq = 1 + Math.sin(t * 10) * 0.08; p.dy = Math.abs(b) * 0.4 * e; break;
-        case 'jumpingjack': p.dy = Math.max(0, Math.sin(t * this.tempo)) * 1.2 * e; { const j = Math.abs(Math.sin(t * this.tempo)); p.armR = j; p.armL = j; } break;
-        case 'breakdance': p.rot = t * 6; p.dy = 0.4 + Math.abs(b) * 0.6; p.sq = 1 + b2 * 0.1; break;
-        case 'wobble': p.rot = Math.sin(t * 3.5) * 0.2; p.dx = Math.sin(t * 3.5) * 0.9; break;
-        case 'charleston': p.dx = Math.sin(t * 6) * 0.8; p.rot = -Math.sin(t * 6) * 0.1; p.armR = 0.4 + 0.3 * b; p.armL = 0.4 - 0.3 * b; break;
+        case 'hop': p.dy = Math.max(0, b) * 1.4 * e; break;
+        case 'kick': p.dx = osc(0.5) * 0.5; p.rot = osc(0.5) * 0.12; p.armL = 0.4; break;
+        case 'robot': p.armR = b > 0 ? 0.8 : 0.2; p.armL = b2 > 0 ? 0.6 : 0.1; p.dx = Math.round(osc(0.5)) * 0.6; break;
+        case 'floss': p.dx = osc(2) * 1.1; p.armR = 0.5 + 0.5 * osc(2); p.armL = 0.5 - 0.5 * osc(2); break;
+        case 'twist': p.rot = osc(1) * 0.16; p.sq = 1 + osc(2) * 0.08; p.dy = Math.abs(b) * 0.4 * e; break;
+        case 'jumpingjack': p.dy = Math.max(0, b) * 1.2 * e; { const j = Math.abs(b); p.armR = j; p.armL = j; } break;
+        // A continuous half-turn per beat, so a full spin takes two beats.
+        case 'breakdance': p.rot = this.beats * Math.PI; p.dy = 0.4 + Math.abs(b) * 0.6; p.sq = 1 + b2 * 0.1; break;
+        case 'wobble': p.rot = osc(0.5) * 0.2; p.dx = osc(0.5) * 0.9; break;
+        case 'charleston': p.dx = osc(1) * 0.8; p.rot = -osc(1) * 0.1; p.armR = 0.4 + 0.3 * b; p.armL = 0.4 - 0.3 * b; break;
         case 'vogue': p.armR = 0.6 + 0.4 * b; p.armL = 0.9; p.rot = 0.1 * b; break;
-        case 'skank': p.dy = Math.abs(b) * 0.9 * e; p.armR = 0.6 * Math.abs(b); p.armL = 0.6 * Math.abs(b2); p.dx = Math.sin(t * this.tempo) * 0.5; break;
-        case 'crumporch': p.dx = Math.sin(t * 11) * 0.9; p.armR = Math.abs(b); p.armL = Math.abs(b2); p.rot = Math.sin(t * 7) * 0.14; p.dy = Math.abs(b) * 0.7 * e; break;
+        case 'skank': p.dy = Math.abs(b) * 0.9 * e; p.armR = 0.6 * Math.abs(b); p.armL = 0.6 * Math.abs(b2); p.dx = b * 0.5; break;
+        case 'crumporch': p.dx = osc(2) * 0.9; p.armR = Math.abs(b); p.armL = Math.abs(b2); p.rot = osc(1.5) * 0.14; p.dy = Math.abs(b) * 0.7 * e; break;
         case 'spin': break; // spin handled via facing flip
         default: break;     // bob
+      }
+
+      /*
+        The coil before a known drop. Applied over whatever move is running
+        rather than as a move of its own, because it is a state the dancer is
+        in, not a step — and the release is already handled: `jump` fires on the
+        drop, uncoiling everything at once.
+
+        This is the only motion in the app driven by something that has not
+        happened yet.
+      */
+      const antic = env.anticipation || 0;
+      if (antic > 0.02) {
+        p.dy += antic * 1.5;              // sink toward the floor
+        p.sq *= 1 - antic * 0.16;         // and compress
+        p.armL *= 1 - antic * 0.7;        // arms drop as the body gathers
+        p.armR *= 1 - antic * 0.7;
       }
       return p;
     }
@@ -623,6 +730,7 @@
   window.ArtistSprites = {
     SpriteActor,
     splitArtists,
+    setBand,
     /**
      * Recolour procedurally-generated dancers from the album-art palette, so an
      * unknown artist auto-themes to the current cover. Branded registry looks

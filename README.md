@@ -78,11 +78,11 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
-| `◈` chip | Cycle the visual preset: Ghost → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
+| `◈` chip | Cycle the visual preset: Ghost → Heatmap → Vinyl → Stage → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
 | `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
-| `♫` chip | Audio-reactive mode (captures system sound) |
+| `♫` chip | Audio-reactive mode (captures system sound) — also what lets the app *learn* a song |
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
 
 **Visual presets (`◈` chip).** Each is a deliberate look with a stated cost,
@@ -91,6 +91,9 @@ rather than a random shuffle of layers:
 | Preset | What it is |
 |---|---|
 | **Ghost** | Lyrics and the cloud, nothing else. No stars, dancers, confetti or curves — the 2D canvas is removed from the page entirely, which cuts the CPU rendering work by ~95%. Pick this to read the words, or to run over a game or a call. |
+| **Heatmap** | The shape of the song as a timeline along the bottom edge, learned by listening and remembered. On a replay the drop is on screen while the build-up is still playing. |
+| **Vinyl** | The cover art as a record on a deck, turning the whole time — one revolution every four beats once the tempo has locked. The tonearm creeps inward as the song plays. |
+| **Stage** | The dancers as the subject: a lit floor, spotlights that punch on the kick, and the troupe pushed forward. A drop fills the stage with clones. |
 | **Liquid** | The signature look: the GPU field carries it, only the softest 2D layers stay on. Default. |
 | **Starfield** | Depth and drift — galaxy plus constellation web. |
 | **Geometry** | The parametric curves are the subject; the field calms to a backdrop. |
@@ -99,6 +102,23 @@ rather than a random shuffle of layers:
 
 Each song remembers its own look. Ghost and Minimal are never assigned at
 random — they are modes you choose.
+
+Heatmap, Vinyl and Stage are ordinary layer combinations, so the pieces compose:
+the timeline is on in Vinyl too, and the dancers appear in every look except
+Ghost. Only Ghost is structurally different, because taking the canvas out of
+the page is the entire point of it.
+
+Most of what the app *learns* — the energy arc behind the timelines, the
+measured tempo the platter and the dancers run on, and anticipation — needs the
+`♫` chip. The app asks about this once, twenty seconds into a song, and never
+raises it again either way. It is not enabled by default on purpose: recording
+system audio without being asked is not the app's call.
+
+**Anticipation.** Once a song's heat map is on disk, the app can read it
+*forwards* — the only thing here that knows what has not happened yet. A few
+seconds before a drop the field tightens and the dancers gather and coil, so the
+hit lands on a screen that was already leaning into it. Songs that have not been
+heard get none of this rather than a guess.
 
 The window is a **transparent, borderless, fullscreen-sized** surface that floats
 over the desktop (always-on-top). Transparency is why it's borderless-fullscreen

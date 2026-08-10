@@ -1,11 +1,91 @@
 # Next steps
 
-Current as of **v0.14.0**. Written to be picked up cold — each item says what
+Current as of **v0.16.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
 
 ---
 
+## Where 0.16.0 landed
+
+Agreed after the 0.15.0 draw-cost audit, then cut as a release before the whole
+list was worked through. **Shipped in 0.16.0:**
+
+1. **Draw-cost payback** — see "Per-frame draw cost" below.
+2. **The `♫` prompt** — one-time and dismissible, per install.
+
+**Agreed but not built, so these carry into 0.17.0:**
+
+3. **Notification tray** — item 2 below.
+4. **Artwork candidates / side poster** — item 3 below.
+5. **More visual modes** — the layer system composes cleanly now, so each new
+   look is far cheaper than Vinyl and Stage were.
+
+Verification against real audio (item 0) was offered twice and declined both
+times. It is now **two releases deep**: 0.15.0 and 0.16.0 both rest entirely on
+harness and unit-test evidence, and both are in a published installer. This is
+the item most likely to be the source of an embarrassing bug report, and it
+costs one song.
+
+---
+
+## Per-frame draw cost
+
+Measured by patching the canvas prototype from the page — call counts, not frame
+rate, because repeated identical runs vary 3–4× in fps here and cannot rank two
+presets. Reproduce with the perf harness (same rules as the screenshot harness).
+
+| preset | fillRect | arc | stroke | gradients |
+| --- | --- | --- | --- | --- |
+| Ghost | 0 | 0 | 0 | 0 |
+| Liquid | 69.5 | 16.4 | 4.6 | 0.2 |
+| Heatmap | 164 → **72** | 16 | 6 | 0.2 |
+| Vinyl | 166 → **72** | 31 → **21** | 18 → **10** | 1 → **0** |
+| Stage | 72 | 17 | 6 | 4 → **0.1** |
+| Concert | 66.6 | **300** | 46 | 0.2 |
+
+0.15.0 shipped three regressions against this file's own idiom (it already
+caches the vignette on resize and pre-renders glow sprites by colour). All three
+are now fixed: the timeline and the vinyl platter are pre-rendered bitmaps, the
+stage gradients are cached, and `HeatMap.cells()` is memoised against the same
+revision counter `sections()` already used.
+
+**The trap worth remembering:** the first attempt keyed those caches on
+`accentLive`, which is `shiftHex(accent, bgHue)` and therefore changes every
+frame — so the caches rebuilt constantly and saved almost nothing (measured:
+still 144 fillRect against an expected 72). Anything cached by colour must key
+on a **snapped** hue; see `quantisedColours()`.
+
+**Still open, both pre-existing:**
+
+- **Concert is the real heavyweight** at 300 `fill` + 300 `arc` per frame, from
+  the 260-point galaxy plus the constellation web — 4–10× any other preset. It
+  is `cost: 3` by design, and was left alone deliberately rather than changing a
+  look people already know.
+- **Sprite nameplates call `measureText` per dancer per frame** (~2.4/frame with
+  three dancers). The structure label now caches its width; the nameplates do
+  not. Small, but it is the same fix.
+
+---
+
 ## Requested, not built
+
+### 0. Verify the new modes against real audio
+
+0.15.0's visuals were built and captured through an Electron screenshot harness
+with a *synthetic* heat map (see the recipe in the `gpu-swirl-field` note).
+Everything below was proven in that harness or by unit test:
+
+- the persistence round trip (learn → flush on track change → save → reload →
+  read forwards), including one save call per track change and the
+  duration-mismatch guard;
+- `lookahead` reporting a 0.79 rise 4s ahead of a learned drop;
+- section naming, and the beat-locked pose maths.
+
+**Not yet seen on real music**: the heat map filling in from live capture over a
+whole song, the anticipation coil landing on an actual drop, and whether four
+beats per platter revolution reads right at real tempos. All of it needs the `♫`
+chip and one full play. Nothing here is suspected broken — it is simply the
+difference between measured and watched.
 
 ### 1. Side poster panel
 
@@ -95,14 +175,29 @@ against a known BPM would settle it either way.
 - **Harness: one window per process, and `show: true`.** Hidden windows throttle
   `requestAnimationFrame`, which fabricates timing bugs that do not exist;
   creating several transparent/always-on-top windows in one process silently
-  produces no output at all.
+  produces no output at all. Drive it through the **real** preload and the real
+  IPC channel names — most renderer state is module-scoped and unreachable from
+  `executeJavaScript`, and going through the channels tests the wiring too.
+  Stub every `ipcMain.handle` the renderer invokes at startup (`get-offset`,
+  `get-prefs`, `get-transcribe-config`, `get-provider-status`, `list-synced`) or
+  boot stalls on a rejected promise.
+
+- **`null` on a load channel is ambiguous — resolve it deliberately.** Main
+  sends `heatmap: null` / `beatmap: null` to mean *nothing is stored yet*, which
+  is **not** the same as *forget what you have*. Treating the first as the second
+  wiped the empty map the track had just been given and left every song unable to
+  learn anything at all. This was caught only by running the round trip; unit
+  tests passed throughout, because each half was correct on its own.
 
 ---
 
 ## Suggested order
 
-1. **Release hygiene** — nothing outstanding; v0.14.0 is current.
-2. **Notification tray** — smaller, and the job data already exists.
-3. **Side poster** — decide the candidates API first, then build the panel.
-4. **Verify word alignment end to end** — cheap, and it de-risks a headline
-   feature that is currently only plausible.
+1. **Release hygiene** — nothing outstanding; v0.15.0 is current.
+2. **Play one song through with `♫` on** — settles item 0 and item "verify word
+   alignment" in the same sitting, since both need exactly one full play with
+   capture enabled.
+3. **Notification tray** — smaller, and the job data already exists.
+4. **Side poster** — decide the candidates API first, then build the panel.
+   Note that Vinyl already puts the cover art on screen at full crispness, so
+   part of the motivation for this may already be met.

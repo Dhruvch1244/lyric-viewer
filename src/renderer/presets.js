@@ -36,8 +36,17 @@
    * @property {object} swirl         shader biases, see swirl.js render()
    */
 
-  /** Complete layer set; every preset is normalised against this. */
-  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy'];
+  /**
+   * Complete layer set; every preset is normalised against this.
+   *
+   * `heatmap`, `vinyl` and `stage` are ordinary layers, deliberately. Heatmap
+   * was originally bolted onto Ghost's `bare` escape hatch and then had to undo
+   * it mid-frame to draw anything, which made it the one preset whose flags did
+   * not describe what it drew — and silently cost it the sprites, ripples,
+   * drop flash and confetti that every other look gets, because the bare branch
+   * returns before all of that. As layers they compose like everything else.
+   */
+  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy', 'heatmap', 'vinyl', 'stage'];
 
   /** @type {Preset[]} */
   const PRESETS = [
@@ -78,18 +87,47 @@
       name: 'Heatmap',
       cost: 1,
       /*
-        The song drawn as a shape you can see all of at once — a radial ring of
-        cells around the lyrics, each one a slice of the track, brightening
-        where the music peaks. It fills in as the song is heard and is
-        remembered afterwards, so on a replay the whole arc is visible before
-        it arrives: the drop is on screen while the build-up is still playing.
+        The song drawn as a shape you can see all of at once — a timeline along
+        the bottom edge, each cell a slice of the track, rising where the music
+        peaks. It fills in as the song is heard and is remembered afterwards, so
+        on a replay the whole arc is visible before it arrives: the drop is on
+        screen while the build-up is still playing.
 
-        Nothing else competes for the frame; the ring IS the visual.
+        The bar sits under the lyrics rather than around them, so the mode costs
+        the reader nothing — it is a look you can leave on, not one you switch
+        to and then switch away from.
       */
-      bare: true,
-      heatmap: true,
-      layers: { aurora: false, bokeh: false, galaxy: false, eq: false, rays: false, math: false, web: false },
+      layers: { heatmap: true, bokeh: true },
       swirl: { bandBias: 0.8, vortexBias: 0.75, glowBias: 0.95, kick: 2.4 },
+    },
+    {
+      id: 'vinyl',
+      name: 'Vinyl',
+      cost: 1,
+      /*
+        The cover art as a record on a deck, turning the whole time the song is
+        playing — a DJ's platter, not a progress dial. The heatmap timeline runs
+        underneath it, so the record shows what is playing and the bar shows
+        where in the song it sits.
+
+        Rotation locks to the measured BPM when there is one, which is the point:
+        the platter and the music are on the same clock, so the label sweeps past
+        the needle on the beat.
+      */
+      layers: { vinyl: true, heatmap: true, bokeh: true },
+      swirl: { bandBias: 0.85, vortexBias: 0.8, glowBias: 1.0, kick: 1.8 },
+    },
+    {
+      id: 'stage',
+      name: 'Stage',
+      cost: 2,
+      /*
+        The dancers are the subject for once. A lit floor, spotlights that punch
+        on the kick, and the troupe pushed forward and enlarged; a drop fills the
+        stage with clones. Everything else is kept quiet so the stage reads.
+      */
+      layers: { stage: true, rays: true, bokeh: true },
+      swirl: { bandBias: 1.05, vortexBias: 0.9, glowBias: 1.15, kick: 2.0 },
     },
     {
       id: 'liquid',
@@ -146,7 +184,7 @@
   function normalize(preset) {
     const layers = {};
     for (const key of LAYER_KEYS) layers[key] = Boolean(preset.layers && preset.layers[key]);
-    return { ...preset, layers, bare: Boolean(preset.bare), heatmap: Boolean(preset.heatmap) };
+    return { ...preset, layers, bare: Boolean(preset.bare) };
   }
 
   const NORMALIZED = PRESETS.map(normalize);
@@ -180,8 +218,14 @@
    *
    * `ghost` is excluded for the opposite reason: it is a deliberate mode you
    * choose when you want only the lyrics, not a look to be handed at random.
+   *
+   * `heatmap`, `vinyl` and `stage` ARE in the pool. They were held out while the
+   * heatmap was a bare mode that blanked everything else; as ordinary looks they
+   * are things worth being handed, and each degrades honestly when its input is
+   * missing — an unlearned song draws a faint timeline, a track with no cover
+   * art gets a plain record.
    */
-  const RANDOM_POOL = NORMALIZED.filter((p) => !['minimal', 'ghost', 'heatmap'].includes(p.id));
+  const RANDOM_POOL = NORMALIZED.filter((p) => !['minimal', 'ghost'].includes(p.id));
 
   /**
    * The look for a given track — random across songs, identical every time you
