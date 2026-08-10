@@ -79,7 +79,7 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
 | `◈` chip | Cycle the visual preset: Ghost → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
-| `◐` chip | Cycle backdrop opacity: ghost → tinted → vivid → solid (persisted) |
+| `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
 | `♫` chip | Audio-reactive mode (captures system sound) |
@@ -106,7 +106,7 @@ rather than true OS fullscreen — transparent + true-fullscreen is unreliable o
 Windows.
 
 **Backdrop opacity (`◐` chip).** A fully transparent overlay makes the colour
-wash nearly invisible over the desktop, so the backdrop has four levels — *ghost*
+wash nearly invisible over the desktop, so the backdrop has four levels — *faint*
 (barely there), *tinted*, *vivid* (default), *solid* (opaque). The choice is
 saved in `localStorage`. A drop flash punches through at any level, so colour
 change always reads.
