@@ -74,6 +74,24 @@
       swirl: { bandBias: 0.85, vortexBias: 0.95, glowBias: 1.05, kick: 3.2 },
     },
     {
+      id: 'heatmap',
+      name: 'Heatmap',
+      cost: 1,
+      /*
+        The song drawn as a shape you can see all of at once — a radial ring of
+        cells around the lyrics, each one a slice of the track, brightening
+        where the music peaks. It fills in as the song is heard and is
+        remembered afterwards, so on a replay the whole arc is visible before
+        it arrives: the drop is on screen while the build-up is still playing.
+
+        Nothing else competes for the frame; the ring IS the visual.
+      */
+      bare: true,
+      heatmap: true,
+      layers: { aurora: false, bokeh: false, galaxy: false, eq: false, rays: false, math: false, web: false },
+      swirl: { bandBias: 0.8, vortexBias: 0.75, glowBias: 0.95, kick: 2.4 },
+    },
+    {
       id: 'liquid',
       name: 'Liquid',
       cost: 1,
@@ -128,7 +146,7 @@
   function normalize(preset) {
     const layers = {};
     for (const key of LAYER_KEYS) layers[key] = Boolean(preset.layers && preset.layers[key]);
-    return { ...preset, layers, bare: Boolean(preset.bare) };
+    return { ...preset, layers, bare: Boolean(preset.bare), heatmap: Boolean(preset.heatmap) };
   }
 
   const NORMALIZED = PRESETS.map(normalize);
@@ -163,7 +181,7 @@
    * `ghost` is excluded for the opposite reason: it is a deliberate mode you
    * choose when you want only the lyrics, not a look to be handed at random.
    */
-  const RANDOM_POOL = NORMALIZED.filter((p) => p.id !== 'minimal' && p.id !== 'ghost');
+  const RANDOM_POOL = NORMALIZED.filter((p) => !['minimal', 'ghost', 'heatmap'].includes(p.id));
 
   /**
    * The look for a given track — random across songs, identical every time you
