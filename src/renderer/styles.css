@@ -808,63 +808,70 @@ body.keybox-open .hud {
   transition: width 220ms linear;
 }
 
-/* ---- live band meters (top edge) ----
-   Replaces the equalizer bars that used to run across the backdrop. Three
-   compact readouts carry the same information in a fraction of the screen and
-   cost no fill rate, which the full-width bars very much did. */
+/* ---- live band meters ----
+   Vertical level meters in the display face, so they read as part of the same
+   poster-styled world as the lyrics rather than instrumentation bolted on top.
+   No panel and no box: the columns float and glow, and each band takes its own
+   colour from the live palette, so they recolour with the song. */
 .meters {
   position: fixed;
-  top: 14px;
+  top: 20px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;
   display: flex;
-  gap: 14px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.30);
-  backdrop-filter: blur(6px);
+  align-items: flex-end;
+  gap: 22px;
   pointer-events: none;
 }
 
 .meter {
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-ui);
-  font-size: 0.62rem;
-  letter-spacing: 0.09em;
-  color: var(--ink-mid);
+  /* --lv is written from JS, 0..1. Everything below reads it, so the whole
+     meter breathes with the band instead of only the bar moving. */
+  --lv: 0;
+  --tint: var(--accent-live, var(--accent));
+}
+.meter[data-band="mid"]    { --tint: var(--accent-live2, #4cc9f0); }
+.meter[data-band="treble"] { --tint: color-mix(in srgb, var(--accent-live2, #4cc9f0) 45%, #ffffff); }
+
+.meter__label {
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  color: color-mix(in srgb, var(--tint) calc(45% + var(--lv) * 55%), rgba(255, 255, 255, 0.55));
+  text-shadow: 0 0 calc(var(--lv) * 14px) color-mix(in srgb, var(--tint) 70%, transparent);
 }
 
-.meter__icon { font-size: 0.8rem; line-height: 1; color: var(--accent-live, var(--accent)); }
-.meter__label { min-width: 2.4em; }
-
-/* The bar itself. Width is written from JS each frame; a transform would be
-   cheaper still, but at 44px wide across three elements this is not the thing
-   that costs anything. */
+/* The column, filled from the BOTTOM like a real level meter — the fill's
+   `top` is written from JS. The unlit track stays faintly visible so a quiet
+   band reads as "quiet" rather than as "absent". */
 .meter__bar {
   position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 4px;
+  width: 3px;
+  height: 30px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.10);
   overflow: hidden;
 }
 .meter__bar > i {
   position: absolute;
-  inset: 0 100% 0 0;
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent-live2, #4cc9f0) 80%, transparent),
-    var(--accent-live, var(--accent)));
+  inset: 100% 0 0 0;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--tint) 55%, #ffffff),
+    var(--tint));
   border-radius: 2px;
+  box-shadow: 0 0 calc(4px + var(--lv) * 10px) var(--tint);
 }
 
-/* Tabular figures so the number does not jitter the layout as it changes. */
 .meter__db {
-  min-width: 3.6em;
-  text-align: right;
+  font-family: var(--font-ui);
+  font-size: 0.52rem;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
-  color: var(--ink-dim);
+  color: rgba(255, 255, 255, calc(0.32 + var(--lv) * 0.45));
 }

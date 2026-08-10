@@ -2161,7 +2161,11 @@ function updateMeters(env) {
     meterEls = {};
     for (const band of ['bass', 'mid', 'treble']) {
       const row = els.meters.querySelector(`[data-band="${band}"]`);
-      meterEls[band] = { fill: row.querySelector('.meter__bar > i'), db: row.querySelector('.meter__db') };
+      meterEls[band] = {
+        row,
+        fill: row.querySelector('.meter__bar > i'),
+        db: row.querySelector('.meter__db'),
+      };
     }
   }
 
@@ -2173,8 +2177,13 @@ function updateMeters(env) {
     if (rounded === meterLast[band]) continue;
     meterLast[band] = rounded;
     const el = meterEls[band];
-    el.db.textContent = rounded <= -60 ? '-∞ dB' : `${rounded} dB`;
-    el.fill.style.right = `${Math.round((1 - (rounded + 60) / 60) * 100)}%`;
+    // 0..1 up the scale. Published as a CSS variable so the label brightness,
+    // the glow and the number's opacity all follow the level from one write,
+    // rather than needing a style change each.
+    const lv = Math.max(0, Math.min(1, (rounded + 60) / 60));
+    el.row.style.setProperty('--lv', lv.toFixed(2));
+    el.db.textContent = rounded <= -60 ? '−∞' : `${rounded} dB`;
+    el.fill.style.top = `${Math.round((1 - lv) * 100)}%`;   // fills from the bottom
   }
 }
 
