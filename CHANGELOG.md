@@ -2,6 +2,64 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.13.0 — 2026-08-10
+
+### Added
+
+- **The tempo is measured now, not guessed.** The beat clock derived its period
+  from words-per-line ÷ line duration, so it drifted with how wordy a line
+  happened to be and every reactive layer pulsed *near* the music rather than on
+  it. Now that kick detection works, the onsets carry the tempo: the beat clock
+  locks to the measured BPM, runs in real time and phase-aligns to the beat.
+
+  Verified against synthetic trains at 90/120/128/140/174 BPM (exact recovery,
+  including with jitter and every 4th kick missing) and on a real house track,
+  where it holds 137.6 BPM with independent windows agreeing at 137.6 / 137.0 /
+  138.2. It refuses to lock while evidence is thin rather than guessing.
+
+- **Word-level sync: correct words on measured timing.** No lyric source carries
+  word timing — a survey of 153 synced LRCLIB entries found zero using the
+  enhanced-LRC word extension. Whisper measures *when* each word was sung to
+  within tens of ms but mishears the words over music. Aligning the two gives
+  correct text on measured timing.
+
+  Songs are aligned once, in the background, and cached — the same
+  learn-on-first-listen shape as the beat map, so every later play is
+  word-synced instantly and offline. Alignments below 50% coverage are rejected
+  as mostly guesswork.
+
+- **Romanized Hindi translates offline, with no API key.** The offline model
+  reads Devanagari only, and most of what LRCLIB carries for Indian songs is
+  romanized, so the key-free path previously covered native-script songs and
+  little else. A rule-based transliterator converts the script first:
+
+  | input | before | after |
+  | --- | --- | --- |
+  | "Tera naam mere dil mein hai" | "So this is a negative divisible by the negative." | **"Your name is in my heart"** |
+
+  A quality trade rather than a free win — the transliteration is an
+  approximation, and a working LLM provider still translates romanized lyrics
+  better. This route is taken when the alternative is no translation at all.
+
+### Changed
+
+- Word highlighting uses measured timings when a song has been aligned, and
+  falls back to the syllable estimate otherwise.
+
+### Performance
+
+- The lyric column styles only the five lines that can be seen. It previously
+  walked every line in the song on each change — on a 90-line track, ~85
+  elements written four properties each, to values they already held, with the
+  resulting style recalculation landing on the exact frame the lyric advances.
+
+### Fixed
+
+- **The active lyric line could fail to render.** Lines start hidden and only
+  the *neighbour* branch cleared that, so a line reached without first being a
+  neighbour went active while still hidden — the first line of a song, or any
+  line landed on by a seek.
+
 ## 0.12.1 — 2026-08-10
 
 ### Fixed
