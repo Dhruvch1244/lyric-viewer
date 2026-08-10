@@ -1562,6 +1562,74 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
   });
 }
 
+/**
+ * Draw the song as a ring of cells around the lyrics.
+ *
+ * Each cell is one slice of the track, so the whole song is visible at once:
+ * the ring runs clockwise from twelve o'clock, the played part is lit, and the
+ * part still to come is drawn from what was learned on an earlier listen. That
+ * is the point of the mode — on a replay you can see the drop coming.
+ *
+ * Cells that have never been heard are drawn as a faint tick rather than
+ * skipped, so an unlearned song reads as "not known yet" instead of broken.
+ *
+ * @param {number} w @param {number} h
+ * @param {string} accent @param {string} tint
+ */
+function drawHeatmap(w, h, accent, tint) {
+  if (!window.HeatMap) return;
+  const cells = window.HeatMap.cells();
+  if (cells.length === 0) return;
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const radius = Math.min(w, h) * 0.36;
+  const n = cells.length;
+  const step = (Math.PI * 2) / n;
+  // A hair of padding between cells so they read as discrete slices.
+  const gap = step * 0.16;
+
+  const played = durationMs > 0
+    ? Math.max(0, Math.min(1, estimatePosition() / durationMs))
+    : 0;
+  const headIndex = Math.floor(played * n);
+
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i += 1) {
+    const c = cells[i];
+    const a0 = -Math.PI / 2 + i * step + gap / 2;
+    const a1 = a0 + step - gap;
+
+    // Length carries energy, brightness carries how close the playhead is —
+    // so the ring reads as a shape AND as a position at a glance.
+    const heard = i <= headIndex;
+    const lvl = c.known ? c.level : 0;
+    const len = radius * (0.04 + lvl * 0.30);
+    const dim = heard ? 1 : 0.42;
+    const alpha = (c.known ? 0.20 + lvl * 0.65 : 0.07) * dim;
+
+    // Bass-heavy slices lean to the accent, bright ones to the secondary tint.
+    const colour = c.bass >= c.treble ? accent : tint;
+
+    ctx.strokeStyle = hexA(colour, alpha);
+    ctx.lineWidth = Math.max(2, radius * 0.020);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + len / 2, a0, a1);
+    ctx.stroke();
+  }
+
+  // The playhead: a bright tick at the current position.
+  const ha = -Math.PI / 2 + (headIndex + 0.5) * step;
+  ctx.strokeStyle = hexA(accent, 0.85);
+  ctx.lineWidth = Math.max(2, radius * 0.016);
+  ctx.beginPath();
+  ctx.moveTo(cx + Math.cos(ha) * (radius - radius * 0.06), cy + Math.sin(ha) * (radius - radius * 0.06));
+  ctx.lineTo(cx + Math.cos(ha) * (radius + radius * 0.40), cy + Math.sin(ha) * (radius + radius * 0.40));
+  ctx.stroke();
+
+  ctx.globalCompositeOperation = 'source-over';
+}
+
 function drawBackdrop(now) {
   // Set once the frame is actually being drawn (i.e. past the throttle), so the
   // `finally` below can price every exit path — including the `bare` shortcut —
@@ -1606,6 +1674,9 @@ function drawBackdrop(now) {
     // source of truth for kicks/build-ups/drops below.
     audioEnv = (audioEnabled && window.AudioReactive) ? window.AudioReactive.sample(now) : null;
     updateMeters(audioEnv);
+    if (window.HeatMap && audioEnv && audioEnv.active && playbackStatus === 'Playing') {
+      window.HeatMap.note(estimatePosition(), audioEnv);
+    }
     const audioActive = Boolean(audioEnv && audioEnv.active);
 
     // Adaptive quality: track FPS and ease `quality` so heavy layers back off when
@@ -1832,6 +1903,14 @@ function drawBackdrop(now) {
       // No cover photo is painted in this mode, so the field is never thinned.
       renderSwirl(now, dt, life, Math.min(1, level.alpha), activePreset.swirl,
         audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+      // Heatmap is the one thing allowed to draw in a bare look, because it IS
+      // the look. Everything else stays off.
+      if (activePreset.heatmap) {
+        els.canvas.style.display = '';
+        canvasHidden = false;
+        ctx.clearRect(0, 0, w, h);
+        drawHeatmap(w, h, accentLive, tintLive);
+      }
       return;   // `finally` still prices the frame and re-arms the loop
     }
 
@@ -2646,6 +2725,7 @@ window.player.onTrack((track) => {
   // Begin learning this song's beats afresh; the stored map (if any) arrives via
   // the `beatmap` event that main sends right after this one.
   if (window.Tempo) window.Tempo.reset();   // a new song has its own tempo
+  if (window.HeatMap) window.HeatMap.start(track.durationMs || 0);
   if (window.BeatMap) {
     window.BeatMap.load(null);
     window.BeatMap.startRecording();
