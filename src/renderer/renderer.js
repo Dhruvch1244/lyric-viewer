@@ -884,6 +884,20 @@ let galaxy = [];
    No audio FFT yet, so we synthesise a musical pulse from lyric cadence: each
    active line sets an expected inter-beat interval and the phase clock advances
    so `beatPhase` sweeps 0→1 every beat. `beatFlash` kicks on each downbeat. */
+/* Measured tempo (see tempo.js). While locked, the beat clock runs in real time
+   and is phase-aligned to the kick onsets, so the visuals land ON the beat
+   rather than near it. Hysteresis: lock in high, release low, so a breakdown
+   with no percussion doesn't flap the clock in and out. */
+let tempoLocked = false;
+let tempoBpm = 0;
+let lastTempoCheckAt = 0;
+/** Previous confident estimate, so a lock needs two that agree. */
+let lastTempoBpm = 0;
+const TEMPO_LOCK_IN = 0.62;
+const TEMPO_LOCK_OUT = 0.40;
+/** Onsets required before the clock is handed over — a couple of bars. */
+const TEMPO_LOCK_ONSETS = 24;
+
 let beatPeriodMs = 500;     // current estimated beat length
 let beatClockMs = 0;        // accumulates dt, wraps every beatPeriodMs
 let beatPhase = 0;          // 0..1 within the current beat
@@ -1604,10 +1618,23 @@ function drawBackdrop(now) {
     // this shifts the whole wash + live layers so the background never settles.
     bgHue = (bgHue + dt * 0.01 * (0.6 + intensity + baseEnergy) + dropFlash * 0.6) % 360;
 
-    // Beat clock: advance the phase, fire a flash + micro-flicker on each downbeat.
-    // The period tightens with energy so hyped songs pulse faster. This is the
-    // "timing" spine every reactive layer reads from.
-    beatClockMs += dt * (0.85 + baseEnergy * 0.6 + intensity * 0.8);
+    /*
+      Beat clock: advance the phase, fire a flash + micro-flicker on each
+      downbeat. This is the "timing" spine every reactive layer reads from.
+
+      Two modes. When the kick onsets have yielded a confident tempo the clock
+      runs in REAL time and is phase-locked to the measured beat, so the visuals
+      land on the music. Without that — no audio capture, or a passage with no
+      usable percussion — it falls back to the old behaviour, where the period
+      comes from lyric cadence and is stretched by energy. That stretch has to
+      be dropped when locked: multiplying real time by an energy factor is
+      exactly what would pull a correct tempo back off the beat.
+    */
+    if (tempoLocked) {
+      beatClockMs += dt;
+    } else {
+      beatClockMs += dt * (0.85 + baseEnergy * 0.6 + intensity * 0.8);
+    }
     if (beatClockMs >= beatPeriodMs) {
       beatClockMs -= beatPeriodMs;
       // When real audio is driving the pulse, suppress the synthetic downbeat so
@@ -1622,6 +1649,57 @@ function drawBackdrop(now) {
     beatFlash *= Math.pow(0.9, dt / 16);   // frame-rate-independent decay
     flicker *= Math.pow(0.82, dt / 16);
 
+    /*
+      Re-measure the tempo about once a second. Re-running it every frame would
+      be pure waste — the estimate sweeps ~470 candidate periods — and the
+      answer cannot meaningfully change between frames anyway.
+
+      The lock is deliberately sticky: it engages only on a confident estimate
+      and is released only when confidence falls well below that, so a quiet bar
+      or a breakdown does not drop the clock in and out of lock mid-song.
+    */
+    if (window.Tempo && now - lastTempoCheckAt > 1000) {
+      lastTempoCheckAt = now;
+      const t = window.Tempo.current();
+      /*
+        Two consecutive confident estimates that AGREE are required before the
+        clock is handed over, and the value is refreshed on every such pair
+        rather than latched once.
+
+        Measured on a real house track, a single confident reading was not
+        enough: the kick train carries occasional false onsets, one noisy window
+        crossed the threshold at 60BPM — the very bottom of the search range —
+        and the clock held that obviously-wrong value for the rest of the song,
+        because confidence then hovered above the release threshold. Agreement
+        rejects that: noise does not repeat the same wrong answer twice.
+      */
+      const agrees = t && lastTempoBpm
+        && Math.abs(t.bpm - lastTempoBpm) / lastTempoBpm < 0.04;
+      lastTempoBpm = t && t.confidence >= TEMPO_LOCK_IN ? t.bpm : 0;
+
+      /*
+        Enough onsets to be worth believing. Eight is plenty to FORM an estimate
+        but nowhere near enough to bet the clock on one: measured on a real
+        track, the first few seconds repeatedly produced a confident-looking
+        60BPM — the very bottom of the search range — which then held. Waiting
+        for a couple of bars of evidence removes that entirely.
+      */
+      const enough = window.Tempo.count() >= TEMPO_LOCK_ONSETS;
+
+      if (t && t.confidence >= TEMPO_LOCK_IN && agrees && enough) {
+        tempoLocked = true;
+        beatPeriodMs = t.periodMs;
+        tempoBpm = t.bpm;
+        // Align the clock so the next wrap lands on a real beat. `phaseMs` is
+        // on the same clock as `now`, so this is just the distance past the
+        // most recent beat.
+        beatClockMs = ((now - t.phaseMs) % t.periodMs + t.periodMs) % t.periodMs;
+      } else if (!t || t.confidence < TEMPO_LOCK_OUT) {
+        tempoLocked = false;
+        tempoBpm = 0;
+      }
+    }
+
     // Real audio overrides the synthetic envelope: kicks punch the pulse/flash,
     // build-ups drive the flicker + centre bloom, and a detected drop fires the
     // full drop moment (flash, confetti, hue jump, dancer multiplication).
@@ -1631,6 +1709,7 @@ function drawBackdrop(now) {
         beatFlash = Math.max(beatFlash, audioEnv.kick);
         pulse = Math.max(pulse, 0.5 + audioEnv.kick);
         if (audioEnv.kick > 0.45) spawnRipple(audioEnv.kick);
+        if (window.Tempo) window.Tempo.note(now);   // feed the tempo estimator
       }
       buildup = Math.max(buildup, audioEnv.build);
       if (audioEnv.build > 0.3) flicker = Math.max(flicker, audioEnv.build * (0.35 + Math.random() * 0.5));
@@ -2437,6 +2516,7 @@ window.player.onTrack((track) => {
 
   // Begin learning this song's beats afresh; the stored map (if any) arrives via
   // the `beatmap` event that main sends right after this one.
+  if (window.Tempo) window.Tempo.reset();   // a new song has its own tempo
   if (window.BeatMap) {
     window.BeatMap.load(null);
     window.BeatMap.startRecording();
@@ -2551,6 +2631,7 @@ window.player.onTranslation((payload) => {
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
   flushTranscription();           // playback stopped — the song is over, so learn it
+  if (window.Tempo) window.Tempo.reset();
   if (window.BeatMap) window.BeatMap.load(null);
   currentTrack = null;
   cuesLatin = [];
