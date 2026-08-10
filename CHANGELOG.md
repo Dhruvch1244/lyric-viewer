@@ -2,6 +2,25 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **The lowest backdrop-opacity level is now called *faint*, not *ghost*.**
+  0.11.0 introduced a visual preset also called Ghost, leaving two chips
+  offering the same word for unrelated things — `◐` for how see-through the
+  overlay is, `◈` for a lyrics-only look.
+
+  The opacity label is the one that moved because it is the one that is safe to
+  move: that choice persists as an index, so renaming it changes nothing on
+  disk. The preset id persists as a string, in `localStorage` and in the
+  per-track look overrides, so renaming *that* would have silently discarded
+  every look pinned to a song — and it would have contradicted the 0.11.0
+  release notes and the installer already in the wild.
+
+- README now documents all nine control chips (it listed four) and describes
+  each visual preset.
+
 ## 0.11.0 — 2026-08-10
 
 ### Added

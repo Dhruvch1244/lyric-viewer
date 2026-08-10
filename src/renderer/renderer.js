@@ -135,7 +135,13 @@ const GAP_HERO_LEAD = 900;   // pull the hero back out this long before the next
    These levels let the wash go from barely-there to fully opaque; a drop flash
    punches through regardless of level so colour change always reads. */
 const BACKDROP_LEVELS = [
-  { name: 'ghost', alpha: 0.34 },
+  // "faint", not "ghost": Ghost is a visual PRESET (lyrics + cloud, nothing
+  // else) and having two chips offer the same word for different things was
+  // confusing. This label is safe to rename — the choice persists as an index,
+  // not a name — whereas the preset id is stored as a string in localStorage
+  // and in the per-track overrides, so renaming that would silently discard
+  // every look a user had pinned to a song.
+  { name: 'faint', alpha: 0.34 },
   { name: 'tinted', alpha: 0.62 },
   { name: 'vivid', alpha: 0.84 },
   { name: 'solid', alpha: 1.0 },
@@ -1611,7 +1617,7 @@ function drawBackdrop(now) {
       mode changes rather than every frame.
     */
     // Per-track wash + album-art levels share the chosen backdrop opacity, so the
-    // whole overlay stays as see-through (ghost) or solid as the user picked.
+    // whole overlay stays as see-through (faint) or solid as the user picked.
     const level = BACKDROP_LEVELS[backdropLevel] || BACKDROP_LEVELS[2];
 
     const bare = Boolean(activePreset.bare);
@@ -1632,7 +1638,7 @@ function drawBackdrop(now) {
 
     // Album-art backdrop photo (pre-blurred + darkened), painted behind the wash.
     // Fades in over ~0.9s when a new cover arrives; capped by the backdrop level
-    // so a "ghost" overlay still lets the desktop show through.
+    // so a "faint" overlay still lets the desktop show through.
     let artAlpha = 0;
     if (artReady && artBlurred) {
       artFadeIn = Math.min(1, artFadeIn + dt / 900);
@@ -2583,7 +2589,7 @@ els.translateBtn.addEventListener('click', async () => {
   refreshButtons();
 });
 
-/* Backdrop opacity cycle: ghost → tinted → vivid → solid. Persisted locally so
+/* Backdrop opacity cycle: faint → tinted → vivid → solid. Persisted locally so
    the choice sticks between sessions (renderer-only, no main-process changes). */
 function applyBackdropLabel() {
   const level = BACKDROP_LEVELS[backdropLevel] || BACKDROP_LEVELS[2];
