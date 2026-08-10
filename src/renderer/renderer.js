@@ -78,6 +78,34 @@ let activeIndex = -1;
  */
 let activeWords = [];
 
+/** How many lines either side of the active one are ever visible. */
+const LINE_WINDOW = 2;
+/**
+ * Inclusive range of lines currently carrying inline styles. Everything outside
+ * it is in the state buildColumn left it in, so only the boundary needs
+ * touching when the window moves — see setActive.
+ */
+let styledFrom = 0;
+let styledTo = -1;   // empty range
+
+/**
+ * Return a line to the hidden, unstyled state buildColumn creates.
+ *
+ * `visibility: hidden` rather than `display: none` because the column scrolls
+ * by translating a fixed stack — removing a line from layout would shift every
+ * position below it. `filter: none` rather than `blur(0)` because a filter of
+ * any kind keeps the element on its own compositing layer.
+ *
+ * @param {HTMLElement} el
+ */
+function resetLineStyle(el) {
+  if (!el) return;
+  el.classList.remove('is-active');
+  el.style.opacity = '0';
+  el.style.visibility = 'hidden';
+  el.style.filter = 'none';
+}
+
 /** True while in a long instrumental gap — the flickering song-name hero owns
     the centre and the lyric column is dimmed. Driven from the frame loop. */
 let instrumentalGap = false;
@@ -472,6 +500,7 @@ function buildColumn() {
   });
   activeIndex = -1;
   activeWords = [];   // the old line's spans are gone with the old column
+  styledFrom = 0; styledTo = -1;   // fresh elements carry no inline styling yet
 }
 
 /** Render a cue's words (interpolated per-word timing) into an element. */
@@ -590,14 +619,40 @@ function setActive(index) {
   const shift = targetCenterPx - (index + 0.5) * slotPx;
   els.column.style.transform = `translateY(${shift}px)`;
 
-  // Per-line state. Keep the view confined to the active line plus one clear
-  // line above and below (a faint hint at ±2); everything else is hidden.
-  lineEls.forEach((el, i) => {
+  /*
+    Per-line state, applied ONLY to the lines that can be seen.
+
+    This used to walk every line in the song on each change. The window is five
+    lines wide, so on a 90-line track that was ~85 elements per line change
+    being written four style properties each to set them to values they already
+    held — and every one of those writes dirties the column's style tree, so
+    the recalculation lands exactly on the frame the lyric advances, which is
+    the most visible moment there is.
+
+    Lines are now touched when they ENTER the window and reset when they LEAVE
+    it, so the work is proportional to the view rather than the song.
+  */
+  const from = Math.max(0, index - LINE_WINDOW);
+  const to = Math.min(lineEls.length - 1, index + LINE_WINDOW);
+
+  for (let i = styledFrom; i <= styledTo; i += 1) {
+    if (i < from || i > to) resetLineStyle(lineEls[i]);
+  }
+  styledFrom = from;
+  styledTo = to;
+
+  for (let i = from; i <= to; i += 1) {
+    const el = lineEls[i];
     const d = Math.abs(i - index);
     if (i === index) {
       el.classList.add('is-active');
       el.style.setProperty('--active-scale', activeScale.toFixed(3));
       el.style.opacity = '1';
+      // Must be set explicitly, not inherited from having been a neighbour a
+      // moment ago: lines start hidden, so a line reached WITHOUT passing
+      // through the neighbour state — the first line of a song, or any line
+      // landed on by a seek — would otherwise go active while still hidden.
+      el.style.visibility = '';
       // Clear the inline blur → the CSS `.is-active { filter: blur(0) }` takes
       // over and the line "sharpens in" from its previous neighbour blur.
       el.style.filter = '';
@@ -622,15 +677,10 @@ function setActive(index) {
         by translating a fixed stack, so removing lines with `display: none`
         would shift every position — while taking it out of paint entirely.
       */
-      if (d <= 2) {
-        el.style.visibility = '';
-        el.style.filter = `blur(${d === 1 ? 3.5 : 6}px)`;
-      } else {
-        el.style.visibility = 'hidden';
-        el.style.filter = 'none';   // must be none, not blur(0), to drop the layer
-      }
+      el.style.visibility = '';
+      el.style.filter = `blur(${d === 1 ? 3.5 : 6}px)`;
     }
-  });
+  }
 
   updateHero();
 
@@ -1971,6 +2021,7 @@ function clearColumn() {
   lineEls = [];
   activeIndex = -1;
   activeWords = [];
+  styledFrom = 0; styledTo = -1;
   els.column.style.transform = `translateY(${targetCenterPx}px)`;
   els.translation.classList.remove('is-visible');
   els.translation.textContent = '';
