@@ -211,21 +211,42 @@ function buildWordTimings(text, startMs, endMs) {
   });
 }
 
-/** On-screen duration of a line (ms) = gap to the next cue. */
+/**
+ * When a line stops being sung (ms).
+ *
+ * `endMs` is real data — the LRC gap marker that closes the line (see
+ * normaliseCues in src/main/lyrics.js). Only when a line has none do we fall
+ * back to "it runs until the next line starts", which overstates every line
+ * followed by an instrumental stretch.
+ *
+ * @param {number} index
+ * @returns {number}
+ */
+function lineEndMs(index) {
+  const cue = cues[index];
+  if (!cue) return 0;
+  if (Number.isFinite(cue.endMs) && cue.endMs > cue.timeMs) return cue.endMs;
+  const next = cues[index + 1];
+  return next ? next.timeMs : cue.timeMs + 3000;
+}
+
+/** On-screen duration of a line (ms). */
 function lineDurationMs(index) {
   const cue = cues[index];
   if (!cue) return 3000;
-  const next = cues[index + 1];
-  return Math.max(250, (next ? next.timeMs : cue.timeMs + 3000) - cue.timeMs);
+  return Math.max(250, lineEndMs(index) - cue.timeMs);
 }
 
 /**
  * True when playback sits in a long instrumental stretch AFTER the active line
- * has (been estimated to have) finished — the "lyrics paused, music playing"
- * state where the flickering song-name hero should take over. The active line's
- * sung length is estimated from its word count (there is no real word-end data),
- * capped at the distance to the next line. The hero appears once that estimated
- * end has passed and steps back out shortly before the next line arrives.
+ * has finished — the "lyrics paused, music playing" state where the flickering
+ * song-name hero should take over.
+ *
+ * The line's sung end comes from its `endMs` gap marker when the lyric source
+ * provided one, and is otherwise estimated from its word count (capped at the
+ * distance to the next line). The hero appears once that end has passed and
+ * steps back out shortly before the next line arrives.
+ *
  * @param {number} positionMs
  * @returns {boolean}
  */
@@ -234,9 +255,15 @@ function isInstrumentalGap(positionMs) {
   const line = cues[activeIndex];
   const next = cues[activeIndex + 1];
   const nextStart = next ? next.timeMs : (durationMs > 0 ? durationMs : Infinity);
-  const words = (line.text || '').split(/\s+/).filter(Boolean).length;
-  const estSung = Math.min(nextStart - line.timeMs, Math.max(1400, words * 360));
-  const sungEnd = line.timeMs + estSung;
+
+  let sungEnd;
+  if (Number.isFinite(line.endMs) && line.endMs > line.timeMs) {
+    sungEnd = Math.min(line.endMs, nextStart);
+  } else {
+    const words = (line.text || '').split(/\s+/).filter(Boolean).length;
+    sungEnd = line.timeMs + Math.min(nextStart - line.timeMs, Math.max(1400, words * 360));
+  }
+
   if (nextStart - sungEnd < GAP_HERO_MS) return false; // tail too short to bother
   return positionMs > sungEnd + GAP_HERO_ENTER && (nextStart - positionMs) > GAP_HERO_LEAD;
 }
@@ -426,9 +453,9 @@ function buildColumn() {
 /** Render a cue's words (interpolated per-word timing) into an element. */
 function renderWords(el, index) {
   const cue = cues[index];
-  const nextCue = cues[index + 1];
-  const endMs = nextCue ? nextCue.timeMs : cue.timeMs + 4000;
-  const timings = buildWordTimings(cue.text, cue.timeMs, endMs);
+  // Spread the words across the time the line is actually sung, not across the
+  // instrumental stretch that follows it.
+  const timings = buildWordTimings(cue.text, cue.timeMs, lineEndMs(index));
 
   el.textContent = '';
   const n = timings.length;
@@ -485,8 +512,11 @@ function setActive(index) {
 
   // A lyric arriving after a long instrumental gap is a "drop" — but only when
   // we advanced one line naturally (not on a seek/jump), to avoid false fires.
+  // The gap is measured from where the previous line STOPPED being sung, not
+  // where it started; measuring from the start counts the line's own length as
+  // silence and fires drops that aren't there.
   if (index >= 0 && index === prev + 1) {
-    const prevTime = index > 0 ? cues[index - 1].timeMs : 0;
+    const prevTime = index > 0 ? lineEndMs(index - 1) : 0;
     if (cues[index].timeMs - prevTime > GAP_DROP_MS) triggerDrop();
   }
 
@@ -613,7 +643,12 @@ function paintWords(positionMs) {
 }
 
 function updateTranslation(index) {
-  if (!showTranslation || !cuesEnglish || index < 0 || index >= cuesEnglish.length) {
+  // The translation is looked up BY INDEX, so it is only meaningful against the
+  // exact list it was produced from. A Devanagari track fetched as its own
+  // LRCLIB entry can have a different line count from the Latin one, which
+  // would otherwise caption each line with a neighbour's translation.
+  const aligned = Boolean(cuesEnglish) && cuesEnglish.length === cues.length;
+  if (!showTranslation || !aligned || index < 0 || index >= cuesEnglish.length) {
     els.translation.classList.remove('is-visible');
     els.translation.textContent = '';
     return;
@@ -653,7 +688,7 @@ function frame() {
     let targetBuildup = 0;
     if (cues.length > 0) {
       const nextIdx = activeIndex + 1;
-      const gapStart = activeIndex >= 0 ? cues[activeIndex].timeMs : 0;
+      const gapStart = activeIndex >= 0 ? lineEndMs(activeIndex) : 0;
       if (nextIdx < cues.length && cues[nextIdx].timeMs - gapStart > GAP_DROP_MS) {
         const toNext = cues[nextIdx].timeMs - positionMs;
         if (toNext > 0 && toNext < BUILDUP_WINDOW) targetBuildup = 1 - toNext / BUILDUP_WINDOW;
@@ -1683,6 +1718,23 @@ function setStatus(text) {
   els.status.textContent = text;
 }
 
+/**
+ * Whether an async payload (lyrics, artwork, mood, …) belongs to the track that
+ * is playing right now.
+ *
+ * These arrive well after the track that triggered them, so a stale one must be
+ * dropped rather than applied to whatever is playing. Title alone is not an
+ * identity — covers, remixes and the "Intro"/"Interlude" tracks every rap album
+ * ships collide constantly — so the artist is compared too.
+ *
+ * @param {{title?: string, artist?: string}|undefined} track payload's track
+ * @returns {boolean}
+ */
+function isForCurrentTrack(track) {
+  if (!currentTrack || !track) return true; // nothing to contradict it
+  return track.title === currentTrack.title && track.artist === currentTrack.artist;
+}
+
 function clearColumn() {
   els.column.textContent = '';
   lineEls = [];
@@ -2113,13 +2165,13 @@ window.player.onTrack((track) => {
    live audio capture is off, so drops/kicks fire — and anticipate — from memory. */
 window.player.onBeatmap((data) => {
   if (!window.BeatMap) return;
-  if (currentTrack && data.track && data.track.title !== currentTrack.title) return;
+  if (!isForCurrentTrack(data.track)) return;
   window.BeatMap.load(data.beatmap || null);
 });
 
 /* Cover art + richer artist credit fetched in the main process. */
 window.player.onArtwork((data) => {
-  if (currentTrack && data.track && data.track.title !== currentTrack.title) return;
+  if (!isForCurrentTrack(data.track)) return;
   if (data.artwork) loadArtImage(data.artwork);
   maybeEnrichArtists(data.artistName);
   updateHero();
@@ -2134,7 +2186,7 @@ window.player.onTick((state) => {
 
 /* Sentiment-driven graphics: recolour + re-pace the visuals to the song's mood. */
 window.player.onMood((data) => {
-  if (currentTrack && data.track && data.track.title !== currentTrack.title) return;
+  if (!isForCurrentTrack(data.track)) return;
   if (Array.isArray(data.palette) && data.palette.length >= 4) {
     palette = data.palette;
     baseTint = palette[0];
@@ -2147,7 +2199,7 @@ window.player.onMood((data) => {
 });
 
 window.player.onLyrics((payload) => {
-  if (currentTrack && payload.track && payload.track.title !== currentTrack.title) return;
+  if (!isForCurrentTrack(payload.track)) return;
   cuesLatin = payload.cues || [];
   cuesDevanagari = payload.cuesDevanagari || null;
   transliterationAvailable = Boolean(payload.transliterationAvailable);
@@ -2198,7 +2250,7 @@ function showSourceBadge(origin) {
 }
 
 window.player.onTranslation((payload) => {
-  if (currentTrack && payload.track && payload.track.title !== currentTrack.title) return;
+  if (!isForCurrentTrack(payload.track)) return;
   switch (payload.status) {
     case 'translating': setStatus('translating…'); break;
     case 'ok':
