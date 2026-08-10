@@ -1,7 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, globalShortcut, ipcMain, screen, session, desktopCapturer } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen, session, desktopCapturer, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { identify } = require('./tags');
+const { AppTray } = require('./tray');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -71,6 +74,41 @@ let presyncToken = 0;
 
 /** The track currently playing, used to key per-track sync offsets. */
 let currentTrack = null;
+
+/* True while the renderer is playing a local file. Suppresses SMTC so a paused
+   Spotify in the background cannot take the app's current track away. */
+let localPlaybackActive = false;
+
+/** @type {import('./tray').AppTray|null} */
+let appTray = null;
+
+/**
+ * Identify a local audio file without reading all of it.
+ *
+ * Only the opening bytes are read: an ID3v2 tag lives at the very start, and a
+ * library scan of a few hundred files should not pull hundreds of megabytes
+ * through memory to find two strings.
+ *
+ * @param {string} filePath
+ * @returns {{localPath: string, title: string, artist: string}}
+ */
+function describeLocalFile(filePath) {
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      head = Buffer.alloc(64 * 1024);
+      const read = fs.readSync(fd, head, 0, head.length, 0);
+      head = head.subarray(0, read);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Unreadable: identify() falls back to the filename, which is enough.
+  }
+  const { title, artist } = identify(filePath, head);
+  return { localPath: filePath, title, artist };
+}
 
 /**
  * True while a Whisper pass is running. Transcription is CPU-bound and holds
@@ -543,15 +581,18 @@ async function ensureDevanagari(key) {
 }
 
 /** Register global hotkeys. */
+/** Show or hide the overlay. Shared by the hotkey and the tray. */
+function toggleWindow() {
+  if (!win) return;
+  if (win.isVisible()) win.hide();
+  else win.show();
+}
+
 function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Alt+Left', () => setOffsetMs(activeOffsetMs() - 100));
   globalShortcut.register('CommandOrControl+Alt+Right', () => setOffsetMs(activeOffsetMs() + 100));
   globalShortcut.register('CommandOrControl+Alt+0', () => setOffsetMs(0));
-  globalShortcut.register('CommandOrControl+Alt+H', () => {
-    if (!win) return;
-    if (win.isVisible()) win.hide();
-    else win.show();
-  });
+  globalShortcut.register('CommandOrControl+Alt+H', toggleWindow);
 }
 
 app.whenReady().then(() => {
@@ -567,9 +608,33 @@ app.whenReady().then(() => {
   win = createWindow();
   registerShortcuts();
 
+  /* The overlay has no window chrome and hides on a hotkey, so once it is
+     running nothing on screen says it exists. The tray fixes that and gives
+     background work somewhere to report that is not inside a hidden HUD. */
+  appTray = new AppTray({ onToggleWindow: toggleWindow, onQuit: () => app.quit() });
+  appTray.start();
+
+  /* Background work, forwarded from the renderer's job map. Only the jobs in
+     tray.js's NOTIFY_ON_DONE raise an OS notification when they finish. */
+  ipcMain.handle('report-jobs', (_e, payload) => {
+    if (!appTray) return { status: 'ignored' };
+    appTray.setJobs((payload && payload.jobs) || []);
+    if (payload && payload.finished) {
+      appTray.jobFinished(payload.finished.id, payload.finished.label);
+    }
+    return { status: 'ok' };
+  });
+
   const watcher = new SmtcWatcher({ intervalMs: 250 });
 
+  /*
+    While a local file is playing we own the "current track" and SMTC must not
+    speak. Without this, Spotify or a browser tab left paused in the background
+    keeps announcing its own song and the two fight over every downstream
+    consumer — lyrics, artwork, the cache key, the dancers.
+  */
   watcher.on('track', (rawTrack) => {
+    if (localPlaybackActive) return;
     // Clean the artist credit once, here at the SMTC boundary, so every
     // consumer downstream sees the same tidy value: lyric matching, artwork
     // search, the dancer registry, the cache key and the on-screen label.
@@ -577,6 +642,7 @@ app.whenReady().then(() => {
     // "VEVO"; both wreck matching and look wrong on screen.
     const track = { ...rawTrack, artist: cleanArtist(rawTrack.artist) };
     currentTrack = track;
+    if (appTray) appTray.setTrack(track);
     send('track', { ...track, ...paletteForTrack(track) });
     send('offset', { offsetMs: activeOffsetMs(), perTrack: true });
     // Hand the renderer everything already learned about this song (null on a
@@ -591,10 +657,12 @@ app.whenReady().then(() => {
   });
 
   watcher.on('tick', (state) => {
+    if (localPlaybackActive) return;   // the renderer owns position for local files
     send('tick', { ...state, positionMs: (state.positionMs ?? 0) - activeOffsetMs() });
   });
 
   watcher.on('idle', () => {
+    if (localPlaybackActive) return;
     currentTrack = null;
     send('idle', null);
   });
@@ -712,6 +780,95 @@ app.whenReady().then(() => {
     const heatmap = payload && payload.heatmap;
     if (!track || !heatmap || !Array.isArray(heatmap.bins)) return { status: 'ignored' };
     llmCache.merge(trackKey(track), { heatmap, title: track.title || null, artist: track.artist || null });
+    return { status: 'ok' };
+  });
+
+  /* ------------------------------------------------------- local playback */
+
+  /*
+    Opening local files turns the overlay into a player, and the payoff is
+    bigger than convenience: with the decoded samples in hand the renderer can
+    measure the WHOLE song before it plays (see src/renderer/analyze.js), so the
+    heat map, the tempo and anticipation all work on the first play with no
+    loopback capture at all. The `♫` gap simply does not exist for local files.
+  */
+  const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'flac', 'wav', 'ogg', 'opus', 'aac', 'wma'];
+
+  ipcMain.handle('open-local-files', async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Add songs',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Audio', extensions: AUDIO_EXTENSIONS }],
+    });
+    if (res.canceled) return [];
+    return res.filePaths.map(describeLocalFile);
+  });
+
+  ipcMain.handle('open-local-folder', async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Add a folder of songs',
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths[0]) return [];
+    const dir = res.filePaths[0];
+    let names = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch (err) {
+      console.error('[local] cannot read folder:', err.message);
+      return [];
+    }
+    return names
+      .filter((n) => AUDIO_EXTENSIONS.includes(path.extname(n).slice(1).toLowerCase()))
+      .map((n) => describeLocalFile(path.join(dir, n)));
+  });
+
+  /*
+    Hand the renderer the raw bytes. It uses them twice from this single read:
+    once as a Blob URL for the <audio> element, and once through
+    decodeAudioData for the offline analysis. Sending the buffer rather than a
+    path also sidesteps file:// escaping and keeps the CSP surface to blob:.
+  */
+  ipcMain.handle('read-local-file', (_e, filePath) => {
+    try {
+      const data = fs.readFileSync(filePath);
+      // Transfer the bytes themselves, not a Node Buffer view of a pool.
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    } catch (err) {
+      console.error('[local] read failed:', err.message);
+      return null;
+    }
+  });
+
+  /* The renderer announcing which local song is now playing. Routed through the
+     same path as an SMTC track so lyrics, artwork, mood and the cache all work
+     exactly as they do for any other player. */
+  ipcMain.handle('set-local-track', (_e, incoming) => {
+    if (!incoming || !incoming.title) return { status: 'ignored' };
+    localPlaybackActive = true;
+    const track = {
+      title: incoming.title,
+      artist: cleanArtist(incoming.artist || ''),
+      durationMs: incoming.durationMs || 0,
+      localPath: incoming.localPath || null,
+    };
+    currentTrack = track;
+    if (appTray) appTray.setTrack(track);
+    send('track', { ...track, ...paletteForTrack(track) });
+    send('offset', { offsetMs: activeOffsetMs(), perTrack: true });
+    const saved = llmCache.get(trackKey(track));
+    send('beatmap', { track, beatmap: (saved && saved.beatmap) || null });
+    send('heatmap', { track, heatmap: (saved && saved.heatmap) || null });
+    loadLyricsFor(track);
+    loadArtworkFor(track);
+    return { status: 'ok' };
+  });
+
+  /* Hand control back to whatever else is playing on the machine. */
+  ipcMain.handle('end-local-playback', () => {
+    localPlaybackActive = false;
+    currentTrack = null;
+    send('idle', null);
     return { status: 'ok' };
   });
 

@@ -79,6 +79,8 @@ class LlmCache {
         artist: e.artist || null,
         hasCues: Array.isArray(e.cues) && e.cues.length > 0,
         hasBeatmap: Boolean(e.beatmap),
+        // The energy arc — what anticipation and the timeline read from.
+        hasHeatmap: Boolean(e.heatmap),
         updatedAt: e.updatedAt || 0,
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);

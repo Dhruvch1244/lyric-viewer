@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self';" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:;" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -74,6 +74,7 @@
         <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false">⚡</button>
         <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
+        <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
         <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
@@ -104,10 +105,6 @@
           <button id="presync-run" class="chip" type="button">Pre-sync</button>
           <span id="presync-status" class="listbox__status" role="status"></span>
         </div>
-        <div class="listbox__synced">
-          <div class="listbox__label">Synced library <span id="synced-count" class="listbox__status"></span></div>
-          <ul id="synced-list" class="synced-list"></ul>
-        </div>
       </div>
       <div id="hud-progress" class="progress">
         <div id="hud-progress-fill" class="progress__fill"></div>
@@ -117,6 +114,33 @@
         <span>Ctrl+Alt+H hide</span>
       </div>
     </footer>
+
+    <!-- The library. A proper panel rather than the 30vh list buried in the HUD
+         that it replaces: cover art, what is known about each song, a search,
+         and — now that the app can play files itself — click to play. -->
+    <section id="library" class="library" hidden aria-label="Song library">
+      <header class="library__bar">
+        <h2 class="library__title">Library</h2>
+        <input id="library-search" class="library__search" type="search"
+               placeholder="Search title or artist…" spellcheck="false" />
+        <button id="library-add" class="chip" type="button">Add songs…</button>
+        <button id="library-add-folder" class="chip" type="button">Add folder…</button>
+        <span id="library-count" class="library__count"></span>
+        <button id="library-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+      </header>
+      <div id="library-grid" class="library__grid"></div>
+      <p id="library-empty" class="library__empty" hidden></p>
+    </section>
+
+    <!-- Transport for local playback. Only shown while a local file is loaded;
+         SMTC playback is controlled by whatever app owns it. -->
+    <div id="transport" class="transport" hidden>
+      <button id="tr-prev" class="chip" type="button" title="Previous">⏮</button>
+      <button id="tr-play" class="chip" type="button" title="Play / pause (Space)">⏸</button>
+      <button id="tr-next" class="chip" type="button" title="Next">⏭</button>
+      <span id="tr-now" class="transport__now"></span>
+      <button id="tr-stop" class="chip chip--muted" type="button" title="Stop and hand back to other players">✕</button>
+    </div>
 
     <!-- One-time nudge toward audio capture. Most of what the app learns about
          a song — its energy arc, its tempo, when a drop is coming — needs
@@ -143,6 +167,8 @@
     <script src="wordtiming.js"></script>
     <script src="tempo.js"></script>
     <script src="heatmap.js"></script>
+    <script src="analyze.js"></script>
+    <script src="player.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

@@ -39,8 +39,21 @@ const els = {
   presyncInput: document.getElementById('presync-input'),
   presyncRun: document.getElementById('presync-run'),
   presyncStatus: document.getElementById('presync-status'),
-  syncedList: document.getElementById('synced-list'),
-  syncedCount: document.getElementById('synced-count'),
+  libraryBtn: document.getElementById('btn-library'),
+  library: document.getElementById('library'),
+  libraryGrid: document.getElementById('library-grid'),
+  librarySearch: document.getElementById('library-search'),
+  libraryAdd: document.getElementById('library-add'),
+  libraryAddFolder: document.getElementById('library-add-folder'),
+  libraryCount: document.getElementById('library-count'),
+  libraryClose: document.getElementById('library-close'),
+  libraryEmpty: document.getElementById('library-empty'),
+  transport: document.getElementById('transport'),
+  trPrev: document.getElementById('tr-prev'),
+  trPlay: document.getElementById('tr-play'),
+  trNext: document.getElementById('tr-next'),
+  trStop: document.getElementById('tr-stop'),
+  trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
@@ -3060,9 +3073,37 @@ const jobs = new Map();
  * @param {string} name stable job key, e.g. 'whisper'
  * @param {string|null} label what to show; null/'' ends the job
  */
+/**
+ * What to say when a job finishes, for the few that notify.
+ * @param {string} name @returns {string}
+ */
+function jobDoneLabel(name) {
+  const song = currentTrack ? `${currentTrack.title}` : 'the last song';
+  if (name === 'transcribe') return `Finished transcribing ${song} — it will be word-synced from now on`;
+  return `${name} finished`;
+}
+
 function setJob(name, label) {
+  const wasRunning = jobs.has(name);
   if (label) jobs.set(name, label);
   else jobs.delete(name);
+
+  /*
+    Mirror the job map to the tray. The HUD chip is inside a bar that stays
+    invisible until the cursor moves, so work taking minutes could finish with
+    nothing on screen having said it started. The tray tooltip always shows it,
+    and the few jobs worth interrupting for raise a notification (see
+    NOTIFY_ON_DONE in src/main/tray.js).
+  */
+  if (window.player.reportJobs) {
+    const finished = wasRunning && !label ? { id: name, label: jobDoneLabel(name) } : null;
+    // Never let a tray that failed to start (it is a convenience) surface as an
+    // unhandled rejection in the renderer.
+    window.player.reportJobs({
+      jobs: [...jobs.entries()].map(([id, text]) => ({ id, label: text })),
+      finished,
+    }).catch(() => { /* tray unavailable */ });
+  }
 
   if (!els.work) return;
   if (jobs.size === 0) {
@@ -4203,45 +4244,247 @@ function closePresync() {
   document.body.classList.remove('keybox-open');
 }
 
-/**
- * Fetch the synced-songs library from main and render it into the panel. Each row
- * shows title · artist and badges: ✓ lyrics cached, ♪ beat map learned.
- */
+/* ----------------------------------------------------------------- library */
+
+/*
+  The library.
+
+  This replaces a `<ul>` capped at 30vh inside the pre-sync panel, inside a HUD
+  that is invisible until the cursor moves. Songs are what this app is about;
+  they were three lines of small text behind two disclosures.
+
+  Every song the app has ever seen is here — cached lyrics, learned beat maps
+  and heat maps — alongside anything added from disk, and a card is now
+  clickable because the app can play files itself.
+*/
+
+/** Everything known, before the search filter. */
+let libraryItems = [];
+/** Local files added this session, keyed by cache key so they merge with it. */
+const localFiles = new Map();
+
+function libraryKey(artist, title) {
+  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
+}
+
+/** Fetch the cached library from main and merge in locally-added files. */
 async function refreshSyncedList() {
-  if (!els.syncedList || !window.player.listSynced) return;
-  let items = [];
+  if (!els.libraryGrid || !window.player.listSynced) return;
+  let cached = [];
   try {
-    items = await window.player.listSynced();
-  } catch { /* leave the list as-is on failure */ }
+    cached = await window.player.listSynced();
+  } catch { /* show whatever we already have */ }
 
-  els.syncedList.textContent = '';
-  if (els.syncedCount) els.syncedCount.textContent = items.length ? `(${items.length})` : '';
+  const merged = new Map();
+  for (const it of cached) {
+    merged.set(libraryKey(it.artist, it.title), {
+      title: it.title || it.key,
+      artist: it.artist || '',
+      hasCues: Boolean(it.hasCues),
+      hasBeatmap: Boolean(it.hasBeatmap),
+      hasHeatmap: Boolean(it.hasHeatmap),
+      localPath: null,
+    });
+  }
+  // A local file for a song we already know about should light up that card
+  // rather than appearing twice.
+  for (const [key, file] of localFiles) {
+    const existing = merged.get(key);
+    if (existing) existing.localPath = file.localPath;
+    else {
+      merged.set(key, {
+        title: file.title, artist: file.artist,
+        hasCues: false, hasBeatmap: false, hasHeatmap: false,
+        localPath: file.localPath,
+      });
+    }
+  }
 
-  if (items.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'synced-empty';
-    li.textContent = 'Nothing synced yet — play or pre-sync some songs.';
-    els.syncedList.appendChild(li);
-    return;
+  libraryItems = [...merged.values()];
+  renderLibrary();
+}
+
+/** Draw the cards for the current search term. */
+function renderLibrary() {
+  if (!els.libraryGrid) return;
+  const term = (els.librarySearch && els.librarySearch.value || '').toLowerCase().trim();
+  const items = term
+    ? libraryItems.filter((it) => `${it.title} ${it.artist}`.toLowerCase().includes(term))
+    : libraryItems;
+
+  els.libraryGrid.textContent = '';
+  if (els.libraryCount) {
+    els.libraryCount.textContent = term
+      ? `${items.length} of ${libraryItems.length}`
+      : `${libraryItems.length} song${libraryItems.length === 1 ? '' : 's'}`;
+  }
+
+  if (els.libraryEmpty) {
+    const empty = items.length === 0;
+    els.libraryEmpty.hidden = !empty;
+    els.libraryEmpty.textContent = libraryItems.length === 0
+      ? 'Nothing here yet — add songs from disk, or play something and it will appear.'
+      : 'No songs match that search.';
   }
 
   const frag = document.createDocumentFragment();
   for (const it of items) {
-    const li = document.createElement('li');
-    const title = document.createElement('span');
-    title.className = 'synced-title';
-    title.textContent = it.title || it.key;
-    const artist = document.createElement('span');
-    artist.className = 'synced-artist';
-    artist.textContent = it.artist || '';
-    const badges = document.createElement('span');
-    badges.className = 'synced-badges';
-    badges.textContent = `${it.hasCues ? '✓' : '·'}${it.hasBeatmap ? ' ♪' : ''}`;
-    badges.title = `${it.hasCues ? 'lyrics cached' : 'no lyrics'}${it.hasBeatmap ? ' · beat map learned' : ''}`;
-    li.append(title, artist, badges);
-    frag.appendChild(li);
+    frag.appendChild(libraryCard(it));
   }
-  els.syncedList.appendChild(frag);
+  els.libraryGrid.appendChild(frag);
+}
+
+/**
+ * One card. Playable only when we have the file — a cached song we can merely
+ * describe is shown but disabled, which is honest about what clicking would do.
+ * @param {object} it
+ * @returns {HTMLElement}
+ */
+function libraryCard(it) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'library__card';
+  if (!it.localPath) {
+    card.disabled = true;
+    card.title = 'Known from an earlier play — add the file to play it here';
+  } else {
+    card.title = `Play ${it.title}`;
+    card.addEventListener('click', () => {
+      closeLibrary();
+      window.LocalPlayer.enqueue([{
+        localPath: it.localPath, title: it.title, artist: it.artist,
+      }]);
+    });
+  }
+
+  const art = document.createElement('div');
+  art.className = 'library__art';
+  art.textContent = it.localPath ? '▶' : '♪';
+
+  const meta = document.createElement('div');
+  meta.className = 'library__meta';
+  const song = document.createElement('div');
+  song.className = 'library__song';
+  song.textContent = it.title;
+  const artist = document.createElement('div');
+  artist.className = 'library__artist';
+  artist.textContent = it.artist || 'Unknown artist';
+
+  // What the app already knows about this song, at a glance.
+  const badges = document.createElement('div');
+  badges.className = 'library__badges';
+  for (const [on, label, hint] of [
+    [it.hasCues, 'lyrics', 'lyrics cached — plays offline'],
+    [it.hasBeatmap, 'beats', 'beat map learned'],
+    [it.hasHeatmap, 'shape', 'energy arc learned — anticipation works'],
+  ]) {
+    const b = document.createElement('span');
+    b.className = `library__badge${on ? ' library__badge--on' : ''}`;
+    b.textContent = label;
+    b.title = on ? hint : `no ${label} yet`;
+    badges.appendChild(b);
+  }
+
+  meta.append(song, artist, badges);
+  card.append(art, meta);
+  return card;
+}
+
+function openLibrary() {
+  if (!els.library) return;
+  els.library.hidden = false;
+  document.body.classList.add('show-cursor');
+  refreshSyncedList();
+  if (els.librarySearch) els.librarySearch.focus();
+}
+
+function closeLibrary() {
+  if (els.library) els.library.hidden = true;
+}
+
+/** Add files from disk to the library, and start playing them. */
+async function addLocalFiles(fromFolder) {
+  const picked = fromFolder
+    ? await window.player.openLocalFolder()
+    : await window.player.openLocalFiles();
+  if (!picked || picked.length === 0) return;
+  for (const f of picked) localFiles.set(libraryKey(f.artist, f.title), f);
+  refreshSyncedList();
+  window.LocalPlayer.enqueue(picked);
+}
+
+if (els.libraryBtn) els.libraryBtn.addEventListener('click', openLibrary);
+if (els.libraryClose) els.libraryClose.addEventListener('click', closeLibrary);
+if (els.librarySearch) els.librarySearch.addEventListener('input', renderLibrary);
+if (els.libraryAdd) els.libraryAdd.addEventListener('click', () => addLocalFiles(false));
+if (els.libraryAddFolder) els.libraryAddFolder.addEventListener('click', () => addLocalFiles(true));
+
+/* ------------------------------------------------------- local playback UI */
+
+/*
+  The transport only exists while a local file is loaded. When the overlay is
+  watching Spotify, drawing play/pause buttons that cannot control it would be
+  a lie about what this app can do.
+*/
+function updateTransport() {
+  if (!els.transport || !window.LocalPlayer) return;
+  const active = window.LocalPlayer.isActive();
+  els.transport.hidden = !active;
+  if (!active) return;
+  const el = window.LocalPlayer.audioElement();
+  if (els.trPlay) els.trPlay.textContent = el && el.paused ? '▶' : '⏸';
+  if (els.trNow) {
+    const q = window.LocalPlayer.queue;
+    const i = window.LocalPlayer.index;
+    els.trNow.textContent = q.length > 1 ? `${i + 1} / ${q.length}` : '';
+  }
+}
+
+if (window.LocalPlayer) {
+  /*
+    A local file drives the whole app: position comes from `audio.currentTime`
+    (exact, where SMTC is a 250ms poll), and the element is tapped directly for
+    the reactive envelope — so the visuals react with no loopback capture and no
+    permission prompt at all.
+  */
+  window.LocalPlayer.on('track', (track) => {
+    durationMs = track.durationMs || 0;
+    updateTransport();
+    const el = window.LocalPlayer.audioElement();
+    if (el && !audioEnabled && window.AudioReactive) {
+      audioEnabled = window.AudioReactive.startFromElement(el);
+      els.audioBtn.setAttribute('aria-pressed', String(audioEnabled));
+      // Playing our own file answers the capture question for good.
+      closeCaptureNudge();
+    }
+  });
+
+  window.LocalPlayer.on('tick', (state) => {
+    playbackStatus = state.status;
+    anchorPositionMs = state.positionMs;
+    anchorAt = performance.now();
+    if (state.durationMs) durationMs = state.durationMs;
+    document.body.classList.toggle('is-playing', state.status === 'Playing');
+    updateTransport();
+  });
+
+  /* The whole song measured before the first chorus: the timeline is full, the
+     tempo is known and a drop can be anticipated — on play one. */
+  window.LocalPlayer.on('analysed', (track, summary) => {
+    const bpm = summary.bpm ? ` · ${summary.bpm.toFixed(0)} BPM` : '';
+    setStatus(`analysed ${track.title} in ${Math.round(summary.ms)}ms${bpm}`);
+    if (summary.bpm && window.Tempo) {
+      tempoLocked = true;
+      tempoBpm = summary.bpm;
+      beatPeriodMs = 60000 / summary.bpm;
+    }
+    updateBpmChip();
+  });
+
+  if (els.trPlay) els.trPlay.addEventListener('click', () => { window.LocalPlayer.togglePlay(); updateTransport(); });
+  if (els.trNext) els.trNext.addEventListener('click', () => window.LocalPlayer.next());
+  if (els.trPrev) els.trPrev.addEventListener('click', () => window.LocalPlayer.previous());
+  if (els.trStop) els.trStop.addEventListener('click', () => { window.LocalPlayer.stop(); updateTransport(); });
 }
 
 els.presyncBtn.addEventListener('click', () => {

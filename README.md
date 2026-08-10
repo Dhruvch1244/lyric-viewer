@@ -82,6 +82,7 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
+| `♪ Library` chip | Your songs — search, see what is known about each, add files from disk, click to play |
 | `♫` chip | Audio-reactive mode (captures system sound) — also what lets the app *learn* a song |
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
 
@@ -114,6 +115,14 @@ measured tempo the platter and the dancers run on, and anticipation — needs th
 `♫` chip. The app asks about this once, twenty seconds into a song, and never
 raises it again either way. It is not enabled by default on purpose: recording
 system audio without being asked is not the app's call.
+
+**...unless you play the song here.** Open files or a folder from the Library and
+the app plays them itself, which changes everything about the above: the decoded
+audio is already in hand, so the whole track is measured before the first
+chorus. The timeline is full, the tempo is locked and a drop can be anticipated
+**on the first play**, with no capture and no permission prompt. Position also
+comes from the audio element rather than a 250ms poll, so the lyric clock is
+exact.
 
 **Anticipation.** Once a song's heat map is on disk, the app can read it
 *forwards* — the only thing here that knows what has not happened yet. A few

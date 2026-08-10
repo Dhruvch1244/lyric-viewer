@@ -77,7 +77,51 @@
     mediaStream = stream;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-    const src = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
+    buildAnalyser(audioCtx.createMediaStreamSource(new MediaStream(audioTracks)));
+    running = true;
+    env.active = true;
+    return true;
+  }
+
+  /**
+   * Drive the reactive envelope from an audio ELEMENT rather than from screen
+   * capture.
+   *
+   * This is the local-playback path, and it is strictly better than loopback:
+   * no permission prompt, no screen-capture stream, no other application's
+   * sound mixed in, and the element is reconnected to the destination so
+   * playback is unaffected.
+   *
+   * @param {HTMLMediaElement} media
+   * @returns {boolean}
+   */
+  function startFromElement(media) {
+    if (!media) return false;
+    if (running) stop();
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      const src = audioCtx.createMediaElementSource(media);
+      buildAnalyser(src);
+      // A MediaElementSource diverts the element's output into the graph, so it
+      // must be routed onward or the song plays silently.
+      src.connect(audioCtx.destination);
+      running = true;
+      env.active = true;
+      return true;
+    } catch (err) {
+      console.warn('[audio] element capture failed:', err && err.message);
+      stop();
+      return false;
+    }
+  }
+
+  /**
+   * Build the analyser and connect a source to it. Shared by both entry points
+   * so the tuning below cannot drift between them.
+   * @param {AudioNode} src
+   */
+  function buildAnalyser(src) {
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                  // 512 bins
     /*
@@ -98,11 +142,7 @@
     analyser.minDecibels = -95;
     analyser.maxDecibels = -12;
     src.connect(analyser);
-
     freq = new Uint8Array(analyser.frequencyBinCount);
-    running = true;
-    env.active = true;
-    return true;
   }
 
   /** Release the capture stream and reset detector state. */
@@ -204,5 +244,7 @@
     return running ? mediaStream : null;
   }
 
-  window.AudioReactive = { start, stop, sample, isActive: () => running, getStream };
+  window.AudioReactive = {
+    start, startFromElement, stop, sample, isActive: () => running, getStream,
+  };
 })();
