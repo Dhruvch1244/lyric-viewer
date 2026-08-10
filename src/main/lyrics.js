@@ -194,13 +194,76 @@ function scoreCandidate(candidate, target) {
 }
 
 /**
+ * Fold empty-text stamps into the preceding cue as an explicit end time.
+ *
+ * LRC files mark the *end* of a sung line — the start of an instrumental
+ * stretch — with a timestamped but textless line:
+ *
+ *     [00:14.15] Yeah
+ *     [00:17.73]              <- "Yeah" stops here; music until the next line
+ *     [00:27.85] I've been tryna call
+ *
+ * Every one of the ten LRCLIB entries sampled while writing this carries
+ * between 1 and 8 of them. Kept as cues they became *active lines with no
+ * text*, which blanked the lyric column AND suppressed the song-title hero
+ * (which only appears when no line is active) — so the screen showed nothing
+ * at all for the length of the gap.
+ *
+ * Turning them into `endMs` on the line they close keeps the information they
+ * actually carry. The renderer uses it to end word-highlighting on time, to
+ * measure line energy against the real sung length, and to hand the centre to
+ * the hero at the exact moment singing stops rather than guessing from a word
+ * count.
+ *
+ * Also used to repair cue lists cached by earlier versions, which stored the
+ * blank cues verbatim; `kept` reports the surviving source indices so parallel
+ * lists (e.g. a cached English translation) can be filtered to match.
+ *
+ * @param {Array<{timeMs: number, text: string, endMs?: number}>} cues
+ * @returns {{cues: Array<{timeMs: number, text: string, endMs?: number}>, kept: number[]}}
+ */
+function normaliseCues(cues) {
+  if (!Array.isArray(cues)) return { cues: [], kept: [] };
+
+  const out = [];
+  const kept = [];
+
+  cues.forEach((cue, index) => {
+    if (!cue) return;
+    const timeMs = Number(cue.timeMs);
+    if (!Number.isFinite(timeMs)) return;
+    const text = typeof cue.text === 'string' ? cue.text.trim() : '';
+
+    if (!text) {
+      // A gap marker: it closes the line before it. Consecutive markers leave
+      // the first (earliest) end time in place, and one before any sung line
+      // has nothing to close, so it is simply dropped.
+      const last = out[out.length - 1];
+      if (last && last.endMs === undefined && timeMs > last.timeMs) last.endMs = timeMs;
+      return;
+    }
+
+    const next = { timeMs, text };
+    const endMs = Number(cue.endMs);
+    if (Number.isFinite(endMs) && endMs > timeMs) next.endMs = endMs;
+    out.push(next);
+    kept.push(index);
+  });
+
+  return { cues: out, kept };
+}
+
+/**
  * Parse an LRC document into ordered, timestamped cues.
  *
+ * Textless stamps become `endMs` on the line they close rather than cues of
+ * their own — see normaliseCues.
+ *
  * @param {string} lrc Raw LRC text.
- * @returns {Array<{timeMs: number, text: string}>} Sorted cues.
+ * @returns {Array<{timeMs: number, text: string, endMs?: number}>} Sorted cues.
  */
 function parseLrc(lrc) {
-  const cues = [];
+  const stamped = [];
   const lineTag = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
   for (const rawLine of lrc.split(/\r?\n/)) {
@@ -218,11 +281,13 @@ function parseLrc(lrc) {
     if (stamps.length === 0) continue;
 
     const text = rawLine.replace(lineTag, '').trim();
-    for (const timeMs of stamps) cues.push({ timeMs, text });
+    for (const timeMs of stamps) stamped.push({ timeMs, text });
   }
 
-  cues.sort((a, b) => a.timeMs - b.timeMs);
-  return cues;
+  // Sort before folding: a gap marker only closes the line it follows in TIME,
+  // which is not necessarily the line it follows in the file.
+  stamped.sort((a, b) => a.timeMs - b.timeMs);
+  return normaliseCues(stamped).cues;
 }
 
 /**
@@ -459,6 +524,7 @@ module.exports = {
   tokenSimilarity,
   scoreCandidate,
   parseLrc,
+  normaliseCues,
   devanagariRatio,
   gurmukhiRatio,
   isDevanagariCues,

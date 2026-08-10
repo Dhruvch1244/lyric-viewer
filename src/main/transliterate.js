@@ -74,8 +74,14 @@ async function convertBatch(lines) {
 
 /**
  * Transliterate a full cue list into Devanagari, preserving timing.
- * @param {Array<{timeMs: number, text: string}>} cues
- * @returns {Promise<Array<{timeMs: number, text: string}>>}
+ *
+ * This list replaces the Latin one on screen when the user switches script, so
+ * it carries the whole timing shape across — including `endMs`, the point where
+ * a line stops being sung. Dropping it would silently disable gap handling
+ * (word highlighting, the song-title hero) in Devanagari mode only.
+ *
+ * @param {Array<{timeMs: number, text: string, endMs?: number}>} cues
+ * @returns {Promise<Array<{timeMs: number, text: string, endMs?: number}>>}
  */
 async function toDevanagari(cues) {
   const texts = cues.map((cue) => cue.text);
@@ -83,7 +89,7 @@ async function toDevanagari(cues) {
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     converted.push(...(await convertBatch(texts.slice(i, i + BATCH_SIZE))));
   }
-  return cues.map((cue, i) => ({ timeMs: cue.timeMs, text: converted[i] ?? cue.text }));
+  return cues.map((cue, i) => ({ ...cue, text: converted[i] ?? cue.text }));
 }
 
 module.exports = { toDevanagari, isTransliterationAvailable };

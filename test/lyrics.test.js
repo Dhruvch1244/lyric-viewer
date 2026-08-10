@@ -17,6 +17,7 @@ const {
   tokenSimilarity,
   scoreCandidate,
   parseLrc,
+  normaliseCues,
   devanagariRatio,
   gurmukhiRatio,
   isDevanagariCues,
@@ -92,6 +93,81 @@ test('parseLrc expands multiple stamps on a single line', () => {
     { timeMs: 1000, text: 'repeat' },
     { timeMs: 5000, text: 'repeat' },
   ]);
+});
+
+/*
+  Gap markers — timestamped LRC lines with no text. Every one of the ten LRCLIB
+  entries sampled while writing these carried between 1 and 8 of them, and as
+  cues they rendered as empty active lines that blanked the screen.
+*/
+
+test('parseLrc folds a blank gap marker into the previous cue as endMs', () => {
+  const cues = parseLrc('[00:14.15]Yeah\n[00:17.73]\n[00:27.85]Been tryna call');
+  assert.deepEqual(cues, [
+    { timeMs: 14150, text: 'Yeah', endMs: 17730 },
+    { timeMs: 27850, text: 'Been tryna call' },
+  ]);
+});
+
+test('parseLrc folds a whitespace-only gap marker too', () => {
+  const cues = parseLrc('[00:01.00]sung\n[00:04.00]   ');
+  assert.deepEqual(cues, [{ timeMs: 1000, text: 'sung', endMs: 4000 }]);
+});
+
+test('parseLrc drops a gap marker that has no line to close', () => {
+  const cues = parseLrc('[00:00.00]\n[00:05.00]first words');
+  assert.deepEqual(cues, [{ timeMs: 5000, text: 'first words' }]);
+});
+
+test('parseLrc keeps the earliest end when gap markers repeat', () => {
+  const cues = parseLrc('[00:01.00]sung\n[00:03.00]\n[00:04.00]\n[00:09.00]next');
+  assert.deepEqual(cues, [
+    { timeMs: 1000, text: 'sung', endMs: 3000 },
+    { timeMs: 9000, text: 'next' },
+  ]);
+});
+
+test('parseLrc folds by time order, not file order', () => {
+  const cues = parseLrc('[00:09.00]late\n[00:03.00]\n[00:01.00]early');
+  assert.deepEqual(cues, [
+    { timeMs: 1000, text: 'early', endMs: 3000 },
+    { timeMs: 9000, text: 'late' },
+  ]);
+});
+
+test('normaliseCues repairs a cue list cached before gap markers were folded', () => {
+  const stored = [
+    { timeMs: 1000, text: 'one' },
+    { timeMs: 3000, text: '' },
+    { timeMs: 9000, text: 'two' },
+  ];
+  const { cues, kept } = normaliseCues(stored);
+  assert.deepEqual(cues, [
+    { timeMs: 1000, text: 'one', endMs: 3000 },
+    { timeMs: 9000, text: 'two' },
+  ]);
+  // `kept` maps survivors back to their source index so a cached translation
+  // can be filtered to match instead of captioning the wrong lines.
+  assert.deepEqual(kept, [0, 2]);
+});
+
+test('normaliseCues preserves an endMs that is already present', () => {
+  const { cues } = normaliseCues([{ timeMs: 100, text: 'x', endMs: 900 }]);
+  assert.deepEqual(cues, [{ timeMs: 100, text: 'x', endMs: 900 }]);
+});
+
+test('normaliseCues ignores a nonsensical endMs and unusable entries', () => {
+  const { cues } = normaliseCues([
+    { timeMs: 100, text: 'x', endMs: 50 },   // ends before it starts
+    null,
+    { timeMs: 'later', text: 'y' },          // unusable timestamp
+  ]);
+  assert.deepEqual(cues, [{ timeMs: 100, text: 'x' }]);
+});
+
+test('normaliseCues tolerates junk input', () => {
+  assert.deepEqual(normaliseCues(null), { cues: [], kept: [] });
+  assert.deepEqual(normaliseCues([]), { cues: [], kept: [] });
 });
 
 test('devanagariRatio / gurmukhiRatio measure script share of letters only', () => {

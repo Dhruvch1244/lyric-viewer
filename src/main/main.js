@@ -15,7 +15,7 @@ app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
 app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
-const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist } = require('./lyrics');
+const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
@@ -312,10 +312,29 @@ async function loadLyricsFor(track) {
   // with any prior translation/transliteration/mood already attached.
   const disk = llmCache.get(key);
   if (disk && Array.isArray(disk.cues) && disk.cues.length > 0) {
+    /*
+      Repair on read. Versions up to 0.10.0 stored the LRC gap markers (stamped
+      lines with no text) as ordinary cues, and every song has some — see
+      normaliseCues. Folding them into `endMs` here fixes an existing library
+      in place, so nobody has to re-fetch or lose cached LLM work.
+
+      A cached English translation was produced against the un-normalised list,
+      so it is filtered through the same `kept` mask to stay index-aligned; if
+      it does not line up it is dropped and re-derived rather than shown against
+      the wrong lines.
+    */
+    const normalised = normaliseCues(disk.cues);
+    let cuesEnglish = Array.isArray(disk.cuesEnglish) ? disk.cuesEnglish : null;
+    if (cuesEnglish && cuesEnglish.length !== normalised.cues.length) {
+      cuesEnglish = cuesEnglish.length === disk.cues.length
+        ? normalised.kept.map((i) => cuesEnglish[i])
+        : null;
+    }
+
     const payload = {
-      cues: disk.cues,
-      cuesDevanagari: disk.cuesDevanagari || null,
-      cuesEnglish: disk.cuesEnglish || null,
+      cues: normalised.cues,
+      cuesDevanagari: disk.cuesDevanagari ? normaliseCues(disk.cuesDevanagari).cues : null,
+      cuesEnglish,
       language: disk.language,
       mood: disk.mood || null,
       source: disk.source || null,
