@@ -1964,7 +1964,11 @@ window.player.onTranscribeProgress((data) => {
       setStatus('sounds Hindi — re-transcribing properly…');
       break;
     case 'done':
-      setStatus(`learned ${data.lines} lines — ready next play`);
+      setStatus(
+        data.dropped
+          ? `learned ${data.lines} lines (${data.dropped} instrumental dropped) — ready next play`
+          : `learned ${data.lines} lines — ready next play`
+      );
       break;
     case 'empty':
       setStatus('could not make out any lyrics');

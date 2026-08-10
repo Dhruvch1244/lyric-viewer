@@ -28,6 +28,7 @@
  */
 
 const path = require('path');
+const { vocalMask, filterCuesByVocalActivity } = require('./vocals');
 
 /**
  * Model choice, measured on this machine (CPU, q8, 11s clip):
@@ -36,20 +37,33 @@ const path = require('path');
  *   Xenova/whisper-base      11.9s   1.08x realtime   multilingual   <- default
  *   Xenova/whisper-small     37.5s   3.40x realtime   multilingual, most accurate
  *
- * `base` is the default because it runs at roughly realtime, so a 3.5-minute
- * song transcribes in about the time it takes to play. `small` is noticeably
- * more accurate — particularly on Hindi/Punjabi — but at 3.4x realtime the
- * same song costs ~12 minutes of CPU, which is a background-job-only
- * proposition. Callers can pass either via `options.modelId`.
+ * `small` is the default, despite being the slowest. This job runs in the
+ * background *after* the song has finished and its result is cached to disk
+ * forever, so first-run latency is nearly free while accuracy is permanent —
+ * every future play of that song reads the cached cues. Optimising this for
+ * speed would be optimising the wrong variable. ~12 minutes of background CPU
+ * buys a materially better transcription, once, per song.
+ *
+ * GPU is not an option here: DirectML is bundled with onnxruntime-node and
+ * loads, but fails allocation ("Not enough memory resources") even on `base`
+ * at fp32, and CUDA is not present. Measured, not assumed — see NEXT_STEPS.md.
  */
-const DEFAULT_MODEL = 'Xenova/whisper-base';
+const DEFAULT_MODEL = 'Xenova/whisper-small';
 
-/** Models offered to the user, fastest first. */
+/** Models offered to the user, most accurate first. */
 const MODELS = [
+  { id: 'Xenova/whisper-small', label: 'Small — most accurate, ~3.4x realtime' },
   { id: 'Xenova/whisper-base', label: 'Base — ~1x realtime, multilingual' },
-  { id: 'Xenova/whisper-small', label: 'Small — ~3.4x realtime, most accurate' },
   { id: 'Xenova/whisper-tiny.en', label: 'Tiny — fastest, English only' },
 ];
+
+/**
+ * Blocks Whisper's habit of looping one phrase over instrumental passages.
+ * 6 tokens is long enough to leave real repeated hooks alone (a chorus line
+ * usually differs somewhere within six tokens) while cutting the degenerate
+ * "same bar forever" output that dominates long musical gaps.
+ */
+const NO_REPEAT_NGRAM = 6;
 
 /**
  * Whisper's 30-second receptive field. Longer audio is processed in chunks
@@ -200,13 +214,41 @@ async function transcribePcm(pcm, options = {}) {
     return_timestamps: true,
     chunk_length_s: CHUNK_LENGTH_S,
     stride_length_s: STRIDE_LENGTH_S,
+    // Greedy + n-gram blocking: deterministic output, and no phrase loops.
+    temperature: 0,
+    no_repeat_ngram_size: NO_REPEAT_NGRAM,
     ...(options.language ? { language: options.language, task: 'transcribe' } : {}),
   });
 
+  let cues = chunksToCues(result.chunks);
+  const rawCount = cues.length;
+
+  /*
+    Vocal gate. Whisper invents lyrics over intros, breakdowns and outros — it
+    does not fall silent, it writes plausible filler. The model exposes no
+    confidence signal we can filter on here, so the check comes from the audio:
+    drop cues that landed where the vocal band is empty. Conservative by
+    design; see src/main/vocals.js for what it does and does not catch.
+  */
+  let droppedInstrumental = 0;
+  if (options.gateOnVocals !== false) {
+    const activity = vocalMask(pcm, 16000);
+    // A track that reads as almost entirely unvoiced means the gate has
+    // misjudged this mix, not that the song is instrumental — ignore it
+    // rather than deleting the whole transcription.
+    if (activity.voicedFraction > 0.15) {
+      const kept = filterCuesByVocalActivity(cues, activity);
+      droppedInstrumental = cues.length - kept.length;
+      cues = kept;
+    }
+  }
+
   return {
-    cues: chunksToCues(result.chunks),
+    cues,
     text: (result.text || '').trim(),
     durationMs: Math.round((pcm.length / 16000) * 1000),
+    rawCount,
+    droppedInstrumental,
   };
 }
 
