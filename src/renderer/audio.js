@@ -80,7 +80,23 @@
     const src = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                  // 512 bins
-    analyser.smoothingTimeConstant = 0.72;
+    /*
+      Lower than the 0.72 this used to run at. Smoothing is applied to the
+      spectrum BEFORE we ever see it, so a high constant blunts exactly the
+      transients kick detection depends on — it was smoothing the drums away
+      and then failing to find them.
+    */
+    analyser.smoothingTimeConstant = 0.55;
+    /*
+      The default window is -100..-30 dB, which modern masters blow straight
+      through: measured on a commercial house track, the bass bins sat pegged
+      between 0.94 and 1.00 for the entire song. With the signal clipped at the
+      ceiling there is no headroom left for a transient to rise into, so every
+      onset test below was dead on arrival. Opening the ceiling restores the
+      dynamic range these tests need.
+    */
+    analyser.minDecibels = -95;
+    analyser.maxDecibels = -12;
     src.connect(analyser);
 
     freq = new Uint8Array(analyser.frequencyBinCount);
@@ -135,11 +151,23 @@
     trebleSlow += (treble - trebleSlow) * 0.02;
     bassEMA += (bass - bassEMA) * 0.06;
 
-    // Kick: a bass transient clearly above its running floor, rate-limited so one
-    // hit isn't counted twice.
+    /*
+      Kick: a bass transient rising clearly ABOVE its running floor.
+
+      Tested by DIFFERENCE, not by ratio. The old test was
+      `bass > bassEMA * 1.35`, which cannot fire on loud material: once the
+      bass band sits near 1.0 the floor sits near 1.0 too, and asking for 1.35x
+      a saturated signal is asking for something impossible. Measured on a
+      commercial house track — a genre that is essentially nothing but kick
+      drum — it produced a kick value of exactly 0.00 for the whole song.
+
+      A difference test has the same meaning at any level and keeps working
+      when the track is mastered hot.
+    */
     let kick = 0;
-    if (bass > 0.34 && bass > bassEMA * 1.35 && now - lastKickAt > 130) {
-      kick = Math.min(1, (bass - bassEMA) * 2.8); // punchier onset so drums read clearly
+    const rise = bass - bassEMA;
+    if (bass > 0.22 && rise > 0.045 && now - lastKickAt > 130) {
+      kick = Math.min(1, rise * 4.5);
       lastKickAt = now;
     }
     env.kick = Math.max(env.kick * 0.72, kick);   // decay + latch on hits
@@ -154,7 +182,9 @@
 
     // Drop: a strong bass hit arriving out of a build (or a sharp jump from a dip),
     // rate-limited to one per ~2s.
-    const bigHit = bass > 0.5 && bass > bassEMA * 1.6;
+    // Same correction as the kick test: a difference, not a ratio, so a hot
+    // master cannot make the condition unreachable.
+    const bigHit = bass > 0.38 && bass - bassEMA > 0.11;
     if (bigHit && (build > 0.40 || levelFast > levelSlow * 1.7) && now - lastDropAt > 2000) {
       env.drop = true;
       lastDropAt = now;
