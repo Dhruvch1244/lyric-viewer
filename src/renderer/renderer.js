@@ -2590,8 +2590,20 @@ window.player.onLyrics((payload) => {
     case 'error': setStatus('lyric lookup failed'); clearColumn(); break;
     default:
       setStatus('');
-      // Real lyrics arrived; stop any recording started for this track.
-      stopTranscriptionListen();
+      /*
+        Lyrics arrived. Keep listening anyway when they have no word timings
+        yet: the audio is what turns correct line-level lyrics into word-level
+        sync (see src/main/wordalign.js), and it can only be captured while the
+        song is actually playing. Main decides at the end whether to spend a
+        Whisper pass on it; this side just makes sure the audio exists.
+
+        Costs nothing when the user has not enabled audio capture — the
+        recorder taps that same stream and simply declines to start without it.
+        Once a song has word timings, they are cached, so this happens once per
+        song rather than on every play.
+      */
+      if (payload.status === 'ok' && !payload.hasWordTimings) beginTranscriptionListen();
+      else stopTranscriptionListen();
   }
   if (payload.status === 'ok') showSourceBadge(payload.origin);
   applyScript();

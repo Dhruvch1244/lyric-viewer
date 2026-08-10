@@ -17,6 +17,7 @@ app.commandLine.appendSwitch('canvas-oop-rasterization');
 const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { alignLyrics, splitPlainLyrics } = require('./align');
+const { attachWordTimings } = require('./wordalign');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { toEnglishLocal, canTranslate: canTranslateLocally } = require('./localtranslate');
@@ -145,6 +146,20 @@ function paletteFromSentiment(s) {
  * @param {{artist: string, title: string}} track
  * @returns {string}
  */
+/**
+ * Whether a cue list already carries measured word timings.
+ *
+ * Drives whether the renderer keeps recording audio for a song: alignment is a
+ * one-off cost per song, so once the words are timed there is nothing left to
+ * listen for.
+ *
+ * @param {Array<{words?: Array}>} cues
+ * @returns {boolean}
+ */
+function hasWords(cues) {
+  return Array.isArray(cues) && cues.some((c) => c && Array.isArray(c.words) && c.words.length > 0);
+}
+
 function trackKey(track) {
   return `${(track.artist || '').trim()}|${(track.title || '').trim()}`.toLowerCase();
 }
@@ -340,6 +355,7 @@ async function loadLyricsFor(track) {
       mood: disk.mood || null,
       source: disk.source || null,
       status: 'ok',
+      hasWordTimings: hasWords(normalised.cues),
       indic: Boolean(disk.indic),
       transliterationAvailable: isTransliterationAvailable(),
       translationAvailable: isTranslationAvailable() || canTranslateLocally(normalised.cues),
@@ -704,7 +720,51 @@ app.whenReady().then(() => {
     const key = trackKey(track);
     const existing = llmCache.get(key);
     if (existing && Array.isArray(existing.cues) && existing.cues.length > 0) {
-      return { status: 'already-have-lyrics' };
+      /*
+        We already have the right WORDS for this song — so rather than
+        transcribing it (pointless, we know the lyrics), spend the pass on the
+        one thing the lyrics cannot provide: WHEN each word was sung.
+
+        Same learn-on-first-listen shape as the beat map. The result is cached,
+        so a song is aligned once and every later play is word-synced instantly
+        and offline.
+      */
+      if (existing.cues.some((c) => Array.isArray(c.words) && c.words.length)) {
+        return { status: 'already-aligned' };
+      }
+      transcribeBusy = true;
+      try {
+        send('transcribe-progress', { track, stage: 'aligning', pct: 10 });
+        const heard = await transcribePcm(pcm, {
+          modelId: settings.get('whisperModel') || DEFAULT_MODEL,
+          language: payload.language || settings.get('whisperLanguage') || undefined,
+          wordTimestamps: true,
+        });
+        const aligned = attachWordTimings(existing.cues, heard.words || []);
+        // A weak alignment is mostly interpolation dressed up as measurement;
+        // the syllable estimate in the renderer is honester than that.
+        if (aligned.coverage < 0.5) {
+          send('transcribe-progress', { track, stage: 'align-weak', coverage: Math.round(aligned.coverage * 100) });
+          return { status: 'alignment-too-weak', coverage: aligned.coverage };
+        }
+        llmCache.merge(key, { cues: aligned.cues });
+        const entry = lyricCache.get(key);
+        if (entry) lyricCache.set(key, { ...entry, cues: aligned.cues });
+        send('transcribe-progress', {
+          track, stage: 'aligned', pct: 100,
+          coverage: Math.round(aligned.coverage * 100),
+        });
+        // Only push it on screen if that song is still the one playing.
+        if (currentTrack && trackKey(currentTrack) === key) {
+          send('lyrics', { track, ...(lyricCache.get(key) || {}), origin: 'memory' });
+        }
+        return { status: 'ok', aligned: true, coverage: aligned.coverage };
+      } catch (err) {
+        send('transcribe-progress', { track, stage: 'error', message: err.message });
+        return { status: 'error', message: err.message };
+      } finally {
+        transcribeBusy = false;
+      }
     }
 
     transcribeBusy = true;
@@ -798,6 +858,7 @@ app.whenReady().then(() => {
         cuesEnglish: null,
         source: { name: usedSource, artistName: track.artist || null },
         status: 'ok',
+        hasWordTimings: hasWords(result.cues),
         indic,
         transliterationAvailable: isTransliterationAvailable(),
         translationAvailable: isTranslationAvailable() || canTranslateLocally(result.cues),
