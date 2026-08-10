@@ -1,6 +1,14 @@
 node_modules/
 dist/
+dist-installer/
 out/
+
+# Expo / Metro caches (regenerated on every `expo start`)
+.expo/
+
+# Secrets — API keys, never commit (see keys.js resolver + 🔑 panel)
+secrets.js
+src/main/secrets.js
 
 # packages/core's dist/ IS committed (see packages/core/dist/README.md) —
 # npm workspace scripts that build it before Metro starts have proven
