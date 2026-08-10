@@ -87,57 +87,62 @@ For the full app with real Apple Music detection, you need the custom
 standalone build below — Expo Go's fixed set of bundled native modules
 doesn't include `MusicKitBridge`.
 
-## Getting a build onto your iPhone (no Mac required)
+## Getting a build onto your iPhone
 
-Building doesn't need a local Mac — [EAS Build](https://docs.expo.dev/build/introduction/)
-compiles iOS apps on Expo's hosted macOS infrastructure. Installing the
-result on your iPhone without a Mac uses a free Apple ID + a sideloading
-tool run from a Windows PC. Every step below is something *you* need to do
-— none of it can be done from this session.
+Apple Music detection only runs in a real build — Expo Go can't load
+`MusicKitBridge`. Getting that build onto a physical iPhone requires signing,
+and Apple's signing rules force a choice. **A free Apple ID does not work
+through EAS on Windows**: `eas device:create` and any ad-hoc/internal EAS
+build need an Apple *team*, which only the paid Apple Developer Program
+provides. A free Apple ID's personal signing team is reachable *only* through
+Xcode on a Mac. This is a hard Apple limitation, not an EAS or project one —
+`eas device:create` fails with "You have no team associated with your Apple
+account" on a free account.
 
-### 1. One-time account setup
+Common one-time setup for either path:
 
-- **Expo account** (free): sign up at [expo.dev](https://expo.dev), then on
-  your Windows PC (or any machine): `npm install -g eas-cli && eas login`.
-- **Apple ID**: any normal iCloud account works — no paid Apple Developer
-  Program enrollment needed for this path.
+- **Expo account** (free): sign up at [expo.dev](https://expo.dev), then
+  `npm install -g eas-cli && eas login`.
+- **Unique bundle identifier**: change `app.json`'s placeholder
+  `com.example.lyricplayer` to something only you use (e.g.
+  `com.<you>.lyricplayer`).
+- No Spotify dev app and no `SpotifyiOS.xcframework` are needed — this build
+  is Apple Music only, using the system MediaPlayer framework. The required
+  `NSAppleMusicUsageDescription` key is already set in `app.json`.
 
-No Spotify Developer app and no `SpotifyiOS.xcframework` embedding are
-needed — this build is Apple Music only, and `MusicKitBridge` uses just the
-system MediaPlayer framework (already part of iOS). The one required Info.plist
-key, `NSAppleMusicUsageDescription`, is already set in `app.json`.
+### Path A — Paid Apple Developer Program ($99/yr), fully on Windows
 
-### 2. Build a real-device .ipa with EAS
-
-From `packages/mobile`, after setting a unique `bundleIdentifier` in
-`app.json` (the placeholder `com.example.lyricplayer` needs to be something
-only you use):
+This is the only route that works end to end without a Mac.
 
 ```sh
-eas device:create        # registers your iPhone's UDID with Apple — follow the prompts
-eas build --platform ios --profile preview
+eas device:create                                # register your iPhone UDID (needs the paid team)
+eas build --platform ios --profile preview       # ad-hoc signed .ipa
 ```
 
-EAS will prompt to log in with your Apple ID and can generate a **free
-development signing certificate** automatically — no paid account needed.
-This is the same "free Apple ID" signing path Xcode itself uses, just
-without a local Xcode. When the build finishes, EAS gives you a download
-link for the `.ipa`.
+EAS gives you a QR/link to install the `.ipa` directly over the air — no
+Sideloadly, no cable. Ad-hoc installs last ~1 year (no 7-day expiry). Trust
+the profile once under **Settings → General → VPN & Device Management**.
 
-### 3. Sideload the .ipa with Sideloadly (Windows)
+### Path B — Free Apple ID, but requires a Mac (or cloud Mac)
 
-1. Install [Sideloadly](https://sideloadly.io/) and Apple's "Apple Devices"
-   app (or iTunes) on your Windows PC, and connect your iPhone via USB.
-2. Open Sideloadly, drag in the `.ipa` you downloaded from EAS, sign in with
-   your Apple ID when prompted, and sideload.
-3. On the iPhone: **Settings → General → VPN & Device Management** → trust
-   your Apple ID's developer profile the first time you launch the app.
+With a free Apple ID you must sign locally with Xcode's personal team:
 
-**This install expires in ~7 days** — a free Apple ID limitation, not
-specific to this app. Re-run Sideloadly (or use AltStore's background
-Wi-Fi refresh) to renew it. This is the tradeoff of the no-Mac, no-$99/year
-path; switching to a paid Apple Developer Program + TestFlight later removes
-the expiry entirely.
+1. On a Mac: `npx expo prebuild -p ios` in `packages/mobile`, open the
+   generated `ios/*.xcodeproj` in Xcode, select your **Personal Team** under
+   Signing & Capabilities, plug in the iPhone, and Run.
+2. No Mac of your own? Use a cloud Mac (e.g. an hourly MacStadium/MacinCloud
+   instance, or a GitHub Actions `macos` runner) for just this signing step.
+
+Personal-team installs **expire in ~7 days** and are limited to a few apps —
+a free-Apple-ID limitation. Sideloadly/AltStore automate the re-sign+install
+of an existing `.ipa` the same way, but still need that Mac-produced,
+personal-team-signed `.ipa` to start from.
+
+### Path C — Stay on the Expo Go demo (free, no build)
+
+No signing, no account beyond a free Apple ID for Expo Go. You get the full
+visual + lyric pipeline against `MockSource`'s demo track, just not real
+Apple Music detection. See the Expo Go section above.
 
 ## Security note on LLM credentials
 
