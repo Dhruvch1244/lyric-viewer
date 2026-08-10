@@ -1,4 +1,4 @@
-# Roadmap — becoming the best-in-class lyric visualiser
+# Roadmap — the best music visualiser that also knows the words
 
 Strategy document, written after a competitive review in August 2026. This is a
 plan to argue with, not a backlog to grind. Nothing here is built yet.
@@ -7,22 +7,32 @@ plan to argue with, not a backlog to grind. Nothing here is built yet.
 
 ## 1. The positioning decision
 
-**Do not compete as "a lyrics overlay."** That fight is lost on arrival:
-[Sonar](https://github.com/EchoVial/Sonar) already chains three lyric sources
-with word-by-word rendering, [Lyrictified](https://github.com/ios7jbpro/lyrictified)
+The goal is **both**: the best music visualiser on Windows *and* a lyric
+display good enough to compete head-on — in a style that is recognisably ours.
+That is defensible, because the two markets are separate today and **nothing
+sits in the overlap**.
+
+**Against lyric apps**, the visuals are the moat.
+[Sonar](https://github.com/EchoVial/Sonar) chains three lyric sources with
+word-by-word rendering, [Lyrictified](https://github.com/ios7jbpro/lyrictified)
 does the same SMTC + LRCLIB job in a fraction of the download, and Musixmatch
-and Spotify have catalogues nobody can match. On lyrics alone this app is
-behind, and it asks for 124 MB to be behind.
+and Spotify have catalogues nobody can match. But every one of them is a *text
+renderer* — a bar, a taskbar strip, a floating line. None has a reactive visual
+system.
 
-**Compete as a music visualiser that happens to know the words.** Nothing in
-the competitive set has a GPU-reactive visual system — they are text renderers:
-a bar, a taskbar strip, a floating line. This app has a WebGL domain-warp field
-that reacts to real audio, drops, build-ups and lyric density at 72–85 fps.
-That is the product. The lyrics are a feature of it.
+**Against visualisers**, the lyrics are the moat.
+[projectM/MilkDrop](https://github.com/projectM-visualizer/projectm) has
+thousands of community presets, [Plane9](https://plane9.com) ships 250+ scenes
+with 39 transitions, and Wallpaper Engine has a Steam Workshop. All of them are
+far ahead of us on visual variety — and **not one of them shows lyrics.**
 
-Everything below is ordered by that decision. Work that strengthens the
-visualiser or removes a reason to bounce off it ranks above work that closes a
-lyrics-feature gap.
+> The empty space is: *MilkDrop-class visuals with synced lyrics on top.*
+> Nobody occupies it. That is the product.
+
+Being honest about the gap: on visuals alone we currently have **one look**
+(the swirl field plus some 2D layers on a random shuffle) against projectM's
+thousands and Plane9's 250. Winning the visualiser half needs a real answer to
+that, not incremental polish — see Phase 1.
 
 ---
 
@@ -30,13 +40,24 @@ lyrics-feature gap.
 
 Competitors are free R&D. Each has solved something worth copying outright.
 
+### Visualisers
+
 | Source | Their strength | What we take |
 |---|---|---|
-| **Sonar** | LRCLIB → NetEase → Genius chain, keyless | The multi-source chain. Their choice of sources is proven and needs no API keys. |
-| **Sonar** | Word-by-word reveal | The polish bar. Ours is interpolated from line timing; theirs reads as tighter. |
-| **Sonar / Lyrictified** | Taskbar strip / compact floating / click-through modes | **The most important steal.** A fullscreen overlay is a commitment; a taskbar strip is something you leave on all day. |
+| **[Butterchurn](https://github.com/jberg/butterchurn)** | MilkDrop 2 reimplemented in **WebGL2**, **MIT licensed**, driven by a Web Audio node | **The headline move — adopt it wholesale.** See Phase 1. |
+| **projectM / MilkDrop** | Thousands of community presets; a preset *format* with an ecosystem | The preset concept: named, curated, cycleable looks instead of a random shuffle. |
+| **Plane9** | 250+ scenes, 39 **transitions**, scene *playlists* | Transitions and playlists. Cutting between looks on a beat is a big part of why it feels designed. |
+| **Wallpaper Engine** | Runs as the desktop wallpaper; Workshop distribution | A wallpaper/screensaver mode — the app becomes ambient rather than something you launch. |
+
+### Lyric apps
+
+| Source | Their strength | What we take |
+|---|---|---|
+| **Sonar** | LRCLIB → NetEase → Genius chain, keyless | The multi-source chain. Proven, and needs no API keys. |
+| **Sonar** | Word-by-word reveal | The polish bar. Ours is interpolated from line timing; theirs reads tighter. |
+| **Sonar / Lyrictified** | Taskbar strip / compact floating / click-through modes | A fullscreen overlay is a commitment; a taskbar strip is something you leave on all day. |
 | **Lyrictified** | Album artwork in the bar | Already have the artwork pipeline — reuse it in compact modes. |
-| **python-lyrics-transcriber** | Anchor-sequence alignment + **LLM auto-correction** of the transcript | The LLM correction pass. We already have Gemini/Groq/HF/Claude wired up. |
+| **python-lyrics-transcriber** | Anchor-sequence alignment + **LLM auto-correction** of the transcript | The LLM correction pass. Gemini/Groq/HF/Claude are already wired up. |
 | **LyricWhiz** (paper) | Whisper as the "ear", an LLM as the "brain" | Validates the above as state of the art, not a hack. |
 | **Musixmatch / Spotify** | Catalogue | Nothing — cannot be matched. Do not try. |
 
@@ -45,6 +66,20 @@ Competitors are free R&D. Each has solved something worth copying outright.
 ## 3. Gap analysis
 
 Honest list of what is actually weak, worst first.
+
+### Against visualisers
+
+0. **We have one look; they have hundreds.** The swirl field plus a random
+   shuffle of 2D layers is a single aesthetic. projectM has thousands of
+   presets, Plane9 has 250 scenes and 39 transitions. Variety is the entire
+   basis on which visualisers are judged, and it is our weakest axis by far.
+0b. **The shuffle reads as arbitrary, not designed.** Layers switch on a random
+   timer. There is no named look to choose, return to, or recommend to someone.
+0c. **Audio analysis is shallow.** Three bands (bass/mid/treble) plus onset
+   detection. MilkDrop presets run per-frame equations over the full spectrum.
+   Richer analysis is a prerequisite for richer visuals.
+0d. **No wallpaper or screensaver mode.** Wallpaper Engine's whole proposition
+   is that it is always there. Ours must be launched and takes over the screen.
 
 ### Blocking adoption
 
@@ -82,10 +117,42 @@ Honest list of what is actually weak, worst first.
 
 ## 4. The plan
 
-Four phases. Each is independently shippable — no phase is a prerequisite for
+Five phases. Each is independently shippable — no phase is a prerequisite for
 the app staying useful.
 
-### Phase 1 — Stop losing users (highest impact)
+### Phase 1 — Win the visualiser half
+
+The visual-variety gap is the one thing that cannot be closed incrementally,
+and it is the axis the whole category is judged on.
+
+- **Adopt Butterchurn as a second visual engine.**
+  [Butterchurn](https://github.com/jberg/butterchurn) is MilkDrop 2
+  reimplemented in WebGL2, MIT licensed, and driven by a Web Audio node. Every
+  prerequisite already exists in this app: `swirl.js` proves WebGL2 works here,
+  and `audio.js` already holds a live loopback `AudioContext` with an analyser
+  — which is precisely what `connectAudio()` wants. A few MB of dependency buys
+  the entire MilkDrop preset ecosystem, and makes us instantly competitive with
+  projectM and Plane9 on variety.
+
+  > **The signature look stays the default.** Butterchurn is *added* variety,
+  > not a replacement. The swirl field is this app's identity — the thing that
+  > times itself to lyric density, which no MilkDrop preset does and none can,
+  > because they know nothing about lyrics. Ship the swirl as the default
+  > engine, with Butterchurn presets as an alternate mode the user opts into.
+  > If we ever look like "Butterchurn with subtitles" we have lost the thing
+  > that makes this ours.
+
+- **A real preset system.** Named, curated looks the user can cycle, pin and
+  return to — covering both engines. This is what turns a random shuffle into
+  something that feels designed, and it is the single biggest perceived-quality
+  win available.
+- **Beat-synced transitions between looks**, borrowed from Plane9. Cutting on a
+  drop rather than a timer is most of why a visualiser feels alive.
+- **Deeper audio analysis** to feed both engines: more bands, spectral centroid,
+  per-band onsets. Prerequisite for richer reactivity, and Butterchurn benefits
+  automatically.
+
+### Phase 2 — Stop losing users
 
 The app's problem is not capability, it is that people bounce before seeing the
 good part.
@@ -94,6 +161,9 @@ good part.
   and a click-through taskbar strip. Cycle with a hotkey and a chip; persist the
   choice. The visualiser stays in fullscreen mode; compact modes show line +
   artwork + a thin reactive accent.
+- **Wallpaper / screensaver mode.** Render to the desktop background rather than
+  an overlay. This is Wallpaper Engine's entire proposition and it turns the app
+  from something you launch into something that is simply on.
 - **Split transcription into an optional feature pack.** Ship a ~60 MB core
   installer; download the ONNX runtime and model on first use of transcription,
   into `userData`. Kills the size objection for everyone who never uses it.
@@ -105,7 +175,7 @@ good part.
 *Rationale: none of this is glamorous, and all of it converts more installs into
 daily users than any feature below.*
 
-### Phase 2 — Absorb the competitors' lyric strengths
+### Phase 3 — Absorb the competitors' lyric strengths
 
 - **NetEase as a second synced source**, then **Genius as a second plain
   source.** Sonar proves both work keyless. Ordered chain: LRCLIB synced →
@@ -119,7 +189,7 @@ daily users than any feature below.*
 - **Real word-level timing** where a source provides it; keep interpolation as
   the fallback.
 
-### Phase 3 — Make the visualiser undeniable
+### Phase 4 — Deepen our own signature look
 
 This is the differentiator, so it deserves real investment once Phase 1 stops
 the leak.
@@ -135,7 +205,7 @@ the leak.
 - **Artist sprite coverage.** Purely additive, and now reliable because artist
   names are cleaned at the SMTC boundary.
 
-### Phase 4 — Reach
+### Phase 5 — Reach
 
 - **Fix the audio-permission friction.** Investigate a native WASAPI loopback
   addon to replace `getDisplayMedia`, removing the share prompt entirely. This
@@ -151,18 +221,21 @@ the leak.
 
 | # | Item | Impact | Effort |
 |---|---|---|---|
-| 1 | Compact display modes | Very high | Medium |
-| 2 | Optional transcription pack (installer 124 → ~60 MB) | High | Medium |
-| 3 | Auto-update | High | Low |
-| 4 | First-run card | Medium | Low |
-| 5 | NetEase + Genius sources | High | Medium |
-| 6 | LLM transcript correction | High | Low–Medium |
-| 7 | Visual presets | Medium | Low |
-| 8 | More layers on GPU | Medium | Medium |
-| 9 | WASAPI native loopback | Medium | High |
-| 10 | Vocal isolation | High (quality) | Very high |
+| 1 | Butterchurn as a second engine (preset ecosystem) | Very high | Medium |
+| 2 | Preset system + beat-synced transitions | Very high | Medium |
+| 3 | Compact display modes | Very high | Medium |
+| 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium |
+| 5 | Auto-update | High | Low |
+| 6 | Deeper audio analysis | High | Medium |
+| 7 | NetEase + Genius lyric sources | High | Medium |
+| 8 | LLM transcript correction | High | Low-Medium |
+| 9 | First-run card | Medium | Low |
+| 10 | Wallpaper / screensaver mode | High | Medium-High |
+| 11 | More 2D layers moved onto the GPU | Medium | Medium |
+| 12 | WASAPI native loopback (kills the permission prompt) | Medium | High |
+| 13 | Vocal isolation (Demucs) | High (quality) | Very high |
 
-Items 3, 4, 6 and 7 are small and high-leverage — do them opportunistically
+Items 5, 8 and 9 are small and high-leverage — do them opportunistically
 between the larger pieces.
 
 ---
