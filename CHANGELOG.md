@@ -2,6 +2,55 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.14.0 — 2026-08-10
+
+### Fixed
+
+- **Songs were re-transcribed on every single replay.** When word alignment came
+  out below its coverage floor, nothing was recorded — so the song still had no
+  word timings, and the next play recorded the audio again, ran Whisper again,
+  and failed again. Minutes of CPU burned on every replay of a song already
+  known to be unalignable. Introduced in 0.13.0; the failure is now remembered,
+  and since transcription is deterministic a retry could only have reached the
+  same answer.
+
+### Added
+
+- **The measured tempo is now visible.** 0.13.0 measured it and never showed it,
+  so there was no way to tell whether the beat clock had locked. A `♩` chip
+  shows the BPM, and hides itself when nothing is locked rather than leaving a
+  stale number on screen.
+
+- **Background work is visible.** Finding lyrics, listening, downloading a speech
+  model, transcribing, aligning, translating — all of it reported through one
+  status line where each message overwrote the last, so work taking minutes
+  looked like nothing happening. Jobs are now tracked separately and shown
+  together:
+
+  ```
+  ⟳ finding lyrics · transcribing 40% · translating
+  ```
+
+- **Bass / mid / air meters at the top edge**, replacing the equalizer bars that
+  ran across the backdrop — the same information in a fraction of the screen and
+  none of the fill rate. Vertical columns in the display face, tinted from the
+  live palette so they recolour with the song. The decibel scale is real
+  (20·log10 of the band envelope), floored at −60 dB.
+
+- **Heatmap — a new visualiser that learns the shape of a song.** Energy is
+  binned against *position in the track* rather than wall-clock time, so what is
+  recorded belongs to the song: play it again and the whole arc is already
+  known. Drawn as a ring around the lyrics, cell length carrying energy and
+  brightness carrying how far the playhead has reached — so on a replay the drop
+  is on screen while the build-up is still playing.
+
+  Each cell holds its *peak*, not an average: a heatmap of averages washes out
+  to flat grey, because the interesting thing about a drop is precisely the peak
+  that averaging removes. Cells never heard are drawn faintly rather than
+  skipped, so a song heard once reads as "not known yet" instead of broken.
+
+  Needs audio capture (`♫`) to learn, and is remembered afterwards.
+
 ## 0.13.0 — 2026-08-10
 
 ### Added
