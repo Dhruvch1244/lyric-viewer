@@ -355,7 +355,7 @@ async function loadLyricsFor(track) {
       mood: disk.mood || null,
       source: disk.source || null,
       status: 'ok',
-      hasWordTimings: hasWords(normalised.cues),
+      hasWordTimings: hasWords(normalised.cues) || Boolean(disk.wordAlignFailed),
       indic: Boolean(disk.indic),
       transliterationAvailable: isTransliterationAvailable(),
       translationAvailable: isTranslationAvailable() || canTranslateLocally(normalised.cues),
@@ -744,6 +744,14 @@ app.whenReady().then(() => {
         // A weak alignment is mostly interpolation dressed up as measurement;
         // the syllable estimate in the renderer is honester than that.
         if (aligned.coverage < 0.5) {
+          /*
+            Remember the failure, or this repeats forever: without a marker the
+            song still has no word timings, so the next play records it again,
+            runs Whisper again, and fails again — minutes of CPU burned on every
+            replay of a song we already know we cannot align. The transcription
+            is deterministic, so a second attempt would reach the same answer.
+          */
+          llmCache.merge(key, { wordAlignFailed: true });
           send('transcribe-progress', { track, stage: 'align-weak', coverage: Math.round(aligned.coverage * 100) });
           return { status: 'alignment-too-weak', coverage: aligned.coverage };
         }
