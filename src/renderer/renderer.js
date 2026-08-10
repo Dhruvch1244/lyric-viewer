@@ -806,6 +806,56 @@ let lastFpsShownAt = 0;
 /** Timestamp of the last *drawn* backdrop frame, for adaptive frame-skipping. */
 let lastDrawnAt = 0;
 
+/*
+  Smoothed cost of ONE backdrop frame, in ms — the governor's input.
+
+  This used to be driven by fpsEMA, which latched: `rawDt` is the interval
+  between *drawn* frames, so once the throttle engaged the app only ever
+  measured its own throttled output. Falling under 30fps set a 32ms throttle,
+  which produced ~31fps, which kept fpsEMA under 45 forever. The app could not
+  discover it had headroom again, so it stayed frame-skipped with `quality`
+  dragged down to 0.45 long after whatever caused the dip had passed — on a
+  machine that could have run at full rate.
+
+  Frame COST does not have that feedback path: it measures the work, not the
+  pace we chose to do it at, so recovery is immediate when the load drops.
+*/
+let drawCostMs = 8;
+
+/*
+  Smoothed interval between animation-frame callbacks (ms) — how fast frames are
+  actually being PRESENTED, as opposed to how long our own work takes.
+
+  These are different numbers and the difference is the whole point. Measured on
+  this app: the full "concert" look costs ~5-6ms of JavaScript, Ghost mode costs
+  0.1ms, and the presented frame rate barely moves between them — the time goes
+  to GPU raster and to compositing a full-screen transparent window, both of
+  which happen after our code has returned. So CPU cost is the wrong signal for
+  "are we struggling"; the presented interval is the right one.
+
+  Sampled on EVERY callback, including ones where drawing is skipped, so it
+  measures the compositor rather than our own throttle.
+*/
+let frameIntervalMs = 16.7;
+let lastFrameAt = 0;
+
+/*
+  Drawing-buffer scale currently applied to the swirl field.
+
+  The field renders below CSS resolution and is stretched back up by the
+  compositor; because it is a soft, blurred cloud the upscale is invisible,
+  which makes resolution the cheapest quality lever the app has — fill cost
+  falls with the SQUARE of the scale, so 0.7 → 0.4 is roughly a third of the
+  pixels for a barely perceptible change in softness. See applySwirlScale.
+*/
+let swirlScale = 0;
+/** Resolution ladder, coarse on purpose — see applySwirlScale. */
+const SWIRL_SCALES = [0.30, 0.40, 0.55, 0.70];
+/** When the swirl resolution last changed, so climbing back up is rate-limited. */
+let lastSwirlScaleAt = 0;
+/** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
+let canvasHidden = false;
+
 function resizeCanvas() {
   // Cap DPR at 1.0 for the backdrop canvas: it is all soft glows, gradients and
   // blur, so rendering at native hi-DPI resolution is pure wasted fill-rate (the
@@ -822,7 +872,12 @@ function resizeCanvas() {
   // The swirl field is soft and upscaled by the compositor, so it renders at a
   // fraction of CSS resolution — the cheapest quality lever it has. Lite mode
   // halves it again.
-  if (swirlOn) window.SwirlField.resize(w, h, liteMode ? 0.35 : 0.55);
+  // Re-size the field to the new window at whatever rung the governor has us on
+  // (applySwirlScale owns the scale itself; this only follows the dimensions).
+  if (swirlOn) {
+    if (!swirlScale) swirlScale = liteMode ? SWIRL_SCALES[0] : SWIRL_SCALES[2];
+    window.SwirlField.resize(w, h, swirlScale);
+  }
   vignette = ctx.createRadialGradient(w / 2, h * 0.5, 0, w / 2, h * 0.5, Math.max(w, h) * 0.8);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
@@ -1282,16 +1337,117 @@ function drawConfetti() {
 let shootTimer = 0;
 let shooting = null;
 
+/**
+ * Pick a drawing-buffer scale for the swirl field from what the last frames
+ * actually cost, and apply it if it changed.
+ *
+ * Resizing a WebGL drawing buffer reallocates it, so this must not chase the
+ * cost signal continuously. Two things prevent thrashing: a coarse ladder (four
+ * rungs, not a continuum) and asymmetric thresholds — drop a rung as soon as
+ * frames run long, climb back only when there is real headroom, never faster
+ * than once a second.
+ *
+ * This is what lets the field stay big and fluid during a drop: instead of
+ * cutting the effect, the same effect is rendered into fewer pixels and blown
+ * back up. On a soft field that reads as slightly softer, not as "the visuals
+ * turned off".
+ *
+ * @param {number} now
+ */
+function applySwirlScale(now) {
+  const ceiling = liteMode ? 1 : SWIRL_SCALES.length - 1;
+  let rung = SWIRL_SCALES.indexOf(swirlScale);
+  if (rung < 0) rung = ceiling;
+
+  /*
+    Driven by the PRESENTED frame interval, not by how long our JavaScript took.
+    An earlier version of this used the CPU cost and never fired once: the whole
+    backdrop costs ~5ms, so a ">15ms" trigger could not be reached even while
+    the app was visibly dropping frames. Resolution is a GPU lever and needs a
+    GPU signal.
+
+    22ms is ~45fps (shed pixels), 13ms is ~77fps (enough headroom to earn one
+    back). The asymmetry plus the one-second floor stops it hunting.
+  */
+  if (frameIntervalMs > 22 && rung > 0) {
+    rung -= 1;
+    lastSwirlScaleAt = now;
+  } else if (frameIntervalMs < 13 && rung < ceiling && now - lastSwirlScaleAt > 1000) {
+    rung += 1;
+    lastSwirlScaleAt = now;
+  }
+
+  const next = SWIRL_SCALES[Math.min(rung, ceiling)];
+  if (next === swirlScale) return;
+  swirlScale = next;
+  window.SwirlField.resize(window.innerWidth, window.innerHeight, next);
+}
+
+/**
+ * Render the GPU cloud. Shared by the full backdrop and by Ghost mode, which
+ * draws nothing else at all.
+ *
+ * @param {number} now
+ * @param {number} dt frame delta (ms)
+ * @param {number} life 0..1 energy envelope
+ * @param {number} alpha field opacity, already thinned for any cover photo
+ * @param {object} style per-preset shader biases
+ * @param {number} bass 0..1 live bass envelope (0 when capture is off)
+ * @param {string} tintLive base tint for this frame
+ * @param {string} accentLive accent for this frame
+ */
+function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
+  if (!swirlOn) return;
+
+  // Ease the drive toward its target so spirals wind up and unwind smoothly.
+  // Opening up is slower than calming down: a drop should be able to snap the
+  // field shut, but the big swirl should bloom in, not pop.
+  const target = swirlTarget(estimatePosition());
+  const rate = target > swirlDrive ? 0.020 : 0.055;
+  swirlDrive += (target - swirlDrive) * (1 - Math.pow(1 - rate, dt / 16));
+
+  applySwirlScale(now);
+  window.SwirlField.setQuality(liteMode ? 0.5 : quality);
+  window.SwirlField.render({
+    timeMs: now,
+    palette: [tintLive, palette[1], palette[2], accentLive],
+    alpha,
+    life,
+    swirl: swirlDrive,
+    buildup,
+    drop: dropFlash,
+    beat: beatFlash,
+    bass,
+    // Per-preset character, so the field changes with the look instead of
+    // staying identical underneath every one of them.
+    style,
+  });
+}
+
 function drawBackdrop(now) {
+  // Set once the frame is actually being drawn (i.e. past the throttle), so the
+  // `finally` below can price every exit path — including the `bare` shortcut —
+  // without repeating itself.
+  let startedAt = 0;
   try {
+    // Presented-frame cadence, sampled before the throttle so it measures the
+    // compositor rather than our own frame-skipping. Gaps over 100ms are the
+    // window being occluded or the machine sleeping, not render load.
+    if (lastFrameAt) {
+      const gap = now - lastFrameAt;
+      if (gap < 100) frameIntervalMs += (gap - frameIntervalMs) * 0.05;
+    }
+    lastFrameAt = now;
+
     // Adaptive frame-skip: cap the effective redraw rate when GPU-bound — and
     // always in Lite mode — so we draw fewer, cheaper frames instead of
     // stuttering at the display's full refresh rate. rAF still fires every vsync
     // via the finally block; we just return early until enough time has elapsed.
     // The dt-normalised decays below keep motion speed correct at any frame rate.
-    const throttleMs = liteMode ? 33 : (fpsEMA < 30 ? 32 : fpsEMA < 45 ? 20 : 0);
+    const throttleMs = liteMode ? 33 : (drawCostMs > 26 ? 32 : drawCostMs > 17 ? 20 : 0);
     if (throttleMs && lastDrawnAt && (now - lastDrawnAt) < throttleMs) return;
     lastDrawnAt = now;
+    startedAt = performance.now();
 
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1317,7 +1473,10 @@ function drawBackdrop(now) {
     // frames run long, keeping motion near 60fps. Uses the true (unclamped) dt.
     const instFps = 1000 / Math.max(1, rawDt);
     fpsEMA += (instFps - fpsEMA) * 0.05;
-    const qTarget = fpsEMA > 55 ? 1 : fpsEMA > 45 ? 0.8 : fpsEMA > 32 ? 0.6 : 0.45;
+    // Quality follows the COST of a frame, not the rate we chose to draw at —
+    // see drawCostMs. Budget is one 60Hz frame (16.7ms); past that we are
+    // genuinely behind and the heavy layers should back off.
+    const qTarget = drawCostMs < 9 ? 1 : drawCostMs < 14 ? 0.8 : drawCostMs < 22 ? 0.6 : 0.45;
     quality += (qTarget - quality) * 0.02;
 
     // Live FPS readout (throttled to ~3/s to avoid needless DOM writes).
@@ -1393,8 +1552,12 @@ function drawBackdrop(now) {
     // substitute a cheaper preset when frames run long — a different coherent
     // look, rather than the old behaviour of switching individual layers off
     // and producing a composition nobody designed.
+    // Judge affordability by the rate the machine COULD sustain (frame cost),
+    // not the rate we are currently choosing to draw at — a deliberately
+    // throttled 31fps is not the same as a machine that cannot do better.
+    const achievableFps = 1000 / Math.max(1, drawCostMs);
     const activePreset = window.VisualPresets.affordable(
-      window.VisualPresets.byId(presetId), fpsEMA, liteMode
+      window.VisualPresets.byId(presetId), achievableFps, liteMode
     );
     // Copy rather than alias: the overrides below would otherwise mutate the
     // preset definition itself and corrupt it for the rest of the session.
@@ -1438,11 +1601,34 @@ function drawBackdrop(now) {
       document.documentElement.style.setProperty('--beat', beatNow.toFixed(2));
     }
 
-    ctx.clearRect(0, 0, w, h);
+    /*
+      Ghost mode: the GPU cloud and the DOM lyrics, nothing else.
 
+      Skipping the 2D drawing is only half of it — an untouched full-screen
+      canvas is still a compositor layer that gets blended into every frame.
+      Taking the element out of the page with `display:none` is what actually
+      removes that cost, so the toggle is done on the element, once, when the
+      mode changes rather than every frame.
+    */
     // Per-track wash + album-art levels share the chosen backdrop opacity, so the
     // whole overlay stays as see-through (ghost) or solid as the user picked.
     const level = BACKDROP_LEVELS[backdropLevel] || BACKDROP_LEVELS[2];
+
+    const bare = Boolean(activePreset.bare);
+    if (bare !== canvasHidden) {
+      canvasHidden = bare;
+      els.canvas.style.display = bare ? 'none' : '';
+      if (!bare) resizeCanvas(); // the backing store is stale after being hidden
+    }
+
+    if (bare) {
+      // No cover photo is painted in this mode, so the field is never thinned.
+      renderSwirl(now, dt, life, Math.min(1, level.alpha), activePreset.swirl,
+        audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+      return;   // `finally` still prices the frame and re-arms the loop
+    }
+
+    ctx.clearRect(0, 0, w, h);
 
     // Album-art backdrop photo (pre-blurred + darkened), painted behind the wash.
     // Fades in over ~0.9s when a new cover arrives; capped by the backdrop level
@@ -1454,32 +1640,9 @@ function drawBackdrop(now) {
       drawArtCover(w, h, artAlpha);
     }
 
-    // --- GPU swirl field -------------------------------------------------
-    // Ease the swirl drive toward its target so spirals wind up and unwind
-    // smoothly. Opening up is slower than calming down: a drop should be able
-    // to snap the field shut, but the big swirl should bloom in, not pop.
-    if (swirlOn) {
-      const target = swirlTarget(estimatePosition());
-      const rate = target > swirlDrive ? 0.020 : 0.055;
-      swirlDrive += (target - swirlDrive) * (1 - Math.pow(1 - rate, dt / 16));
-
-      window.SwirlField.setQuality(liteMode ? 0.5 : quality);
-      window.SwirlField.render({
-        timeMs: now,
-        palette: [tintLive, palette[1], palette[2], accentLive],
-        // Matches the wash's own art-thinning so a cover photo still reads.
-        alpha: Math.min(1, level.alpha * (1 - artAlpha * 0.7)),
-        life,
-        swirl: swirlDrive,
-        buildup,
-        drop: dropFlash,
-        beat: beatFlash,
-        bass: audioActive ? audioEnv.bass : 0,
-        // Per-preset character, so the field changes with the look instead of
-        // staying identical underneath every one of them.
-        style: activePreset.swirl,
-      });
-    }
+    // Matches the wash's own art-thinning so a cover photo still reads.
+    renderSwirl(now, dt, life, Math.min(1, level.alpha * (1 - artAlpha * 0.7)),
+      activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
 
     // Wash opacity follows the level and swells with build-up/drop so colour
     // change reads even through a transparent overlay. When a cover photo is
@@ -1708,6 +1871,9 @@ function drawBackdrop(now) {
   } catch (err) {
     console.error('[backdrop]', err);
   } finally {
+    // Cost of the frame we just issued. Smoothed hard (0.1) because a single
+    // long frame — a GC pause, a track change — must not swing the governor.
+    if (startedAt) drawCostMs += (performance.now() - startedAt - drawCostMs) * 0.1;
     requestAnimationFrame(drawBackdrop);
   }
 }

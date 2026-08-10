@@ -42,6 +42,29 @@
   /** @type {Preset[]} */
   const PRESETS = [
     {
+      id: 'ghost',
+      name: 'Ghost',
+      cost: 0,
+      /*
+        Lyrics and the cloud, nothing else.
+
+        `bare` is stronger than "every layer flag is false". The 2D canvas has
+        always-on work that no layer flag covers — stars, colour glows, the
+        vignette, ripples, confetti, the shooting star, the dancers — and even
+        with all of it skipped the canvas is still a full-screen compositor
+        layer being cleared and blended every frame. `bare` lets the renderer
+        take the element out of the page entirely, so the only things left are
+        the GPU cloud and the DOM lyrics.
+
+        This is the cheapest thing the app can draw and still be itself.
+      */
+      bare: true,
+      layers: { aurora: false, bokeh: false, galaxy: false, eq: false, rays: false, math: false, web: false },
+      // The field is the whole picture now, so let it breathe: wider bands and
+      // a softer glow read as drifting cloud rather than a tight vortex.
+      swirl: { bandBias: 0.85, vortexBias: 0.95, glowBias: 1.05 },
+    },
+    {
       id: 'liquid',
       name: 'Liquid',
       cost: 1,
@@ -96,7 +119,7 @@
   function normalize(preset) {
     const layers = {};
     for (const key of LAYER_KEYS) layers[key] = Boolean(preset.layers && preset.layers[key]);
-    return { ...preset, layers };
+    return { ...preset, layers, bare: Boolean(preset.bare) };
   }
 
   const NORMALIZED = PRESETS.map(normalize);
@@ -127,8 +150,11 @@
    * not as an aesthetic. Landing on it at random would make the app feel
    * stripped-back most of the time, with the good visuals showing only in
    * brief bursts — which is precisely the complaint that prompted this design.
+   *
+   * `ghost` is excluded for the opposite reason: it is a deliberate mode you
+   * choose when you want only the lyrics, not a look to be handed at random.
    */
-  const RANDOM_POOL = NORMALIZED.filter((p) => p.id !== 'minimal');
+  const RANDOM_POOL = NORMALIZED.filter((p) => p.id !== 'minimal' && p.id !== 'ghost');
 
   /**
    * The look for a given track — random across songs, identical every time you
