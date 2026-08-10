@@ -20,7 +20,7 @@ const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
-const { toEnglishLocal, canTranslate: canTranslateLocally } = require('./localtranslate');
+const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally } = require('./localtranslate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
@@ -490,13 +490,13 @@ async function maybeAutoTranslate(key, track, token) {
     rather than failing (see localtranslate.js). Everything it declines falls
     through to the LLM providers exactly as before.
   */
-  const useLocal = entry.indic && canTranslateLocally(entry.cues);
+  const useLocal = canTranslateOffline(entry.cues, entry.indic);
   if (!entry.indic || (!useLocal && !isTranslationAvailable())) return;
 
   send('translation', { track, status: 'translating' });
   try {
     const { cues, language } = useLocal
-      ? await toEnglishLocal(entry.cues)
+      ? await toEnglishOffline(entry.cues)
       : await toEnglish(entry.cues);
     if (token !== lookupToken) return;
     // Skip showing a translation the model judged already-English.
@@ -629,13 +629,13 @@ app.whenReady().then(() => {
     if (entry.cuesEnglish) return { status: 'ok', cues: entry.cuesEnglish, language: entry.language };
 
     // Devanagari lyrics can be translated on-device with no key at all.
-    const useLocal = canTranslateLocally(entry.cues);
+    const useLocal = canTranslateOffline(entry.cues, entry.indic);
     if (!useLocal && !isTranslationAvailable()) {
       return { status: 'unavailable', message: 'Set GEMINI_API_KEY or ANTHROPIC_API_KEY for translation.' };
     }
     try {
       const { cues, language } = useLocal
-        ? await toEnglishLocal(entry.cues)
+        ? await toEnglishOffline(entry.cues)
         : await toEnglish(entry.cues);
       const updated = { ...entry, cuesEnglish: cues, language };
       lyricCache.set(key, updated);
