@@ -126,4 +126,55 @@ async function toEnglishLocal(cues, onProgress) {
   return { language: 'hindi', cues: out };
 }
 
-module.exports = { toEnglishLocal, canTranslate, MODEL_ID, SCRIPT_FLOOR };
+/**
+ * Whether these cues can be translated offline AT ALL — natively or by
+ * converting the script first.
+ *
+ * @param {Array<{text: string}>} cues
+ * @param {boolean} indic whether the lyrics were detected as Hindi/Punjabi
+ * @returns {boolean}
+ */
+function canTranslateOffline(cues, indic) {
+  if (!Array.isArray(cues) || cues.length === 0) return false;
+  return canTranslate(cues) || Boolean(indic);
+}
+
+/**
+ * Translate to English offline, transliterating first when the lyrics are
+ * romanized.
+ *
+ * This is the step that makes the offline path cover most Indian songs rather
+ * than only native-script ones. The model reads Devanagari and nothing else, so
+ * romanized lyrics — the majority of what LRCLIB carries — used to fall through
+ * to a cloud provider. Converting the script first (see romanize.js) feeds them
+ * into a translator that already works.
+ *
+ * The transliteration is an approximation, so this is a quality trade rather
+ * than a free win: an LLM provider, when one is configured and working, will
+ * still translate romanized lyrics better. It is chosen only when the
+ * alternative is no translation at all.
+ *
+ * @param {Array<{timeMs: number, text: string}>} cues
+ * @returns {Promise<{language: string, cues: Array, viaTransliteration: boolean}>}
+ */
+async function toEnglishOffline(cues) {
+  if (canTranslate(cues)) {
+    return { ...(await toEnglishLocal(cues)), viaTransliteration: false };
+  }
+
+  // Romanized: convert the script, translate that, and put the results back
+  // against the ORIGINAL cues so timing and any word spans are preserved.
+  const { cuesToDevanagari } = require('./romanize');
+  const deva = cuesToDevanagari(cues);
+  const out = await toEnglishLocal(deva);
+  return {
+    language: out.language,
+    cues: cues.map((cue, i) => ({ timeMs: cue.timeMs, text: (out.cues[i] && out.cues[i].text) || '' })),
+    viaTransliteration: true,
+  };
+}
+
+module.exports = {
+  toEnglishLocal, toEnglishOffline, canTranslate, canTranslateOffline,
+  MODEL_ID, SCRIPT_FLOOR,
+};
