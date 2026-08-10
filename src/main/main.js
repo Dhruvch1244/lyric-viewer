@@ -19,6 +19,7 @@ const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normalise
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
+const { toEnglishLocal, canTranslate: canTranslateLocally } = require('./localtranslate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
@@ -341,7 +342,7 @@ async function loadLyricsFor(track) {
       status: 'ok',
       indic: Boolean(disk.indic),
       transliterationAvailable: isTransliterationAvailable(),
-      translationAvailable: isTranslationAvailable(),
+      translationAvailable: isTranslationAvailable() || canTranslateLocally(normalised.cues),
     };
     lyricCache.set(key, payload);
     send('lyrics', { track, ...payload, origin: 'disk' });
@@ -389,7 +390,7 @@ async function loadLyricsFor(track) {
     status: 'ok',
     indic,
     transliterationAvailable: isTransliterationAvailable(),
-    translationAvailable: isTranslationAvailable(),
+    translationAvailable: isTranslationAvailable() || canTranslateLocally(result.cues),
   };
 
   lyricCache.set(key, payload);
@@ -466,11 +467,21 @@ async function maybeAutoTranslate(key, track, token) {
     send('translation', { track, status: 'skipped', language: 'english' });
     return;
   }
-  if (!entry.indic || !isTranslationAvailable()) return;
+  /*
+    Local first, when it is genuinely good. The offline Marian model needs no
+    key and no network, but it only reads Devanagari — canTranslate() gates on
+    that, because on romanized or English text it returns confident nonsense
+    rather than failing (see localtranslate.js). Everything it declines falls
+    through to the LLM providers exactly as before.
+  */
+  const useLocal = entry.indic && canTranslateLocally(entry.cues);
+  if (!entry.indic || (!useLocal && !isTranslationAvailable())) return;
 
   send('translation', { track, status: 'translating' });
   try {
-    const { cues, language } = await toEnglish(entry.cues);
+    const { cues, language } = useLocal
+      ? await toEnglishLocal(entry.cues)
+      : await toEnglish(entry.cues);
     if (token !== lookupToken) return;
     // Skip showing a translation the model judged already-English.
     if (language === 'english') {
@@ -596,15 +607,20 @@ app.whenReady().then(() => {
   // Manual trigger for English translation (e.g. on a track the heuristic missed).
   ipcMain.handle('request-translation', async () => {
     if (!currentTrack) return { status: 'unavailable', message: 'Nothing playing.' };
-    if (!isTranslationAvailable()) {
-      return { status: 'unavailable', message: 'Set ANTHROPIC_API_KEY for translation.' };
-    }
     const key = trackKey(currentTrack);
     const entry = lyricCache.get(key);
     if (!entry || entry.cues.length === 0) return { status: 'unavailable', message: 'No lyrics loaded.' };
     if (entry.cuesEnglish) return { status: 'ok', cues: entry.cuesEnglish, language: entry.language };
+
+    // Devanagari lyrics can be translated on-device with no key at all.
+    const useLocal = canTranslateLocally(entry.cues);
+    if (!useLocal && !isTranslationAvailable()) {
+      return { status: 'unavailable', message: 'Set GEMINI_API_KEY or ANTHROPIC_API_KEY for translation.' };
+    }
     try {
-      const { cues, language } = await toEnglish(entry.cues);
+      const { cues, language } = useLocal
+        ? await toEnglishLocal(entry.cues)
+        : await toEnglish(entry.cues);
       const updated = { ...entry, cuesEnglish: cues, language };
       lyricCache.set(key, updated);
       persistLlm(key, updated);
@@ -784,7 +800,7 @@ app.whenReady().then(() => {
         status: 'ok',
         indic,
         transliterationAvailable: isTransliterationAvailable(),
-        translationAvailable: isTranslationAvailable(),
+        translationAvailable: isTranslationAvailable() || canTranslateLocally(result.cues),
       };
       lyricCache.set(key, payloadOut);
 
