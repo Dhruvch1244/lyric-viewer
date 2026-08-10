@@ -323,6 +323,64 @@ function detectIndic(cues) {
  * @param {{title: string, artist: string, durationMs: number}} track
  * @returns {Promise<{cues: Array, cuesDevanagari: Array|null, source: object}|null>}
  */
+/**
+ * Fetch *plain* (unsynced) lyrics — a second source, used when no synced entry
+ * exists.
+ *
+ * LRCLIB carries plain lyrics for far more songs than it has synced ones. On
+ * their own they cannot scroll, but paired with Whisper's timings they become
+ * properly synced lyrics with the *correct* words (see src/main/align.js).
+ * That is a much better result than a raw transcription, which mishears badly
+ * on music.
+ *
+ * Scoring reuses scoreCandidate, with the synced-only rejection lifted, so the
+ * same title/artist/duration/version logic decides the match.
+ *
+ * @param {{title:string, artist:string, durationMs:number}} track
+ * @returns {Promise<{plain:string, source:object}|null>}
+ */
+async function fetchPlainLyrics(track) {
+  const query = [cleanTitle(track.title), track.artist].filter(Boolean).join(' ');
+  if (!query.trim()) return null;
+
+  let results;
+  try {
+    const response = await fetch(`${LRCLIB_BASE}/search?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return null;
+    results = await response.json();
+  } catch {
+    return null; // a missing second source must never break the first
+  }
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const candidate of results) {
+    if (!candidate.plainLyrics || !candidate.plainLyrics.trim()) continue;
+    // scoreCandidate rejects entries without syncedLyrics; we are explicitly
+    // after the ones that lack it, so score a shallow copy that satisfies it.
+    const score = scoreCandidate({ ...candidate, syncedLyrics: 'x' }, track);
+    if (score > bestScore) { bestScore = score; best = candidate; }
+  }
+
+  // Same floor the synced path uses — a bad match here would put the wrong
+  // song's words on screen with confident timing, which is worse than none.
+  if (!best || bestScore < 1.2) return null;
+
+  return {
+    plain: best.plainLyrics,
+    source: {
+      name: 'lrclib-plain',
+      trackName: best.trackName,
+      artistName: best.artistName,
+      score: bestScore,
+    },
+  };
+}
+
 async function fetchSyncedLyrics(track) {
   const query = [cleanTitle(track.title), track.artist].filter(Boolean).join(' ');
   if (!query.trim()) return null;
@@ -406,4 +464,5 @@ module.exports = {
   isDevanagariCues,
   detectIndic,
   fetchSyncedLyrics,
+  fetchPlainLyrics,
 };

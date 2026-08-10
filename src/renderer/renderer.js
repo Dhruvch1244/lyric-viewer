@@ -1963,6 +1963,10 @@ window.player.onTranscribeProgress((data) => {
     case 'relanguage':
       setStatus('sounds Hindi — re-transcribing properly…');
       break;
+    case 'aligned':
+      // Real lyric text matched onto the transcribed timings — the good case.
+      setStatus(`matched real lyrics (${data.coverage}% anchored)`);
+      break;
     case 'done':
       setStatus(
         data.dropped
