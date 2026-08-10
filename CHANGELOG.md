@@ -2,6 +2,69 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.12.0 — 2026-08-10
+
+### Fixed
+
+- **Audio-reactive mode did nothing on loud music — and made things worse.**
+  Kick detection used a *ratio* test (`bass > bassEMA * 1.35`). A ratio has no
+  headroom once the signal saturates, and modern masters blow straight through
+  the analyser's default −100..−30 dB window: measured on a commercial house
+  track, the bass bins sat pegged between 0.94 and 1.00 for the entire song, so
+  the running floor sat at ~0.96 and the test became *"is 0.98 > 1.30"*.
+  Unreachable. The detector was structurally dead on exactly the genres with the
+  strongest kicks, and because live audio *suppresses* the synthetic beat clock,
+  switching audio-reactive mode on left the visuals less reactive than leaving
+  it off.
+
+  Fixed by opening the analyser window to −95..−12 dB, lowering smoothing
+  (0.72 → 0.55 — it was blunting the transients being looked for), and testing
+  onsets by **difference** rather than ratio, which means the same thing at any
+  level. Measured after, counting rising edges on the same track:
+
+  | position | kicks/sec | |
+  | --- | --- | --- |
+  | t=30s | **2.2** | ~130 BPM four-on-the-floor is ~2.2 Hz |
+  | t=50s | 0.8 | breakdown — arrangement thins, as expected |
+
+  Before the fix, the measured kick value was `0.00` for the whole song.
+
+### Added
+
+- **Ghost carries the drums.** Every punchy element — ripples, confetti, the
+  strobe flicker, the dancers — draws on the 2D canvas that Ghost removes, so
+  the beat fired with nowhere to show. A per-preset kick gain amplifies the
+  cloud's own beat response, so the field punches in and blooms on each hit.
+  Other looks are unchanged.
+
+- **Offline Hindi → English translation, no API key.** Devanagari lyrics are now
+  translated on-device by a small Marian model (~75 MB, downloaded once on first
+  use). The `EN` chip works on those songs with no key configured at all.
+
+  Gated deliberately: the model reads Devanagari only. On romanized Hindi or on
+  English it returns confident nonsense rather than failing, so anything that is
+  not predominantly Devanagari still goes to the configured LLM provider. This
+  does **not** yet cover romanized lyrics, which is most of what LRCLIB carries
+  for Indian songs.
+
+### Changed
+
+- **Word highlighting is weighted by syllables, not characters.** Splitting a
+  line by character count gave "strength" (8 characters, 1 syllable) eight times
+  the time of "a". Sung duration tracks syllables. On a real line with a 3s
+  budget: `strength` 774ms → 333ms, `through` 677ms → 333ms, and `I` rose from
+  97ms — too brief to see — to 333ms.
+
+  Devanagari and Gurmukhi are counted exactly, since a syllable *is* an akshara.
+  The English silent-'e' rule is deliberately omitted: romanized Hindi and
+  Punjabi pronounce that trailing 'e' ("jale", "dukhe", "bane" are all two
+  syllables), and weights are relative within a line.
+
+- Word highlighting no longer touches the DOM every frame. It ran
+  `querySelectorAll` and re-parsed two attributes per word per frame — for a
+  10-word line, 600 queries and 1200 string parses a second to produce about ten
+  actual changes.
+
 ## 0.11.1 — 2026-08-10
 
 ### Changed
