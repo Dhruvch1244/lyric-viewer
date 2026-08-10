@@ -18,11 +18,11 @@ export interface NowPlayingSample {
   durationMs: number;
   positionMs: number;
   status: PlaybackStatus;
-  sourceApp: 'apple-music' | 'spotify';
+  sourceApp: 'apple-music' | 'spotify' | 'demo';
 }
 
 export interface NowPlayingSource {
-  readonly sourceApp: 'apple-music' | 'spotify';
+  readonly sourceApp: 'apple-music' | 'spotify' | 'demo';
   /** Whether this source's underlying app/SDK is available on this device right now. */
   isAvailable(): Promise<boolean>;
   /** Start observing playback state. `onSample` fires on every update. */

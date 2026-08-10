@@ -28,6 +28,7 @@ import {
 } from '@lyric-viewer/core';
 import { AppleMusicSource } from './sources/AppleMusicSource';
 import { SpotifySource } from './sources/SpotifySource';
+import { MockSource } from './sources/MockSource';
 import { SourceArbiter, type ArbitratedTrack } from './sources/SourceArbiter';
 
 const GAP_DROP_MS = 5000; // a lyric arriving after this much silence = a "drop"
@@ -80,7 +81,12 @@ export function useLyricEngine() {
   // --- detection + lyric lookup ---------------------------------------------
 
   useEffect(() => {
-    const arbiter = new SourceArbiter([new AppleMusicSource(), new SpotifySource()], {
+    // MockSource is listed last and only reports available when neither
+    // native bridge exists (e.g. Expo Go), so real Apple Music / Spotify
+    // sources always win in a proper dev-client / production build.
+    const arbiter = new SourceArbiter(
+      [new AppleMusicSource(), new SpotifySource(), new MockSource()],
+      {
       onTrack: async (t) => {
         setTrack(t);
         setCues([]);
