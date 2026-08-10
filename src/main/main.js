@@ -23,6 +23,7 @@ const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
 const { fetchArtwork } = require('./artwork');
 const { activeProvider } = require('./llm');
+const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
 
 /** @type {BrowserWindow|null} */
@@ -67,6 +68,13 @@ let presyncToken = 0;
 
 /** The track currently playing, used to key per-track sync offsets. */
 let currentTrack = null;
+
+/**
+ * True while a Whisper pass is running. Transcription is CPU-bound and holds
+ * a large model in memory, so passes are serialised rather than queued —
+ * two at once would just fight for the same cores.
+ */
+let transcribeBusy = false;
 
 /**
  * HSL → #rrggbb. `s` and `l` are percentages (0–100), `h` is degrees.
@@ -630,6 +638,110 @@ app.whenReady().then(() => {
 
   /* Snapshot of every cached song for the synced-songs library UI. */
   ipcMain.handle('list-synced', () => llmCache.list());
+
+  /*
+    Whisper transcription for songs LRCLIB has no synced lyrics for.
+
+    The renderer records the loopback audio for one full play (see
+    src/renderer/capture.js) and hands over mono 16 kHz PCM here. We
+    transcribe, cache the cues to disk, and push them to the UI — so this play
+    gets nothing, but every later play of the song is instant and offline.
+    Same learn-on-first-listen shape as the beat maps.
+
+    Serialised behind `transcribeBusy`: the model is memory- and CPU-hungry,
+    and two concurrent passes would simply fight for the same cores.
+  */
+  ipcMain.handle('transcribe-audio', async (_e, payload) => {
+    const track = payload && payload.track;
+    const pcm = payload && payload.pcm;
+    if (!track || !pcm || !pcm.length) return { status: 'ignored' };
+    if (transcribeBusy) return { status: 'busy' };
+
+    // Don't spend minutes of CPU on a track whose lyrics arrived meanwhile
+    // (e.g. fetched on a retry, or pre-synced from the 📋 panel).
+    const key = trackKey(track);
+    const existing = llmCache.get(key);
+    if (existing && Array.isArray(existing.cues) && existing.cues.length > 0) {
+      return { status: 'already-have-lyrics' };
+    }
+
+    transcribeBusy = true;
+    send('transcribe-progress', { track, stage: 'starting', pct: 0 });
+    try {
+      const samples = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
+      const result = await transcribePcm(samples, {
+        modelId: settings.get('whisperModel') || DEFAULT_MODEL,
+        language: payload.language || undefined,
+        onProgress: (p) => {
+          // Model download only happens on the very first run.
+          if (p && p.status === 'progress' && typeof p.progress === 'number') {
+            send('transcribe-progress', {
+              track, stage: 'downloading', pct: Math.round(p.progress), file: p.file,
+            });
+          }
+        },
+      });
+
+      if (!result.cues.length) {
+        send('transcribe-progress', { track, stage: 'empty', pct: 100 });
+        return { status: 'empty' };
+      }
+
+      const indic = detectIndic(result.cues).indic;
+      const payloadOut = {
+        cues: result.cues,
+        cuesDevanagari: null,
+        cuesEnglish: null,
+        source: { name: 'whisper', artistName: track.artist || null },
+        status: 'ok',
+        indic,
+        transliterationAvailable: isTransliterationAvailable(),
+        translationAvailable: isTranslationAvailable(),
+      };
+      lyricCache.set(key, payloadOut);
+
+      // Persist so the next play is instant, and the song joins the library.
+      llmCache.merge(key, {
+        title: track.title || null,
+        artist: track.artist || null,
+        cues: result.cues,
+        source: payloadOut.source,
+        indic,
+      });
+
+      send('transcribe-progress', { track, stage: 'done', pct: 100, lines: result.cues.length });
+      // Only surface the lyrics now if that song is still the one playing.
+      if (currentTrack && trackKey(currentTrack) === key) {
+        send('lyrics', { track, ...payloadOut, origin: 'whisper' });
+      }
+      return { status: 'ok', lines: result.cues.length };
+    } catch (err) {
+      send('transcribe-progress', { track, stage: 'error', message: err.message });
+      return { status: 'error', message: err.message };
+    } finally {
+      transcribeBusy = false;
+    }
+  });
+
+  ipcMain.handle('get-transcribe-config', () => ({
+    models: MODELS,
+    model: settings.get('whisperModel') || DEFAULT_MODEL,
+    language: settings.get('whisperLanguage') || '',
+    enabled: settings.get('whisperEnabled') !== false,
+  }));
+
+  ipcMain.handle('set-transcribe-config', (_e, cfg) => {
+    if (cfg && typeof cfg.model === 'string' && MODELS.some((m) => m.id === cfg.model)) {
+      settings.set('whisperModel', cfg.model);
+    }
+    if (cfg && typeof cfg.language === 'string') settings.set('whisperLanguage', cfg.language);
+    if (cfg && typeof cfg.enabled === 'boolean') settings.set('whisperEnabled', cfg.enabled);
+    return {
+      model: settings.get('whisperModel') || DEFAULT_MODEL,
+      language: settings.get('whisperLanguage') || '',
+      enabled: settings.get('whisperEnabled') !== false,
+    };
+  });
 
   ipcMain.handle('get-provider-status', () => ({ provider: activeProvider() }));
 

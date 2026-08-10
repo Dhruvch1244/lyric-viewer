@@ -1895,8 +1895,92 @@ function flushBeatmap() {
   });
 }
 
+/* ------------------------------------------- Whisper transcription (learn) */
+
+/**
+ * The track whose audio PcmCapture is currently recording, or null. Held so
+ * the recording is submitted under the song it actually belongs to, even
+ * though the flush happens after the *next* track has already started.
+ */
+let listeningTrack = null;
+
+/** Whether transcription is enabled + which language/model to use. */
+let transcribeCfg = { enabled: true, language: '', model: '' };
+
+/**
+ * Start recording the current song so it can be transcribed once it ends.
+ * Requires live loopback capture (the ♫ chip) — without real audio there is
+ * nothing to transcribe.
+ */
+function beginTranscriptionListen() {
+  if (!transcribeCfg.enabled || !window.PcmCapture || !currentTrack) return;
+  if (listeningTrack) return;                       // already recording this song
+  if (!window.AudioReactive || !window.AudioReactive.isActive()) {
+    // Loopback is off; say so rather than silently doing nothing, since the
+    // fix (turn on ♫) is one click away.
+    setStatus('no synced lyrics — enable ♫ to auto-transcribe');
+    return;
+  }
+  if (window.PcmCapture.start()) {
+    listeningTrack = currentTrack;
+    setStatus('no synced lyrics — listening to learn this song…');
+  }
+}
+
+/** Abandon the in-progress recording (real lyrics turned up, or user skipped). */
+function stopTranscriptionListen() {
+  if (!listeningTrack || !window.PcmCapture) return;
+  window.PcmCapture.reset();
+  listeningTrack = null;
+}
+
+/**
+ * Hand whatever was recorded to the main process for transcription. Called as
+ * the track changes, which is the point we know the song is over.
+ */
+function flushTranscription() {
+  if (!listeningTrack || !window.PcmCapture) return;
+  const track = listeningTrack;
+  listeningTrack = null;
+
+  const pcm = window.PcmCapture.take();   // null when too little audio to bother
+  if (!pcm) return;
+
+  window.player
+    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined })
+    .catch((err) => console.warn('[transcribe] failed:', err && err.message));
+}
+
+window.player.onTranscribeProgress((data) => {
+  if (!data) return;
+  switch (data.stage) {
+    case 'downloading':
+      setStatus(`downloading speech model… ${data.pct}%`);
+      break;
+    case 'starting':
+      setStatus('transcribing the last song…');
+      break;
+    case 'done':
+      setStatus(`learned ${data.lines} lines — ready next play`);
+      break;
+    case 'empty':
+      setStatus('could not make out any lyrics');
+      break;
+    case 'error':
+      setStatus(`transcription failed: ${data.message || ''}`);
+      break;
+    default:
+      break;
+  }
+});
+
+window.player.getTranscribeConfig().then((cfg) => {
+  if (cfg) transcribeCfg = cfg;
+}).catch(() => { /* keep defaults */ });
+
 window.player.onTrack((track) => {
   flushBeatmap();                 // persist what we learned for the previous song
+  flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
   durationMs = track.durationMs || 0;
   cuesLatin = [];
@@ -2000,9 +2084,18 @@ window.player.onLyrics((payload) => {
 
   switch (payload.status) {
     case 'searching': setStatus('finding lyrics…'); break;
-    case 'not-found': setStatus('no synced lyrics found'); clearColumn(); break;
+    case 'not-found':
+      setStatus('no synced lyrics found');
+      clearColumn();
+      // Nothing to show this play — start listening so Whisper can transcribe
+      // the song at the end and have it ready for every play after.
+      beginTranscriptionListen();
+      break;
     case 'error': setStatus('lyric lookup failed'); clearColumn(); break;
-    default: setStatus('');
+    default:
+      setStatus('');
+      // Real lyrics arrived; stop any recording started for this track.
+      stopTranscriptionListen();
   }
   if (payload.status === 'ok') showSourceBadge(payload.origin);
   applyScript();
@@ -2047,6 +2140,7 @@ window.player.onTranslation((payload) => {
 
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
+  flushTranscription();           // playback stopped — the song is over, so learn it
   if (window.BeatMap) window.BeatMap.load(null);
   currentTrack = null;
   cuesLatin = [];

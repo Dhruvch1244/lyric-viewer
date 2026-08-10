@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('player', {
   onArtwork: (cb) => ipcRenderer.on('artwork', (_e, data) => cb(data)),
   onBeatmap: (cb) => ipcRenderer.on('beatmap', (_e, data) => cb(data)),
   onPresyncProgress: (cb) => ipcRenderer.on('presync-progress', (_e, data) => cb(data)),
+  onTranscribeProgress: (cb) => ipcRenderer.on('transcribe-progress', (_e, data) => cb(data)),
   onIdle: (cb) => ipcRenderer.on('idle', () => cb()),
   onOffset: (cb) => ipcRenderer.on('offset', (_e, data) => cb(data)),
 
@@ -29,4 +30,13 @@ contextBridge.exposeInMainWorld('player', {
   saveBeatmap: (payload) => ipcRenderer.invoke('save-beatmap', payload),
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
   listSynced: () => ipcRenderer.invoke('list-synced'),
+
+  /**
+   * Hand recorded loopback PCM to the main process for Whisper transcription.
+   * `pcm` is a mono 16 kHz Float32Array; structured clone transfers it as-is,
+   * so there is no base64/JSON blow-up on the way across.
+   */
+  transcribeAudio: (payload) => ipcRenderer.invoke('transcribe-audio', payload),
+  getTranscribeConfig: () => ipcRenderer.invoke('get-transcribe-config'),
+  setTranscribeConfig: (cfg) => ipcRenderer.invoke('set-transcribe-config', cfg),
 });
