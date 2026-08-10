@@ -42,6 +42,9 @@ const els = {
   syncedList: document.getElementById('synced-list'),
   syncedCount: document.getElementById('synced-count'),
   source: document.getElementById('hud-source'),
+  captureNudge: document.getElementById('capture-nudge'),
+  nudgeEnable: document.getElementById('nudge-enable'),
+  nudgeDismiss: document.getElementById('nudge-dismiss'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -3102,7 +3105,73 @@ async function enableAudio() {
   audioEnabled = ok;
   els.audioBtn.setAttribute('aria-pressed', String(ok));
   try { localStorage.setItem('audioEnabled', ok ? '1' : '0'); } catch { /* ignore */ }
+  // Finding the chip unprompted answers the question as well as the prompt
+  // does, so the nudge should never appear afterwards.
+  if (ok) closeCaptureNudge();
   return ok;
+}
+
+/* ------------------------------------------------------- capture discovery */
+
+/*
+  The `♫` gap.
+
+  Almost everything the app LEARNS needs loopback capture: the energy arc behind
+  the Heatmap and Vinyl timelines, the measured tempo the platter and the
+  dancers run on, and the anticipation that reads a stored map forwards. With
+  capture off none of it happens — and nothing on screen said so, so a user who
+  never found one chip in a row that is hidden until the cursor moves silently
+  got none of the features. That is a discovery problem, not a preference.
+
+  Deliberately not auto-enabled: starting a recording of system audio without
+  being asked is not ours to decide. So: asked once, honoured either way, and
+  never raised again.
+*/
+
+/** Playback needed before asking, so the prompt does not land during startup. */
+const CAPTURE_NUDGE_AFTER_MS = 20000;
+const CAPTURE_NUDGE_KEY = 'captureNudgeAnswered';
+
+let captureNudgeVisible = false;
+
+/** Whether this install has already answered the prompt, either way. */
+function captureNudgeAnswered() {
+  try {
+    return localStorage.getItem(CAPTURE_NUDGE_KEY) === '1';
+  } catch {
+    return true;   // no storage means we cannot remember a "no" — so never ask
+  }
+}
+
+/** Record that it was answered and take it off screen. */
+function closeCaptureNudge() {
+  captureNudgeVisible = false;
+  if (els.captureNudge) els.captureNudge.hidden = true;
+  try { localStorage.setItem(CAPTURE_NUDGE_KEY, '1'); } catch { /* ignore */ }
+}
+
+/**
+ * Show the prompt once a song has been playing long enough, if capture is off
+ * and this install has never answered.
+ * @param {number} positionMs
+ */
+function maybeShowCaptureNudge(positionMs) {
+  if (captureNudgeVisible || audioEnabled || !els.captureNudge) return;
+  if (!currentTrack || positionMs < CAPTURE_NUDGE_AFTER_MS) return;
+  if (captureNudgeAnswered()) return;
+  captureNudgeVisible = true;
+  els.captureNudge.hidden = false;
+}
+
+if (els.nudgeEnable) {
+  els.nudgeEnable.addEventListener('click', async () => {
+    closeCaptureNudge();
+    await enableAudio();
+    refreshButtons();
+  });
+}
+if (els.nudgeDismiss) {
+  els.nudgeDismiss.addEventListener('click', closeCaptureNudge);
 }
 
 /* ------------------------------------------------------------------- wiring */
@@ -3371,6 +3440,7 @@ window.player.onTick((state) => {
   anchorPositionMs = state.positionMs ?? 0;
   anchorAt = performance.now();
   if (state.durationMs) durationMs = state.durationMs;
+  maybeShowCaptureNudge(anchorPositionMs);
 });
 
 /* Sentiment-driven graphics: recolour + re-pace the visuals to the song's mood. */

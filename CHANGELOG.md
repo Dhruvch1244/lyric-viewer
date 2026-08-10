@@ -2,6 +2,49 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.16.0 — 2026-08-10
+
+### Performance
+
+- **0.15.0's new modes cost about what Liquid does again.** They shipped
+  against this codebase's own idiom — it already caches the vignette on resize
+  and pre-renders glow sprites by colour — and the new draw paths did neither.
+  Measured by call count rather than frame rate, because repeated identical runs
+  vary 3–4× in fps here and cannot rank two presets:
+
+  | preset | fillRect | arc | stroke | gradients |
+  | --- | --- | --- | --- | --- |
+  | Heatmap | 164 → **72** | 16 | 6 | 0.2 |
+  | Vinyl | 166 → **72** | 31 → **21** | 18 → **10** | 1 → **0** |
+  | Stage | 72 | 17 | 6 | 4 → **0.1** |
+
+  The timeline and the vinyl platter are pre-rendered bitmaps now; the platter's
+  sheen is baked flat and *rotated* at blit time rather than rebuilding a
+  gradient every frame. The stage beams and floor keep cached colour stops and
+  vary their brightness through `globalAlpha`. `HeatMap.cells()` is memoised
+  against the revision counter `sections()` already used — it had been
+  allocating 96 objects and an array sixty times a second to return identical
+  values.
+
+  The first attempt at this cached nothing: the keys used `accentLive`, which is
+  the accent shifted by a hue that drifts every frame. Anything cached by colour
+  now keys on a snapped hue.
+
+### Added
+
+- **The app asks about `♫`, once.** Almost everything it learns needs loopback
+  capture — the energy arc behind the timelines, the measured tempo the platter
+  and the dancers run on, and the anticipation that reads a stored map forwards.
+  With capture off none of that happens, and nothing on screen said so, so
+  anyone who never found one chip in a row that stays hidden until the cursor
+  moves silently got none of it.
+
+  After twenty seconds of playback, a dismissible prompt offers to turn it on.
+  Asked once per install and never raised again, whichever way it is answered —
+  including when the `♫` chip is found unprompted. It is deliberately not
+  enabled by default: starting a recording of system audio without being asked
+  is not the app's call to make.
+
 ## 0.15.0 — 2026-08-10
 
 ### Fixed

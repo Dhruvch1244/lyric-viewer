@@ -82,7 +82,7 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
-| `♫` chip | Audio-reactive mode (captures system sound) |
+| `♫` chip | Audio-reactive mode (captures system sound) — also what lets the app *learn* a song |
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
 
 **Visual presets (`◈` chip).** Each is a deliberate look with a stated cost,
@@ -107,6 +107,12 @@ Heatmap, Vinyl and Stage are ordinary layer combinations, so the pieces compose:
 the timeline is on in Vinyl too, and the dancers appear in every look except
 Ghost. Only Ghost is structurally different, because taking the canvas out of
 the page is the entire point of it.
+
+Most of what the app *learns* — the energy arc behind the timelines, the
+measured tempo the platter and the dancers run on, and anticipation — needs the
+`♫` chip. The app asks about this once, twenty seconds into a song, and never
+raises it again either way. It is not enabled by default on purpose: recording
+system audio without being asked is not the app's call.
 
 **Anticipation.** Once a song's heat map is on disk, the app can read it
 *forwards* — the only thing here that knows what has not happened yet. A few
