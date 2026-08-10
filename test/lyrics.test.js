@@ -11,6 +11,8 @@ const assert = require('node:assert/strict');
 
 const {
   cleanTitle,
+  cleanArtist,
+  versionTags,
   normalize,
   tokenSimilarity,
   scoreCandidate,
@@ -113,4 +115,84 @@ test('detectIndic identifies native script and romanized Hindi', () => {
 
   assert.deepEqual(detectIndic([{ text: 'this is a plain english line' }]), { indic: false, script: 'latin' });
   assert.deepEqual(detectIndic([]), { indic: false, script: 'latin' });
+});
+
+/* --- artist credit cleaning ------------------------------------------------
+   YouTube Music and VEVO decorate the artist field, which poisons matching
+   against LRCLIB and the artwork APIs and looks wrong on screen. */
+
+test('cleanArtist strips YouTube "- Topic" auto-channel suffixes', () => {
+  assert.equal(cleanArtist('Seedhe Maut - Topic'), 'Seedhe Maut');
+  assert.equal(cleanArtist('DIVINE — Topic'), 'DIVINE');
+  assert.equal(cleanArtist('KR$NA - topic'), 'KR$NA');
+});
+
+test('cleanArtist strips VEVO and official-channel decoration', () => {
+  // VEVO channel names are concatenated, so this is a suffix strip.
+  assert.equal(cleanArtist('TheWeekndVEVO'), 'TheWeeknd');
+  assert.equal(cleanArtist('BillieEilishVEVO'), 'BillieEilish');
+  assert.equal(cleanArtist('Arijit Singh - Official Channel'), 'Arijit Singh');
+});
+
+test('cleanArtist leaves a normal credit untouched', () => {
+  assert.equal(cleanArtist('Seedhe Maut'), 'Seedhe Maut');
+  assert.equal(cleanArtist('Calvin Harris & Dua Lipa'), 'Calvin Harris & Dua Lipa');
+  assert.equal(cleanArtist(''), '');
+});
+
+test('cleanArtist keeps a hyphenated name that is not a Topic channel', () => {
+  assert.equal(cleanArtist('Jay-Z'), 'Jay-Z');
+  assert.equal(cleanArtist('Anne-Marie'), 'Anne-Marie');
+});
+
+/* --- version-aware matching ------------------------------------------------
+   A studio LRC file lines up with the studio cut only, so a live or slowed
+   edit must not win on title/artist similarity alone. */
+
+test('versionTags finds recording-version markers in a raw title', () => {
+  assert.deepEqual([...versionTags('Song Name (Live)')], ['live']);
+  assert.deepEqual([...versionTags('Song Name - Slowed + Reverb')].sort(), ['reverb', 'slowed']);
+  assert.deepEqual([...versionTags('Plain Song')], []);
+});
+
+test('scoreCandidate prefers the studio cut for a studio track', () => {
+  const target = { title: 'Nanchaku', artist: 'Seedhe Maut', durationMs: 180000 };
+  const studio = {
+    syncedLyrics: '[00:01.00]x', trackName: 'Nanchaku',
+    artistName: 'Seedhe Maut', duration: 180,
+  };
+  const live = {
+    syncedLyrics: '[00:01.00]x', trackName: 'Nanchaku (Live)',
+    artistName: 'Seedhe Maut', duration: 181,
+  };
+  assert.ok(
+    scoreCandidate(studio, target) > scoreCandidate(live, target),
+    'studio entry should outrank the live cut'
+  );
+});
+
+test('scoreCandidate prefers the live cut when the track IS the live cut', () => {
+  const target = { title: 'Nanchaku (Live)', artist: 'Seedhe Maut', durationMs: 181000 };
+  const studio = {
+    syncedLyrics: '[00:01.00]x', trackName: 'Nanchaku',
+    artistName: 'Seedhe Maut', duration: 180,
+  };
+  const live = {
+    syncedLyrics: '[00:01.00]x', trackName: 'Nanchaku (Live)',
+    artistName: 'Seedhe Maut', duration: 181,
+  };
+  assert.ok(
+    scoreCandidate(live, target) > scoreCandidate(studio, target),
+    'live entry should outrank the studio cut'
+  );
+});
+
+test('scoreCandidate matches a track whose artist arrived as a Topic channel', () => {
+  const target = { title: 'Nanchaku', artist: 'Seedhe Maut - Topic', durationMs: 180000 };
+  const candidate = {
+    syncedLyrics: '[00:01.00]x', trackName: 'Nanchaku',
+    artistName: 'Seedhe Maut', duration: 180,
+  };
+  // Without cleanArtist the "Topic" token drags artist similarity down.
+  assert.ok(scoreCandidate(candidate, target) > 2.5);
 });

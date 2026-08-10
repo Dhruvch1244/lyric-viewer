@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- GPU swirl field (WebGL2). Sits behind #backdrop and renders the fluid
+         colour base; #backdrop keeps the discrete particle/curve layers. -->
+    <canvas id="swirl" aria-hidden="true"></canvas>
     <canvas id="backdrop" aria-hidden="true"></canvas>
 
     <header id="topbar" class="topbar">
@@ -86,8 +89,10 @@
       </div>
     </footer>
 
+    <script src="swirl.js"></script>
     <script src="sprites.js"></script>
     <script src="audio.js"></script>
+    <script src="capture.js"></script>
     <script src="beatmap.js"></script>
     <script src="renderer.js"></script>
   </body>

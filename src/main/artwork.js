@@ -1,6 +1,6 @@
 'use strict';
 
-const { cleanTitle, tokenSimilarity } = require('./lyrics');
+const { cleanTitle, cleanArtist, tokenSimilarity, versionTags } = require('./lyrics');
 
 /* Free, keyless artwork + credits lookup, tried across three sources so a miss on
    one still yields cover art:
@@ -52,20 +52,44 @@ async function downloadImage(url) {
  * @param {string} cleaned pre-cleaned title
  * @returns {T|null}
  */
+/**
+ * Minimum acceptable score.
+ *
+ * Scores run 0..3 (title similarity doubled, plus artist similarity). This
+ * previously fell back to `results[0]` whenever nothing scored well, which is
+ * how a search for an obscure track ended up showing a confidently wrong
+ * cover: the API always returns *something*, and the first row was taken on
+ * faith. Returning null instead lets the caller try the next source, and
+ * showing no art is better than showing another band's album.
+ */
+const MIN_MATCH_SCORE = 0.55;
+
 function bestMatch(results, shape, track, cleaned) {
+  const wantVersions = versionTags(track.title || '');
+  const artist = cleanArtist(track.artist || '');
+
   let best = null;
   let bestScore = -Infinity;
   for (const r of results) {
-    const { title, artist } = shape(r);
+    const { title, artist: candidateArtist } = shape(r);
     const t = tokenSimilarity(cleaned, title || '');
-    const a = track.artist ? tokenSimilarity(track.artist, artist || '') : 0;
-    const score = t * 2 + a;
+    const a = artist ? tokenSimilarity(artist, candidateArtist || '') : 0;
+    let score = t * 2 + a;
+
+    // Same version guard as the lyric matcher: a live or remix cut carries
+    // different art from the studio release.
+    const haveVersions = versionTags(title || '');
+    let mismatch = 0;
+    for (const tag of wantVersions) if (!haveVersions.has(tag)) mismatch += 1;
+    for (const tag of haveVersions) if (!wantVersions.has(tag)) mismatch += 1;
+    score -= mismatch * 0.5;
+
     if (score > bestScore) {
       bestScore = score;
       best = r;
     }
   }
-  return best || results[0] || null;
+  return bestScore >= MIN_MATCH_SCORE ? best : null;
 }
 
 /**

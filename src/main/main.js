@@ -15,7 +15,7 @@ app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
 app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
-const { fetchSyncedLyrics, detectIndic } = require('./lyrics');
+const { fetchSyncedLyrics, detectIndic, cleanArtist } = require('./lyrics');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
@@ -23,6 +23,7 @@ const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
 const { fetchArtwork } = require('./artwork');
 const { activeProvider } = require('./llm');
+const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
 
 /** @type {BrowserWindow|null} */
@@ -67,6 +68,13 @@ let presyncToken = 0;
 
 /** The track currently playing, used to key per-track sync offsets. */
 let currentTrack = null;
+
+/**
+ * True while a Whisper pass is running. Transcription is CPU-bound and holds
+ * a large model in memory, so passes are serialised rather than queued —
+ * two at once would just fight for the same cores.
+ */
+let transcribeBusy = false;
 
 /**
  * HSL → #rrggbb. `s` and `l` are percentages (0–100), `h` is degrees.
@@ -514,7 +522,13 @@ app.whenReady().then(() => {
 
   const watcher = new SmtcWatcher({ intervalMs: 250 });
 
-  watcher.on('track', (track) => {
+  watcher.on('track', (rawTrack) => {
+    // Clean the artist credit once, here at the SMTC boundary, so every
+    // consumer downstream sees the same tidy value: lyric matching, artwork
+    // search, the dancer registry, the cache key and the on-screen label.
+    // YouTube Music reports "Seedhe Maut - Topic" and VEVO uploads append
+    // "VEVO"; both wreck matching and look wrong on screen.
+    const track = { ...rawTrack, artist: cleanArtist(rawTrack.artist) };
     currentTrack = track;
     send('track', { ...track, ...paletteForTrack(track) });
     send('offset', { offsetMs: activeOffsetMs(), perTrack: true });
@@ -630,6 +644,142 @@ app.whenReady().then(() => {
 
   /* Snapshot of every cached song for the synced-songs library UI. */
   ipcMain.handle('list-synced', () => llmCache.list());
+
+  /*
+    Whisper transcription for songs LRCLIB has no synced lyrics for.
+
+    The renderer records the loopback audio for one full play (see
+    src/renderer/capture.js) and hands over mono 16 kHz PCM here. We
+    transcribe, cache the cues to disk, and push them to the UI — so this play
+    gets nothing, but every later play of the song is instant and offline.
+    Same learn-on-first-listen shape as the beat maps.
+
+    Serialised behind `transcribeBusy`: the model is memory- and CPU-hungry,
+    and two concurrent passes would simply fight for the same cores.
+  */
+  ipcMain.handle('transcribe-audio', async (_e, payload) => {
+    const track = payload && payload.track;
+    const pcm = payload && payload.pcm;
+    if (!track || !pcm || !pcm.length) return { status: 'ignored' };
+    if (transcribeBusy) return { status: 'busy' };
+
+    // Don't spend minutes of CPU on a track whose lyrics arrived meanwhile
+    // (e.g. fetched on a retry, or pre-synced from the 📋 panel).
+    const key = trackKey(track);
+    const existing = llmCache.get(key);
+    if (existing && Array.isArray(existing.cues) && existing.cues.length > 0) {
+      return { status: 'already-have-lyrics' };
+    }
+
+    transcribeBusy = true;
+    send('transcribe-progress', { track, stage: 'starting', pct: 0 });
+    try {
+      const samples = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
+      const modelId = settings.get('whisperModel') || DEFAULT_MODEL;
+      const forcedLanguage = payload.language || settings.get('whisperLanguage') || '';
+      const onProgress = (p) => {
+        // Model download only happens on the very first run.
+        if (p && p.status === 'progress' && typeof p.progress === 'number') {
+          send('transcribe-progress', {
+            track, stage: 'downloading', pct: Math.round(p.progress), file: p.file,
+          });
+        }
+      };
+
+      let result = await transcribePcm(samples, {
+        modelId,
+        language: forcedLanguage || undefined,
+        onProgress,
+      });
+
+      /*
+        Auto-language, without asking the user to pick one.
+
+        Whisper does not detect language here — omitting it silently decodes as
+        English, which turns Hindi/Punjabi vocals into nonsense. But that
+        nonsense is itself the signal: forced to English, the model writes
+        phonetic approximations of Hindi that are thick with exactly the
+        function words detectIndic() already recognises ("hai", "mera",
+        "tera", ...). So we let the English pass happen, test its output, and
+        redo the pass properly as Hindi when it looks Indic.
+
+        Costs a second pass only for the tracks that need one, and only when
+        the user has not pinned a language.
+      */
+      if (!forcedLanguage && result.cues.length && detectIndic(result.cues).indic) {
+        send('transcribe-progress', { track, stage: 'relanguage', pct: 50 });
+        try {
+          const hindi = await transcribePcm(samples, {
+            modelId, language: 'hindi', onProgress,
+          });
+          // Only accept the retry if it actually produced something usable.
+          if (hindi.cues.length) result = hindi;
+        } catch (err) {
+          // Keep the English pass rather than losing the whole transcription.
+          console.warn('[transcribe] Hindi retry failed:', err.message);
+        }
+      }
+
+      if (!result.cues.length) {
+        send('transcribe-progress', { track, stage: 'empty', pct: 100 });
+        return { status: 'empty' };
+      }
+
+      const indic = detectIndic(result.cues).indic;
+      const payloadOut = {
+        cues: result.cues,
+        cuesDevanagari: null,
+        cuesEnglish: null,
+        source: { name: 'whisper', artistName: track.artist || null },
+        status: 'ok',
+        indic,
+        transliterationAvailable: isTransliterationAvailable(),
+        translationAvailable: isTranslationAvailable(),
+      };
+      lyricCache.set(key, payloadOut);
+
+      // Persist so the next play is instant, and the song joins the library.
+      llmCache.merge(key, {
+        title: track.title || null,
+        artist: track.artist || null,
+        cues: result.cues,
+        source: payloadOut.source,
+        indic,
+      });
+
+      send('transcribe-progress', { track, stage: 'done', pct: 100, lines: result.cues.length });
+      // Only surface the lyrics now if that song is still the one playing.
+      if (currentTrack && trackKey(currentTrack) === key) {
+        send('lyrics', { track, ...payloadOut, origin: 'whisper' });
+      }
+      return { status: 'ok', lines: result.cues.length };
+    } catch (err) {
+      send('transcribe-progress', { track, stage: 'error', message: err.message });
+      return { status: 'error', message: err.message };
+    } finally {
+      transcribeBusy = false;
+    }
+  });
+
+  ipcMain.handle('get-transcribe-config', () => ({
+    models: MODELS,
+    model: settings.get('whisperModel') || DEFAULT_MODEL,
+    language: settings.get('whisperLanguage') || '',
+    enabled: settings.get('whisperEnabled') !== false,
+  }));
+
+  ipcMain.handle('set-transcribe-config', (_e, cfg) => {
+    if (cfg && typeof cfg.model === 'string' && MODELS.some((m) => m.id === cfg.model)) {
+      settings.set('whisperModel', cfg.model);
+    }
+    if (cfg && typeof cfg.language === 'string') settings.set('whisperLanguage', cfg.language);
+    if (cfg && typeof cfg.enabled === 'boolean') settings.set('whisperEnabled', cfg.enabled);
+    return {
+      model: settings.get('whisperModel') || DEFAULT_MODEL,
+      language: settings.get('whisperLanguage') || '',
+      enabled: settings.get('whisperEnabled') !== false,
+    };
+  });
 
   ipcMain.handle('get-provider-status', () => ({ provider: activeProvider() }));
 

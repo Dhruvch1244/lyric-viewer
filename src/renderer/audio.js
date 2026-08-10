@@ -164,5 +164,15 @@
     return env;
   }
 
-  window.AudioReactive = { start, stop, sample, isActive: () => running };
+  /**
+   * The live loopback MediaStream, or null when capture is off. Exposed so
+   * capture.js can tap the same stream for Whisper transcription instead of
+   * prompting the user for a second screen-capture permission.
+   * @returns {MediaStream|null}
+   */
+  function getStream() {
+    return running ? mediaStream : null;
+  }
+
+  window.AudioReactive = { start, stop, sample, isActive: () => running, getStream };
 })();
