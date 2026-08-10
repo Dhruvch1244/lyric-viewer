@@ -506,9 +506,15 @@ function buildColumn() {
 /** Render a cue's words (interpolated per-word timing) into an element. */
 function renderWords(el, index) {
   const cue = cues[index];
-  // Spread the words across the time the line is actually sung, not across the
-  // instrumental stretch that follows it.
-  const timings = buildWordTimings(cue.text, cue.timeMs, lineEndMs(index));
+  /*
+    Measured timings win. `cue.words` is present when this song has been through
+    word-level alignment (correct words from the lyric source, measured timing
+    from Whisper — see src/main/wordalign.js). Only when that is absent do we
+    fall back to estimating the split from syllables.
+  */
+  const timings = Array.isArray(cue.words) && cue.words.length > 0
+    ? cue.words
+    : buildWordTimings(cue.text, cue.timeMs, lineEndMs(index));
 
   el.textContent = '';
   activeWords = [];
