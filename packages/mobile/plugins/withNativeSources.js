@@ -1,37 +1,29 @@
 /**
- * Expo config plugin: copies the hand-written native bridge files
- * (../ios-native/*.swift, *.m) into the generated ios/ Xcode project during
- * `expo prebuild` / EAS Build, and registers them as source files on the
- * app target — so they don't need to be committed inside a generated ios/
- * folder, and rebuild automatically on every prebuild.
+ * Expo config plugin: copies the hand-written Apple Music native bridge
+ * (../ios-native/MusicKitBridge.{swift,m}) into the generated ios/ Xcode
+ * project during `expo prebuild` / EAS Build, and registers the files as
+ * sources on the app target — so they don't need to be committed inside a
+ * generated ios/ folder, and rebuild automatically on every prebuild.
+ *
+ * Apple Music only. Spotify support is intentionally excluded from the build:
+ * SpotifyAppRemoteBridge.swift `import`s the SpotifyiOS xcframework, which is
+ * a manual, non-scriptable Xcode step (see packages/mobile/README.md). Its
+ * source files remain in ios-native/ but are NOT compiled — re-add them here
+ * (and embed the framework) if Spotify is revived later.
  *
  * NOT run/tested — written in a Linux environment with no Xcode, so the
  * `expo prebuild` step that would exercise this has never actually executed
- * here. This follows the standard @expo/config-plugins community pattern
- * for adding native source files (withDangerousMod to copy + withXcodeProject
- * to register), but verify the Xcode project actually builds after the
- * first real `expo prebuild -p ios` and fix anything this got wrong.
- *
- * Does NOT handle the SpotifyiOS.xcframework — that's a manual, one-time
- * Xcode step (see packages/mobile/README.md), since it requires downloading
- * a third-party binary this plugin has no business fetching automatically.
+ * here. This follows the standard @expo/config-plugins community pattern for
+ * adding native source files (withDangerousMod to copy + withXcodeProject to
+ * register); verify the Xcode project builds after the first real EAS Build
+ * and fix anything this got wrong.
  */
 
 const fs = require('fs');
 const path = require('path');
-const { withDangerousMod, withXcodeProject, withInfoPlist } = require('@expo/config-plugins');
+const { withDangerousMod, withXcodeProject } = require('@expo/config-plugins');
 
-// SpotifyAppRemoteBridge.swift `import`s SpotifyiOS, which only exists once
-// the .xcframework is manually embedded in Xcode (see README.md) — until
-// then, including it breaks the whole build. Set SKIP_SPOTIFY_NATIVE=1 to
-// build Apple-Music-only while you don't have that framework in place yet.
-const INCLUDE_SPOTIFY = process.env.SKIP_SPOTIFY_NATIVE !== '1';
-
-const NATIVE_FILES = [
-  'MusicKitBridge.swift',
-  'MusicKitBridge.m',
-  ...(INCLUDE_SPOTIFY ? ['SpotifyAppRemoteBridge.swift', 'SpotifyAppRemoteBridge.m'] : []),
-];
+const NATIVE_FILES = ['MusicKitBridge.swift', 'MusicKitBridge.m'];
 
 const SOURCE_DIR = path.join(__dirname, '..', 'ios-native');
 
@@ -54,12 +46,14 @@ function withRegisterNativeSources(config) {
     const project = cfg.modResults;
     const projectName = cfg.modRequest.projectName;
     const target = project.getFirstTarget().uuid;
-    const group = project.findPBXGroupKey({ name: projectName }) || project.getFirstProject().firstProject.mainGroup;
+    const group =
+      project.findPBXGroupKey({ name: projectName }) ||
+      project.getFirstProject().firstProject.mainGroup;
 
     for (const file of NATIVE_FILES) {
-      const alreadyPresent = Object.values(project.hash.project.objects.PBXFileReference || {}).some(
-        (ref) => ref && ref.path === `"${file}"`
-      );
+      const alreadyPresent = Object.values(
+        project.hash.project.objects.PBXFileReference || {}
+      ).some((ref) => ref && ref.path === `"${file}"`);
       if (alreadyPresent) continue;
       project.addSourceFile(file, { target }, group);
     }
@@ -67,23 +61,8 @@ function withRegisterNativeSources(config) {
   });
 }
 
-function withNowPlayingInfoPlist(config) {
-  return withInfoPlist(config, (cfg) => {
-    cfg.modResults.LSApplicationQueriesSchemes = Array.from(
-      new Set([...(cfg.modResults.LSApplicationQueriesSchemes || []), 'spotify', 'spotify-action'])
-    );
-    // Set your real Spotify Client ID here (or better, template it in from
-    // an app.json `extra` field / EAS secret) before building — this
-    // placeholder will not authenticate.
-    cfg.modResults.SpotifyClientID = cfg.modResults.SpotifyClientID || 'REPLACE_WITH_SPOTIFY_CLIENT_ID';
-    cfg.modResults.SpotifyRedirectURL = cfg.modResults.SpotifyRedirectURL || 'lyricplayer://spotify-callback';
-    return cfg;
-  });
-}
-
 module.exports = function withNativeSources(config) {
   config = withCopyNativeSources(config);
   config = withRegisterNativeSources(config);
-  config = withNowPlayingInfoPlist(config);
   return config;
 };

@@ -10,9 +10,10 @@ import React
 ///
 /// Matches the JS-side contract in
 /// packages/mobile/src/sources/AppleMusicSource.ts: isAuthorized,
-/// requestAuthorization, startObserving, stopObserving, emitting a
-/// "nowPlaying" event shaped like NowPlayingSample (minus sourceApp, which
-/// the JS side fills in).
+/// requestAuthorization, and a "nowPlaying" event shaped like NowPlayingSample
+/// (minus sourceApp, which the JS side fills in). Observation starts/stops
+/// automatically via RCTEventEmitter's listener lifecycle — JS just adds and
+/// removes the event listener.
 ///
 /// NOT compiled/tested — written in a Linux environment with no Xcode.
 /// Verify against Apple's MediaPlayer framework docs and fix on first build.
@@ -41,26 +42,33 @@ class MusicKitBridge: RCTEventEmitter {
     }
   }
 
-  @objc
-  func startObserving() {
-    guard !observing else { return }
-    observing = true
-    player.beginGeneratingPlaybackNotifications()
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(emitState),
-      name: .MPMusicPlayerControllerNowPlayingItemDidChange, object: player)
-    NotificationCenter.default.addObserver(
-      self, selector: #selector(emitState),
-      name: .MPMusicPlayerControllerPlaybackStateDidChange, object: player)
-    emitState()
+  /// RCTEventEmitter lifecycle hook — invoked when the first JS listener
+  /// subscribes. This is why AppleMusicSource.ts doesn't (and must not) also
+  /// expose a manual start method: overriding these is the collision-free way
+  /// to drive observation, since RCTEventEmitter already declares them.
+  override func startObserving() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self, !self.observing else { return }
+      self.observing = true
+      self.player.beginGeneratingPlaybackNotifications()
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(self.emitState),
+        name: .MPMusicPlayerControllerNowPlayingItemDidChange, object: self.player)
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(self.emitState),
+        name: .MPMusicPlayerControllerPlaybackStateDidChange, object: self.player)
+      self.emitState()
+    }
   }
 
-  @objc
-  func stopObserving() {
-    guard observing else { return }
-    observing = false
-    NotificationCenter.default.removeObserver(self)
-    player.endGeneratingPlaybackNotifications()
+  /// RCTEventEmitter lifecycle hook — invoked when the last JS listener leaves.
+  override func stopObserving() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self, self.observing else { return }
+      self.observing = false
+      NotificationCenter.default.removeObserver(self)
+      self.player.endGeneratingPlaybackNotifications()
+    }
   }
 
   @objc

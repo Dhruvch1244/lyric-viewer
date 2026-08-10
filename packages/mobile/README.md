@@ -15,18 +15,20 @@ for the full phased plan.
   script detection, position-estimation math, word-timing distribution, and
   the palette/sentiment math. These have automated parity checks against the
   original Windows app's behavior (see the repo's Phase 0 work).
-- **Written, but not compiled or run yet**: the native Swift bridges,
-  `ios-native/MusicKitBridge.swift` (reads Apple Music's now-playing state
-  via `MPMusicPlayerController.systemMusicPlayer`) and
-  `ios-native/SpotifyAppRemoteBridge.swift` (wraps Spotify's App Remote SDK).
-  An Expo config plugin (`plugins/withNativeSources.js`) copies them into the
-  generated Xcode project and registers Info.plist entries automatically
-  during `expo prebuild` / EAS Build. This was all written and reasoned about
-  from Apple's/Spotify's documented APIs in a Linux container with no Xcode
-  — there has been **no compiler feedback on any of it yet**. Expect to fix
-  real build errors on the first EAS Build; each file's header comment flags
-  what's riskiest (Spotify's SDK method signatures shift between versions,
-  in particular).
+- **Written, but not compiled or run yet**: the native Swift bridge
+  `ios-native/MusicKitBridge.swift`, which reads Apple Music's now-playing
+  state via `MPMusicPlayerController.systemMusicPlayer`. An Expo config plugin
+  (`plugins/withNativeSources.js`) copies it into the generated Xcode project
+  and registers it on the app target automatically during `expo prebuild` /
+  EAS Build. This was written and reasoned about from Apple's documented
+  MediaPlayer APIs in a Linux container with no Xcode — there has been **no
+  compiler feedback on it yet**, so expect to fix real build errors on the
+  first EAS Build. **Apple Music is the only supported source.** The Spotify
+  bridge (`ios-native/SpotifyAppRemoteBridge.*`, `src/sources/SpotifySource.ts`)
+  remains in the tree but is dormant: the config plugin no longer compiles it
+  and `useLyricEngine` no longer registers it, because it needs the manually
+  embedded `SpotifyiOS.xcframework` (a Mac-only step). Revive it by re-adding
+  those files to `NATIVE_FILES` in the plugin and to the arbiter's source list.
 - **Written and type-checked, but not visually run**: the Phase 2 visual
   system — `src/visuals/Starfield.tsx` (Skia canvas: per-track colour wash,
   drifting glow orbs, twinkling starfield, vignette, build-up bloom, drop
@@ -54,14 +56,21 @@ for the full phased plan.
 
 ## Quick preview with Expo Go (no build required)
 
-For the fastest way to see the visuals (not the Apple Music/Spotify
-detection — Expo Go can't load the custom native Swift modules for that; see
-below): install the free **Expo Go** app from the App Store, then from
+For the fastest way to see the visuals (not real Apple Music detection —
+Expo Go can't load the custom native Swift module for that; see below):
+install the free **Expo Go** app from the App Store, then from
 `packages/mobile` run `npm run start:go` and scan the QR code **using Expo
 Go's own in-app scanner**, not the regular Camera/Photos app — scanning with
 the plain Camera app can open the URL in Safari instead of handing off to
 Expo Go, which fails with a `CommandError: Must specify "expo-platform"
 header` error.
+
+In Expo Go, `MockSource` (`src/sources/MockSource.ts`) automatically stands
+in for the absent native bridge and plays a fixed demo track (edit
+`DEMO_TRACK` to change it), so you see the full pipeline — LRCLIB lyric
+lookup, palette, scrolling lyrics, drops/build-ups — with a `· demo` tag in
+the header. It reports available only when the native bridge is missing, so
+it disappears automatically in the real build below.
 
 **Expo Go only ever supports the single latest SDK version** (there's no way
 to install an older Expo Go build for iOS) — this project tracks that SDK
@@ -74,9 +83,9 @@ SDK 52 → 54; `react-native-reanimated` jumped a major version in the process
 and pulled in a new required peer, `react-native-worklets` — watch for
 `npm error ERESOLVE` during that fix and add whatever peer it's asking for).
 
-For the full app with real music detection, you need the custom dev
-client/standalone build below — Expo Go's fixed set of bundled native
-modules doesn't include `MusicKitBridge`/`SpotifyAppRemoteBridge`.
+For the full app with real Apple Music detection, you need the custom
+standalone build below — Expo Go's fixed set of bundled native modules
+doesn't include `MusicKitBridge`.
 
 ## Getting a build onto your iPhone (no Mac required)
 
@@ -90,36 +99,15 @@ tool run from a Windows PC. Every step below is something *you* need to do
 
 - **Expo account** (free): sign up at [expo.dev](https://expo.dev), then on
   your Windows PC (or any machine): `npm install -g eas-cli && eas login`.
-- **Spotify Developer app** (free, only needed for the Spotify source): register
-  one at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
-  Set the redirect URI to `lyricplayer://spotify-callback` (matches
-  `app.json`'s `scheme` + what `SpotifyAppRemoteBridge.swift` expects). Copy
-  the **Client ID** — you'll paste it into
-  `plugins/withNativeSources.js` (replace `REPLACE_WITH_SPOTIFY_CLIENT_ID`)
-  before building, or wire it through an EAS secret if you'd rather not
-  commit it.
 - **Apple ID**: any normal iCloud account works — no paid Apple Developer
   Program enrollment needed for this path.
 
-### 2. One manual Xcode-only step — actually, skip it for now
+No Spotify Developer app and no `SpotifyiOS.xcframework` embedding are
+needed — this build is Apple Music only, and `MusicKitBridge` uses just the
+system MediaPlayer framework (already part of iOS). The one required Info.plist
+key, `NSAppleMusicUsageDescription`, is already set in `app.json`.
 
-Normally you'd need to manually embed `SpotifyiOS.xcframework` in Xcode —
-`SpotifyAppRemoteBridge.swift` won't compile without it. Since there's no
-Mac in this path, **build Apple-Music-only first**:
-
-```sh
-SKIP_SPOTIFY_NATIVE=1 eas build --platform ios --profile preview
-```
-
-This excludes the Spotify native files from the build entirely (see
-`plugins/withNativeSources.js`); the JS side already handles a missing
-Spotify module gracefully (`SpotifySource.isAvailable()` just returns
-`false`, so the app falls back to Apple Music only). Come back to Spotify
-once you have Mac access for that one embedding step, or ask someone with a
-Mac to do it and commit the resulting Xcode project changes — then drop
-`SKIP_SPOTIFY_NATIVE`.
-
-### 3. Build a real-device .ipa with EAS
+### 2. Build a real-device .ipa with EAS
 
 From `packages/mobile`, after setting a unique `bundleIdentifier` in
 `app.json` (the placeholder `com.example.lyricplayer` needs to be something
@@ -136,7 +124,7 @@ This is the same "free Apple ID" signing path Xcode itself uses, just
 without a local Xcode. When the build finishes, EAS gives you a download
 link for the `.ipa`.
 
-### 4. Sideload the .ipa with Sideloadly (Windows)
+### 3. Sideload the .ipa with Sideloadly (Windows)
 
 1. Install [Sideloadly](https://sideloadly.io/) and Apple's "Apple Devices"
    app (or iTunes) on your Windows PC, and connect your iPhone via USB.

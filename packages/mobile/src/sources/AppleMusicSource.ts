@@ -1,17 +1,20 @@
 /**
- * Apple Music now-playing source, via MusicKit.
+ * Apple Music now-playing source.
  *
- * NOT YET IMPLEMENTED NATIVELY. React Native has no first-party MusicKit
- * binding, so this needs a small native Swift module (e.g. exposed as
- * `NativeModules.MusicKitBridge`) that:
- *   1. Requests MusicKit authorization (`MusicAuthorization.request()`).
- *   2. Observes `SystemMusicPlayer.shared` (or `ApplicationMusicPlayer` if
- *      the app plays music itself) for now-playing item + elapsed time.
- *   3. Emits updates back to JS via `RCTEventEmitter` / Expo Modules API.
+ * Backed by the native Swift module in ios-native/MusicKitBridge.swift, which
+ * reads `MPMusicPlayerController.systemMusicPlayer` (the Music app's app-wide
+ * playback state) and exposes, as `NativeModules.MusicKitBridge`:
+ *   - isAuthorized() / requestAuthorization() — Media Library permission
+ *     (NSAppleMusicUsageDescription, set in app.json).
+ *   - a "nowPlaying" RCTEventEmitter event shaped like NowPlayingSample.
  *
- * Building and testing this requires Xcode on macOS — this file defines the
- * JS-side contract so the rest of the app (lyric matching, sync, UI) can be
- * built against a stable interface before the native side exists.
+ * Observation is driven by the emitter's listener lifecycle: adding the
+ * listener (start) begins observation natively, removing it (stop) ends it.
+ *
+ * The native module only exists in a real dev-client / production build (EAS
+ * Build); in Expo Go `NativeModules.MusicKitBridge` is undefined, isAvailable
+ * returns false, and MockSource stands in. See packages/mobile/README.md for
+ * the build steps.
  */
 
 import { NativeEventEmitter, NativeModules } from 'react-native';
@@ -20,8 +23,6 @@ import type { NowPlayingSample, NowPlayingSource } from './NowPlayingSource';
 interface MusicKitBridgeModule {
   isAuthorized(): Promise<boolean>;
   requestAuthorization(): Promise<boolean>;
-  startObserving(): void;
-  stopObserving(): void;
 }
 
 export class AppleMusicSource implements NowPlayingSource {
@@ -42,19 +43,23 @@ export class AppleMusicSource implements NowPlayingSource {
 
   async isAvailable(): Promise<boolean> {
     if (!NativeModules.MusicKitBridge) return false;
-    return this.native.isAuthorized() || this.native.requestAuthorization();
+    // `||` on two Promises is always truthy — must await, or the permission
+    // prompt (requestAuthorization) never fires when not yet authorized.
+    if (await this.native.isAuthorized()) return true;
+    return this.native.requestAuthorization();
   }
 
   start(onSample: (sample: NowPlayingSample) => void): void {
+    // Adding the listener triggers the native RCTEventEmitter's startObserving
+    // lifecycle hook, which begins Music-app playback observation; removing it
+    // (stop) triggers stopObserving. No explicit start/stop bridge calls.
     const emitter = new NativeEventEmitter(NativeModules.MusicKitBridge);
     this.emitterSub = emitter.addListener('nowPlaying', (raw: Omit<NowPlayingSample, 'sourceApp'>) => {
       onSample({ ...raw, sourceApp: this.sourceApp });
     });
-    this.native.startObserving();
   }
 
   stop(): void {
-    this.native.stopObserving();
     this.emitterSub?.remove();
     this.emitterSub = null;
   }

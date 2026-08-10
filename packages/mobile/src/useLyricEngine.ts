@@ -27,7 +27,6 @@ import {
   type LyricCue,
 } from '@lyric-viewer/core';
 import { AppleMusicSource } from './sources/AppleMusicSource';
-import { SpotifySource } from './sources/SpotifySource';
 import { MockSource } from './sources/MockSource';
 import { SourceArbiter, type ArbitratedTrack } from './sources/SourceArbiter';
 
@@ -81,11 +80,11 @@ export function useLyricEngine() {
   // --- detection + lyric lookup ---------------------------------------------
 
   useEffect(() => {
-    // MockSource is listed last and only reports available when neither
-    // native bridge exists (e.g. Expo Go), so real Apple Music / Spotify
-    // sources always win in a proper dev-client / production build.
+    // MockSource is listed last and only reports available when the native
+    // Apple Music bridge is absent (e.g. Expo Go), so the real Apple Music
+    // source always wins in a proper dev-client / production build.
     const arbiter = new SourceArbiter(
-      [new AppleMusicSource(), new SpotifySource(), new MockSource()],
+      [new AppleMusicSource(), new MockSource()],
       {
       onTrack: async (t) => {
         setTrack(t);
