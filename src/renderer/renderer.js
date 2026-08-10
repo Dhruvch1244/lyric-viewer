@@ -1461,6 +1461,18 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
 
   applySwirlScale(now);
   window.SwirlField.setQuality(liteMode ? 0.5 : quality);
+
+  /*
+    Per-preset percussion gain. A look that draws nothing else (Ghost) needs the
+    field itself to carry the drums, because every other reactive element lives
+    on the 2D canvas it switched off. Looks that keep those layers stay at 1 so
+    the field does not fight them.
+
+    Values above 1 are safe: every term the shader feeds these into is either
+    additive or a small subtraction from a scale factor.
+  */
+  const kick = style && style.kick ? style.kick : 1;
+
   window.SwirlField.render({
     timeMs: now,
     palette: [tintLive, palette[1], palette[2], accentLive],
@@ -1468,9 +1480,9 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
     life,
     swirl: swirlDrive,
     buildup,
-    drop: dropFlash,
-    beat: beatFlash,
-    bass,
+    drop: dropFlash * kick,
+    beat: beatFlash * kick,
+    bass: bass * kick,
     // Per-preset character, so the field changes with the look instead of
     // staying identical underneath every one of them.
     style,

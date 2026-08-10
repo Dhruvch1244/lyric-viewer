@@ -60,9 +60,18 @@
       */
       bare: true,
       layers: { aurora: false, bokeh: false, galaxy: false, eq: false, rays: false, math: false, web: false },
-      // The field is the whole picture now, so let it breathe: wider bands and
-      // a softer glow read as drifting cloud rather than a tight vortex.
-      swirl: { bandBias: 0.85, vortexBias: 0.95, glowBias: 1.05 },
+      /*
+        The field is the whole picture now, so let it breathe: wider bands and
+        a softer glow read as drifting cloud rather than a tight vortex.
+
+        `kick` is the important one. Every punchy element in this app — ripples,
+        confetti, the strobe flicker, the dancers — draws on the 2D canvas, and
+        Ghost removes it. The beat still fires, it just has nowhere to show. The
+        shader's own beat response was tuned to sit BEHIND those layers, so on
+        its own it reads as barely moving. Amplifying it here gives the drums
+        somewhere to land: the field punches in and blooms on every kick.
+      */
+      swirl: { bandBias: 0.85, vortexBias: 0.95, glowBias: 1.05, kick: 3.2 },
     },
     {
       id: 'liquid',
