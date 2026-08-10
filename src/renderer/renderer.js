@@ -374,11 +374,41 @@ function spawnCloneTroupe(now) {
 /* -------------------------------------------------------- column rendering */
 
 /** Rebuild the whole column for the current cue set. */
+/**
+ * Scripts whose glyphs carry combining marks (matras, nuktas, viramas) that
+ * must stay welded to their base consonant. Bebas Neue's Latin tracking and
+ * the `overflow-wrap: anywhere` used for long Latin lines both break those
+ * clusters apart, which shows up as vowel signs floating off their letters.
+ * `.ln--complex` turns both off — see styles.css.
+ *
+ * Covers Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu,
+ * Kannada, Malayalam, Sinhala, Thai, Arabic and Hebrew.
+ */
+const COMPLEX_SCRIPT_RE = new RegExp(
+  '[' +
+  '\\u0590-\\u05FF' +   // Hebrew
+  '\\u0600-\\u06FF' +   // Arabic
+  '\\u0900-\\u0DFF' +   // Devanagari … Sinhala (incl. Gurmukhi, Bengali, Tamil)
+  '\\u0E00-\\u0E7F' +   // Thai
+  ']'
+);
+
+/**
+ * Whether a lyric line needs complex-script text shaping.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function needsComplexShaping(text) {
+  return COMPLEX_SCRIPT_RE.test(text || '');
+}
+
 function buildColumn() {
   els.column.textContent = '';
   lineEls = cues.map((cue) => {
     const el = document.createElement('div');
-    el.className = 'ln';
+    // Tagged per line, not per track, so a code-switched song (a Hindi hook
+    // over English bars) shapes each line correctly.
+    el.className = needsComplexShaping(cue.text) ? 'ln ln--complex' : 'ln';
     el.textContent = cue.text || ' ';
     els.column.appendChild(el);
     return el;

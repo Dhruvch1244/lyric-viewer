@@ -84,6 +84,7 @@ body.lang-devanagari .ln.is-active {
   font-weight: 800;
 }
 
+
 /* GPU swirl field. Renders below CSS resolution and is stretched back up —
    the field is soft by design, so the upscale is invisible and costs far less
    fill rate. z-index 0 keeps it beneath #backdrop's particle layers. */
@@ -230,6 +231,29 @@ body.lyrics-hidden .translation {
               color 380ms ease, filter 420ms ease;
 }
 
+/* Complex-script lines (Indic, Thai, Arabic, Hebrew — tagged per line by
+   needsComplexShaping() in renderer.js).
+
+   Two Latin-only assumptions in `.ln` above break these scripts:
+     1. `letter-spacing` inserts gaps *inside* a grapheme cluster, so matras
+        and nuktas visibly detach from the consonant they belong to.
+     2. `overflow-wrap: anywhere` (needed so long Latin lines wrap instead of
+        spilling) lets the browser break between a base letter and its
+        combining mark, orphaning the mark onto the next row.
+   Turning both off restores correct shaping. Nirmala UI leads the stack
+   because Bebas/Bahnschrift cover none of these scripts, and it is a real
+   multi-weight face, so the weights are restored to sane values too.
+
+   MUST stay after `.ln`: single-class selectors tie on specificity, so this
+   only wins on source order. Moving it above `.ln` silently disables it. */
+.ln--complex {
+  font-family: "Nirmala UI", "Segoe UI", var(--font-display);
+  letter-spacing: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+  font-weight: 600;
+}
+
 /* The running line: a live-tinted colour (drifts through the song via
    --accent-live2) so the lyric recolours as the track plays, scaled up.
    --active-scale carries the intensity-driven auto-enlarge; --beat adds a
@@ -247,6 +271,13 @@ body.lyrics-hidden .translation {
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.78),
                0 0 calc(12px + var(--beat) * 30px)
                  color-mix(in srgb, var(--accent-live) 72%, transparent);
+}
+
+/* Nirmala UI is a real multi-weight face, so the active line can take a true
+   heavy weight instead of Bebas's synthetic one. Must follow `.ln.is-active`
+   for the same source-order reason as `.ln--complex` above. */
+.ln--complex.is-active {
+  font-weight: 800;
 }
 
 /* Words: even spacing via margin so scaling/uppercasing never shifts rhythm. */
