@@ -2,6 +2,61 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.11.0 — 2026-08-10
+
+### Added
+
+- **Ghost preset — lyrics and the cloud, nothing else.** A lyrics-only look:
+  the GPU cloud field plus the scrolling lyric and title flow, with every
+  visualizer gone. Pick it from the preset chip.
+
+  Turning off the layer flags was not enough on its own. The 2D canvas carries
+  always-on work no flag covers — stars, colour glows, the vignette, ripples,
+  confetti, shooting stars, the dancers — and even with all of it skipped it is
+  still a full-screen compositor layer being cleared and blended every frame.
+  Ghost takes the canvas out of the page entirely.
+
+  Measured cost of one backdrop frame at 1920×1080, stable across runs:
+
+  | preset | JavaScript per frame |
+  | --- | --- |
+  | Concert | 2.8 ms |
+  | Liquid | 1.4 – 2.1 ms |
+  | **Ghost** | **0.07 – 0.11 ms** |
+
+  Ghost is excluded from the random per-song look, because it is a mode you
+  choose rather than one you should be handed.
+
+- **Dynamic cloud resolution.** A four-rung ladder (0.30 / 0.40 / 0.55 / 0.70)
+  sheds pixels when frames run long and earns them back when there is headroom.
+  Fill cost falls with the square of the scale and the field is soft enough that
+  the upscale is invisible, so a heavy moment keeps the full effect at fewer
+  pixels instead of having layers switched off.
+
+### Fixed
+
+- **The frame-rate governor could latch, and stay latched.** Frame timing was
+  measured between *drawn* frames, so once the throttle engaged the app only
+  ever measured its own throttled output: dropping below 30fps set a 32ms
+  throttle, which produced ~31fps, which held the average under 45 indefinitely.
+  The app could not discover it had headroom again, so it stayed frame-skipped
+  with visual quality pinned at its lowest setting long after whatever caused
+  the dip had passed.
+
+  Timing is now split in two — the cost of drawing a frame, and the rate frames
+  are actually presented at — and neither feeds back into itself, so recovery is
+  immediate.
+
+### Notes on performance
+
+Removing ~95% of the CPU rendering work (Ghost) did **not** reliably improve the
+presented frame rate in testing: repeated interleaved runs disagreed by more
+than the difference between presets. Frame rate here is dominated by something
+downstream of the app's drawing — GPU raster and compositing a full-screen
+transparent always-on-top window. Total CPU rendering cost is roughly 3ms of a
+16.7ms frame budget, so rewriting the drawing in a native language would
+optimise something that is already not the constraint.
+
 ## 0.10.1 — 2026-08-10
 
 A bug-fix release. The headline fix affects every synced song.
