@@ -25,6 +25,7 @@ const els = {
   scriptBtn: document.getElementById('btn-script'),
   translateBtn: document.getElementById('btn-translate'),
   backdropBtn: document.getElementById('btn-backdrop'),
+  presetBtn: document.getElementById('btn-preset'),
   lyricsBtn: document.getElementById('btn-lyrics'),
   spritesBtn: document.getElementById('btn-sprites'),
   audioBtn: document.getElementById('btn-audio'),
@@ -684,7 +685,18 @@ let sceneTimer = 0;  // countdown to the next random scene shuffle
 /* Which optional layers are currently on. Reshuffled every few seconds so the
    background composition itself keeps changing. `math` and `web` are the new
    parametric maths layers; kept on most of the time since they're the headline. */
-let scene = { aurora: true, bokeh: true, eq: false, rays: false, math: true, web: true };
+/* Which 2D layers are drawn this frame. Owned by the active preset (see
+   src/renderer/presets.js) — never assigned at random any more. */
+let scene = { aurora: true, bokeh: true, eq: false, rays: false, math: true, web: true, galaxy: true };
+
+/** The user's chosen preset id; persisted. */
+let presetId = 'liquid';
+
+/** The preset actually on screen, which may be a cheaper substitute. */
+let renderedPresetId = '';
+
+/** When the on-screen preset last changed, for the cross-fade. */
+let presetFadeAt = 0;
 
 /* ---- complex-maths visualizers (parametric "moments") ----
    A morphing family of parametric curves — Lissajous, rose (rhodonea), and
@@ -1312,21 +1324,28 @@ function drawBackdrop(now) {
     // Reshuffle which optional layers are on every few seconds, for variety. The
     // maths layers stay on far more often since they're the headline visual.
     sceneTimer -= dt;
-    if (sceneTimer <= 0) {
-      scene.aurora = Math.random() < 0.75;
-      scene.bokeh = Math.random() < 0.7;
-      scene.eq = Math.random() < 0.5;
-      scene.rays = Math.random() < 0.35;
-      scene.math = Math.random() < 0.85;
-      scene.web = Math.random() < 0.8;
-      sceneTimer = 5000 + Math.random() * 6000;
+    // Layers come from the chosen preset, not a coin flip. `affordable()` may
+    // substitute a cheaper preset when frames run long — a different coherent
+    // look, rather than the old behaviour of switching individual layers off
+    // and producing a composition nobody designed.
+    const activePreset = window.VisualPresets.affordable(
+      window.VisualPresets.byId(presetId), fpsEMA, liteMode
+    );
+    // Copy rather than alias: the overrides below would otherwise mutate the
+    // preset definition itself and corrupt it for the rest of the session.
+    // Copying key-by-key also avoids a per-frame allocation.
+    for (const key of window.VisualPresets.LAYER_KEYS) scene[key] = activePreset.layers[key];
+    if (activePreset.id !== renderedPresetId) {
+      renderedPresetId = activePreset.id;
+      presetFadeAt = now;
+      applyPresetLabel();   // reflect any governor substitution on the chip
     }
 
-    // Lite mode: force the heaviest parametric layers off regardless of the
-    // shuffle (galaxy is gated at its call site below).
-    if (liteMode) { scene.rays = false; scene.eq = false; scene.math = false; scene.web = false; }
-    // With real audio, keep the bottom equalizer up — it reads as a live spectrum.
-    if (audioActive && !liteMode) scene.eq = true;
+    // Lite mode and the FPS governor are handled by affordable() above, which
+    // substitutes a cheaper preset wholesale instead of gutting this one.
+    // With real audio the bottom equalizer reads as a live spectrum, so it is
+    // worth having wherever the preset can afford it.
+    if (audioActive && activePreset.cost > 1) scene.eq = true;
 
     const accentLive = shiftHex(accent, bgHue);
     const tintLive = shiftHex(baseTint, bgHue * 0.5);
@@ -1380,6 +1399,9 @@ function drawBackdrop(now) {
         drop: dropFlash,
         beat: beatFlash,
         bass: audioActive ? audioEnv.bass : 0,
+        // Per-preset character, so the field changes with the look instead of
+        // staying identical underneath every one of them.
+        style: activePreset.swirl,
       });
     }
 
@@ -1407,7 +1429,7 @@ function drawBackdrop(now) {
     // mode drops it entirely.
     // The 260-point galaxy is the heaviest always-on layer; auto-drop it when the
     // frame rate sags (in addition to Lite mode) so weak GPUs recover toward 60.
-    if (!liteMode && fpsEMA > 40) drawGalaxy(now, w, h, life);
+    if (scene.galaxy) drawGalaxy(now, w, h, life);
     if (scene.math) drawMathCurves(now, w, h, life, motion);
     if (scene.web) drawConstellation(now, w, h, life);
     // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
@@ -2352,6 +2374,27 @@ els.audioBtn.addEventListener('click', async () => {
 
 /* Toggle Lite (performance) mode. Re-seeds the canvas so the new resolution and
    reduced particle counts take effect immediately. */
+/* Visual preset chip: cycles the named looks and persists the choice. The
+   label always shows the preset the USER picked, even when the FPS governor is
+   temporarily rendering a cheaper one — otherwise the chip would appear to
+   change by itself. */
+function applyPresetLabel() {
+  const preset = window.VisualPresets.byId(presetId);
+  // When the governor has stepped in, say so. Silently rendering a different
+  // look than the chip claims is worse than the dropped frames it prevents.
+  const substituted = renderedPresetId && renderedPresetId !== presetId;
+  els.presetBtn.textContent = substituted ? `◈ ${preset.name} ⚡` : `◈ ${preset.name}`;
+  els.presetBtn.title = substituted
+    ? `${preset.name} — running "Minimal" to hold the frame rate`
+    : `Visual preset — ${preset.name} (click to cycle)`;
+}
+
+els.presetBtn.addEventListener('click', () => {
+  presetId = window.VisualPresets.next(presetId).id;
+  try { localStorage.setItem('visualPreset', presetId); } catch { /* ignore */ }
+  applyPresetLabel();
+});
+
 els.perfBtn.addEventListener('click', () => {
   liteMode = !liteMode;
   els.perfBtn.setAttribute('aria-pressed', String(liteMode));
@@ -2526,8 +2569,12 @@ try {
   const lv = localStorage.getItem('lyricsVisible');
   if (lv !== null) lyricsVisible = lv === '1';
   liteMode = localStorage.getItem('liteMode') === '1';
+  // byId() falls back to the default, so an unknown or removed preset id from
+  // an older build cannot leave the app with no look at all.
+  presetId = window.VisualPresets.byId(localStorage.getItem('visualPreset')).id;
 } catch { /* ignore */ }
 applyBackdropLabel();
+applyPresetLabel();
 els.spritesBtn.setAttribute('aria-pressed', String(spritesEnabled));
 els.perfBtn.setAttribute('aria-pressed', String(liteMode));
 applyLyricsVisibility();

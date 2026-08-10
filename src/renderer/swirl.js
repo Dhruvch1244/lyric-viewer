@@ -70,6 +70,11 @@ uniform float u_drop;
 uniform float u_beat;
 uniform float u_bass;
 uniform int   u_octaves;
+// Per-preset character multipliers (see presets.js): how tightly the field
+// bands, how hard it spirals, and how much the vortex cores glow.
+uniform float u_bandBias;
+uniform float u_vortexBias;
+uniform float u_glowBias;
 
 const int MAX_OCTAVES = 6;
 
@@ -141,9 +146,10 @@ void main() {
   vec2 c2 = vec2(cos(t * 0.09 + 4.0) * 0.30, sin(t * -0.23 + 2.5) * 0.30);
 
   vec2 p = uv;
-  p = vortex(p, c0, spiral * 0.95);
-  p = vortex(p, c1, spiral * -0.70);
-  p = vortex(p, c2, spiral * 0.55);
+  float vb = u_vortexBias;
+  p = vortex(p, c0, spiral * 0.95 * vb);
+  p = vortex(p, c1, spiral * -0.70 * vb);
+  p = vortex(p, c2, spiral * 0.55 * vb);
 
   // Bass squeezes the whole field toward/away from centre — a subtle "pump".
   p *= 1.0 - u_bass * 0.10 - u_beat * 0.05;
@@ -168,7 +174,7 @@ void main() {
     spiralling legible. More swirl -> more bands, so the field visibly
     "tightens" as it winds in.
   */
-  float bands = 2.5 + u_swirl * 4.5;
+  float bands = (2.5 + u_swirl * 4.5) * u_bandBias;
   float ribbon = 0.5 + 0.5 * sin((f * bands + length(r) * 0.55 - t * 0.10) * 6.28318);
   ribbon = pow(ribbon, 2.2 - u_life);          // tighten into distinct filaments
 
@@ -188,7 +194,7 @@ void main() {
   // Vortex glow: brighten the cores so the spirals have visible eyes.
   float g0 = 1.0 - smoothstep(0.0, 0.55, length(uv - c0));
   float g1 = 1.0 - smoothstep(0.0, 0.45, length(uv - c1));
-  col += u_pal3 * (g0 * 0.16 + g1 * 0.12) * (0.35 + u_life + u_beat * 0.8);
+  col += u_pal3 * (g0 * 0.16 + g1 * 0.12) * (0.35 + u_life + u_beat * 0.8) * u_glowBias;
 
   // Build-up bloom from the centre, and a full-field flash on the drop.
   float centre = 1.0 - smoothstep(0.0, 0.9, length(uv));
@@ -307,6 +313,7 @@ void main() {
     for (const name of [
       'u_res', 'u_time', 'u_pal0', 'u_pal1', 'u_pal2', 'u_pal3', 'u_alpha',
       'u_life', 'u_swirl', 'u_buildup', 'u_drop', 'u_beat', 'u_bass', 'u_octaves',
+      'u_bandBias', 'u_vortexBias', 'u_glowBias',
     ]) {
       u[name] = gl.getUniformLocation(prog, name);
     }
@@ -378,6 +385,10 @@ void main() {
     gl.uniform1f(u.u_drop, s.drop || 0);
     gl.uniform1f(u.u_beat, s.beat || 0);
     gl.uniform1f(u.u_bass, s.bass || 0);
+    const style = s.style || {};
+    gl.uniform1f(u.u_bandBias, style.bandBias == null ? 1 : style.bandBias);
+    gl.uniform1f(u.u_vortexBias, style.vortexBias == null ? 1 : style.vortexBias);
+    gl.uniform1f(u.u_glowBias, style.glowBias == null ? 1 : style.glowBias);
     gl.uniform1i(u.u_octaves, octaves);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
