@@ -19,6 +19,8 @@ const els = {
   artist: document.getElementById('np-artist'),
   offset: document.getElementById('hud-offset'),
   fps: document.getElementById('hud-fps'),
+  bpm: document.getElementById('hud-bpm'),
+  work: document.getElementById('hud-work'),
   syncEarlierBtn: document.getElementById('btn-sync-earlier'),
   syncLaterBtn: document.getElementById('btn-sync-later'),
   progressFill: document.getElementById('hud-progress-fill'),
@@ -1618,6 +1620,7 @@ function drawBackdrop(now) {
     if (els.fps && now - lastFpsShownAt > 350) {
       lastFpsShownAt = now;
       els.fps.textContent = `${Math.round(fpsEMA)} fps`;
+      updateBpmChip();
     }
 
     // Slowly drift the global hue (faster when intense), and jump it on drops —
@@ -2084,6 +2087,51 @@ function setStatus(text) {
   els.status.textContent = text;
 }
 
+/*
+  Background work, made visible.
+
+  The app does a lot off-screen — finding lyrics, listening, downloading a
+  speech model, transcribing, aligning words, translating — and all of it used
+  to report through the single status line, where each message overwrote the
+  last and the mood label wiped whatever was there. So work that takes minutes
+  looked like nothing happening at all.
+
+  Jobs are tracked by name and rendered together, so two things running at once
+  both stay visible, and a job that ends removes only its own entry.
+*/
+const jobs = new Map();
+
+/**
+ * Declare (or clear) a piece of background work.
+ * @param {string} name stable job key, e.g. 'whisper'
+ * @param {string|null} label what to show; null/'' ends the job
+ */
+function setJob(name, label) {
+  if (label) jobs.set(name, label);
+  else jobs.delete(name);
+
+  if (!els.work) return;
+  if (jobs.size === 0) {
+    els.work.hidden = true;
+    els.work.textContent = '';
+    return;
+  }
+  els.work.hidden = false;
+  els.work.textContent = `⟳ ${[...jobs.values()].join(' · ')}`;
+  els.work.title = `Background work in progress:\n${[...jobs.values()].join('\n')}`;
+}
+
+/** Show the measured tempo, or hide the chip when nothing is locked. */
+function updateBpmChip() {
+  if (!els.bpm) return;
+  if (tempoLocked && tempoBpm > 0) {
+    els.bpm.hidden = false;
+    els.bpm.textContent = `♩ ${Math.round(tempoBpm)}`;
+  } else {
+    els.bpm.hidden = true;
+  }
+}
+
 /**
  * Whether an async payload (lyrics, artwork, mood, …) belongs to the track that
  * is playing right now.
@@ -2435,6 +2483,15 @@ function flushTranscription() {
 }
 
 window.player.onTranscribeProgress((data) => {
+  const WORK = {
+    download: 'downloading speech model', transcribing: 'transcribing',
+    aligning: 'aligning words', aligned: null, 'align-weak': null,
+    done: null, empty: null, error: null,
+  };
+  if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
+    const pct = typeof data.pct === 'number' ? ` ${data.pct}%` : '';
+    setJob('whisper', WORK[data.stage] ? WORK[data.stage] + pct : null);
+  }
   if (!data) return;
   switch (data.stage) {
     case 'downloading':
@@ -2579,15 +2636,16 @@ window.player.onLyrics((payload) => {
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
 
   switch (payload.status) {
-    case 'searching': setStatus('finding lyrics…'); break;
+    case 'searching': setJob('lyrics', 'finding lyrics'); setStatus('finding lyrics…'); break;
     case 'not-found':
+      setJob('lyrics', null);
       setStatus('no synced lyrics found');
       clearColumn();
       // Nothing to show this play — start listening so Whisper can transcribe
       // the song at the end and have it ready for every play after.
       beginTranscriptionListen();
       break;
-    case 'error': setStatus('lyric lookup failed'); clearColumn(); break;
+    case 'error': setJob('lyrics', null); setStatus('lyric lookup failed'); clearColumn(); break;
     default:
       setStatus('');
       /*
@@ -2605,6 +2663,7 @@ window.player.onLyrics((payload) => {
       if (payload.status === 'ok' && !payload.hasWordTimings) beginTranscriptionListen();
       else stopTranscriptionListen();
   }
+  if (payload.status !== 'searching') setJob('lyrics', null);
   if (payload.status === 'ok') showSourceBadge(payload.origin);
   applyScript();
   refreshButtons();
@@ -2632,15 +2691,18 @@ function showSourceBadge(origin) {
 
 window.player.onTranslation((payload) => {
   if (!isForCurrentTrack(payload.track)) return;
+  // Structural, not per-case: any state other than the in-flight one ends the
+  // job, so a status we forget to handle can never leave a stale spinner up.
+  if (payload.status !== 'translating') setJob('translate', null);
   switch (payload.status) {
-    case 'translating': setStatus('translating…'); break;
+    case 'translating': setJob('translate', 'translating'); setStatus('translating…'); break;
     case 'ok':
       cuesEnglish = payload.cues || null;
       setStatus('');
       updateTranslation(activeIndex);
       break;
-    case 'skipped': cuesEnglish = null; break;
-    case 'error': setStatus('translation failed'); break;
+    case 'skipped': setJob('translate', null); cuesEnglish = null; break;
+    case 'error': setJob('translate', null); setStatus('translation failed'); break;
     default: break;
   }
   refreshButtons();

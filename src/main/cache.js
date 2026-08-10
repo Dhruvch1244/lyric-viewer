@@ -30,7 +30,7 @@ const MAX_ENTRIES = 600;
 /** Debounce window (ms) so bursts of writes coalesce into one disk flush. */
 const WRITE_DEBOUNCE_MS = 400;
 /** Fields merged/persisted per entry. Only defined keys overwrite on merge. */
-const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap'];
+const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap', 'wordAlignFailed'];
 
 /** @typedef {{cues?: Array|null, source?: string|null, indic?: boolean, cuesEnglish?: Array|null, language?: string, cuesDevanagari?: Array|null, mood?: object|null, updatedAt: number}} CacheEntry */
 
