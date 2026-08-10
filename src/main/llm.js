@@ -356,13 +356,52 @@ async function callClaude({ system, user, schema }) {
  * @param {object} args.schema JSON Schema (draft form) describing the output.
  * @returns {Promise<object>} Parsed JSON matching the schema.
  */
-async function convert({ system, user, schema }) {
-  const provider = activeProvider();
-  if (provider === 'gemini') return callGemini({ system, user, schema });
-  if (provider === 'groq') return callGroq({ system, user, schema });
-  if (provider === 'huggingface') return callHuggingFace({ system, user, schema });
-  if (provider === 'claude') return callClaude({ system, user, schema });
-  throw new Error('No LLM provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, HF_API_KEY, or ANTHROPIC_API_KEY.');
+/** Every configured provider, in preference order. */
+function availableProviders() {
+  const chain = [];
+  if (hasGemini()) chain.push(['gemini', callGemini]);
+  if (hasGroq()) chain.push(['groq', callGroq]);
+  if (hasHuggingFace()) chain.push(['huggingface', callHuggingFace]);
+  if (hasClaude()) chain.push(['claude', callClaude]);
+  return chain;
 }
 
-module.exports = { convert, isLLMAvailable, activeProvider };
+/**
+ * Run a conversion on the first provider that succeeds.
+ *
+ * This used to pick ONE provider — the highest-precedence configured one — and
+ * fail outright if it errored. That turns the precedence list into a single
+ * point of failure: a Gemini key whose free quota is exhausted returns 429 on
+ * every request, and every LLM feature in the app (translation,
+ * transliteration, mood) dies with it, even when a perfectly good HuggingFace
+ * token is sitting right there in the config. Which is exactly what happened.
+ *
+ * Falling through on ANY error is deliberate. A malformed request would burn
+ * the whole chain, but that fails anyway on one provider — whereas quota
+ * limits, rate limits, outages and revoked keys are all common, all
+ * provider-specific, and all recoverable by simply asking the next one.
+ *
+ * @param {{system: string, user: string, schema: object}} args
+ * @returns {Promise<object>} the parsed result from whichever provider answered
+ */
+async function convert({ system, user, schema }) {
+  const chain = availableProviders();
+  if (chain.length === 0) {
+    throw new Error('No LLM provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, HF_API_KEY, or ANTHROPIC_API_KEY.');
+  }
+
+  const failures = [];
+  for (const [name, call] of chain) {
+    try {
+      return await call({ system, user, schema });
+    } catch (err) {
+      failures.push(`${name}: ${err.message}`);
+      // Keep the reason visible; a silent fall-through hides an expired key
+      // forever, since the next provider quietly covers for it.
+      console.warn(`[llm] ${name} failed, trying next provider:`, err.message);
+    }
+  }
+  throw new Error(`All ${chain.length} LLM provider(s) failed. ${failures.join(' | ')}`);
+}
+
+module.exports = { convert, isLLMAvailable, activeProvider, availableProviders };
