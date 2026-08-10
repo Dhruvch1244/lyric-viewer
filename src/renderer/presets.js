@@ -121,6 +121,36 @@
   }
 
   /**
+   * Looks a song may be randomly assigned.
+   *
+   * `minimal` is excluded on purpose: it exists as the performance fallback,
+   * not as an aesthetic. Landing on it at random would make the app feel
+   * stripped-back most of the time, with the good visuals showing only in
+   * brief bursts — which is precisely the complaint that prompted this design.
+   */
+  const RANDOM_POOL = NORMALIZED.filter((p) => p.id !== 'minimal');
+
+  /**
+   * The look for a given track — random across songs, identical every time you
+   * play the same one.
+   *
+   * Chosen by hashing the track identity rather than rolling dice and saving
+   * the result. Same outcome, no storage to grow stale, and a song looks the
+   * same on a fresh install as it did before. (An explicit user override IS
+   * stored; see the renderer.)
+   *
+   * @param {string} trackKey stable "artist|title" identity
+   * @returns {Preset}
+   */
+  function forTrack(trackKey) {
+    const key = String(trackKey || '');
+    if (!key) return byId(DEFAULT_ID);
+    let hash = 0;
+    for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+    return RANDOM_POOL[hash % RANDOM_POOL.length];
+  }
+
+  /**
    * Downgrade a preset when the machine cannot keep up.
    *
    * Returning a *different, coherent* preset beats switching individual layers
@@ -156,6 +186,8 @@
     all: NORMALIZED,
     byId,
     next,
+    forTrack,
+    RANDOM_POOL,
     affordable,
     DEFAULT_ID,
     LAYER_KEYS,

@@ -411,6 +411,12 @@ function buildColumn() {
     // over English bars) shapes each line correctly.
     el.className = needsComplexShaping(cue.text) ? 'ln ln--complex' : 'ln';
     el.textContent = cue.text || ' ';
+    // The `.ln` rule carries `filter: blur(4px)` for the sharpen-in effect,
+    // which would promote every line in the song to its own compositing layer
+    // the moment the column is built. Start hidden and unfiltered; setActive()
+    // reveals and blurs only the two lines either side of the active one.
+    el.style.visibility = 'hidden';
+    el.style.filter = 'none';
     els.column.appendChild(el);
     return el;
   });
@@ -540,9 +546,30 @@ function setActive(index) {
       el.classList.remove('is-active');
       const op = d === 1 ? 0.34 : d === 2 ? 0.07 : 0;
       el.style.opacity = String(op);
-      // Neighbours keep a soft blur that deepens with distance; the incoming line
-      // starts from this same blur before clearing it above.
-      el.style.filter = `blur(${d === 1 ? 3.5 : d === 2 ? 6 : 8}px)`;
+
+      /*
+        Only the two lines either side are ever visible, so only they get a
+        blur.
+
+        This used to blur EVERY line in the song, including the dozens sitting
+        at opacity 0. A CSS filter promotes each element to its own compositing
+        layer, so a 60-line track had Chromium rasterising 60 blur layers per
+        frame with ~55 of them invisible — which is why the frame rate
+        collapsed as soon as lyrics were on screen and recovered the moment
+        only the hero showed. Measured on a real device: 15-20fps with lyrics
+        against 27-28fps without.
+
+        `visibility: hidden` keeps the element in layout — the column scrolls
+        by translating a fixed stack, so removing lines with `display: none`
+        would shift every position — while taking it out of paint entirely.
+      */
+      if (d <= 2) {
+        el.style.visibility = '';
+        el.style.filter = `blur(${d === 1 ? 3.5 : 6}px)`;
+      } else {
+        el.style.visibility = 'hidden';
+        el.style.filter = 'none';   // must be none, not blur(0), to drop the layer
+      }
     }
   });
 
@@ -729,6 +756,9 @@ let flicker = 0;
 /* Last quantised hue pushed to the lyric CSS var, to skip redundant style sets. */
 let lastLyricHue = -999;
 
+/** Last --beat value written to the DOM, to avoid redundant style writes. */
+let lastBeatVar = -1;
+
 /* ---- adaptive quality governor (keeps the frame rate near 60) ----
    An EMA of instantaneous FPS. When frames run long, `quality` eases toward 0.5
    and the heaviest maths layers subsample (draw fewer points/links); when there's
@@ -757,7 +787,7 @@ function resizeCanvas() {
   // The swirl field is soft and upscaled by the compositor, so it renders at a
   // fraction of CSS resolution — the cheapest quality lever it has. Lite mode
   // halves it again.
-  if (swirlOn) window.SwirlField.resize(w, h, liteMode ? 0.45 : 0.7);
+  if (swirlOn) window.SwirlField.resize(w, h, liteMode ? 0.35 : 0.55);
   vignette = ctx.createRadialGradient(w / 2, h * 0.5, 0, w / 2, h * 0.5, Math.max(w, h) * 0.8);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
@@ -1360,7 +1390,18 @@ function drawBackdrop(now) {
       rootStyle.setProperty('--accent-live', accentLive);
       rootStyle.setProperty('--accent-live2', shiftHex(accent, bgHue + 60));
     }
-    document.documentElement.style.setProperty('--beat', (beatFlash + dropFlash).toFixed(2));
+    /*
+      --beat drives the active line's glow, whose text-shadow blur radius is
+      calc(12px + var(--beat) * 30px). Writing it every frame invalidated that
+      shadow every frame, and a large animated text-shadow is an expensive
+      repaint. Quantising to 0.05 keeps the throb visually identical while
+      cutting the number of repaints by roughly an order of magnitude.
+    */
+    const beatNow = Math.round((beatFlash + dropFlash) * 20) / 20;
+    if (beatNow !== lastBeatVar) {
+      lastBeatVar = beatNow;
+      document.documentElement.style.setProperty('--beat', beatNow.toFixed(2));
+    }
 
     ctx.clearRect(0, 0, w, h);
 
@@ -2023,6 +2064,7 @@ window.player.onTrack((track) => {
   clearColumn();
   els.title.textContent = track.title || '';
   els.artist.textContent = track.artist || '';
+  applyLookForTrack(track);   // each song carries its own remembered look
   if (els.source) els.source.hidden = true; // cleared until this track's lyrics land
 
   // Reset mood/energy; the sentiment analysis (if available) upgrades this soon.
@@ -2374,6 +2416,35 @@ els.audioBtn.addEventListener('click', async () => {
 
 /* Toggle Lite (performance) mode. Re-seeds the canvas so the new resolution and
    reduced particle counts take effect immediately. */
+
+/* ---------------------------------------------- per-song visual look */
+
+/** Stable identity for a track, matching the main process's cache key. */
+function trackLookKey(track) {
+  return `${(track.artist || '').trim()}|${(track.title || '').trim()}`.toLowerCase();
+}
+
+/** User overrides, keyed by track. Songs without one get an automatic look. */
+function readLookOverrides() {
+  try { return JSON.parse(localStorage.getItem('visualLooks') || '{}') || {}; }
+  catch { return {}; }
+}
+
+/**
+ * Choose the look for a track: an explicit override if the user set one,
+ * otherwise a look derived from the track identity — random across songs,
+ * identical every time you replay the same one.
+ * @param {object|null} track
+ */
+function applyLookForTrack(track) {
+  if (!track) return;
+  const override = readLookOverrides()[trackLookKey(track)];
+  presetId = override
+    ? window.VisualPresets.byId(override).id
+    : window.VisualPresets.forTrack(trackLookKey(track)).id;
+  applyPresetLabel();
+}
+
 /* Visual preset chip: cycles the named looks and persists the choice. The
    label always shows the preset the USER picked, even when the FPS governor is
    temporarily rendering a cheaper one — otherwise the chip would appear to
@@ -2389,9 +2460,16 @@ function applyPresetLabel() {
     : `Visual preset — ${preset.name} (click to cycle)`;
 }
 
+/* Clicking the chip re-rolls the look for the CURRENT song and remembers that
+   choice for it. Songs otherwise pick their own look automatically, so this is
+   an override rather than a global mode switch. */
 els.presetBtn.addEventListener('click', () => {
   presetId = window.VisualPresets.next(presetId).id;
-  try { localStorage.setItem('visualPreset', presetId); } catch { /* ignore */ }
+  if (currentTrack) {
+    const overrides = readLookOverrides();
+    overrides[trackLookKey(currentTrack)] = presetId;
+    try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
+  }
   applyPresetLabel();
 });
 
@@ -2569,9 +2647,8 @@ try {
   const lv = localStorage.getItem('lyricsVisible');
   if (lv !== null) lyricsVisible = lv === '1';
   liteMode = localStorage.getItem('liteMode') === '1';
-  // byId() falls back to the default, so an unknown or removed preset id from
-  // an older build cannot leave the app with no look at all.
-  presetId = window.VisualPresets.byId(localStorage.getItem('visualPreset')).id;
+  // No global preset any more — each song carries its own look (see
+  // applyLookForTrack). Only explicit per-song overrides are stored.
 } catch { /* ignore */ }
 applyBackdropLabel();
 applyPresetLabel();
