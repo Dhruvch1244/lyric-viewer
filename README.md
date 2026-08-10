@@ -78,8 +78,27 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
+| `◈` chip | Cycle the visual preset: Ghost → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
 | `◐` chip | Cycle backdrop opacity: ghost → tinted → vivid → solid (persisted) |
+| `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
+| `♫` chip | Audio-reactive mode (captures system sound) |
+| `⚡` chip | Lite mode — fewer effects, higher frame rate |
+
+**Visual presets (`◈` chip).** Each is a deliberate look with a stated cost,
+rather than a random shuffle of layers:
+
+| Preset | What it is |
+|---|---|
+| **Ghost** | Lyrics and the cloud, nothing else. No stars, dancers, confetti or curves — the 2D canvas is removed from the page entirely, which cuts the CPU rendering work by ~95%. Pick this to read the words, or to run over a game or a call. |
+| **Liquid** | The signature look: the GPU field carries it, only the softest 2D layers stay on. Default. |
+| **Starfield** | Depth and drift — galaxy plus constellation web. |
+| **Geometry** | The parametric curves are the subject; the field calms to a backdrop. |
+| **Concert** | Everything on. The loud one, for drops and parties. |
+| **Minimal** | The performance fallback the governor drops to, not an aesthetic. |
+
+Each song remembers its own look. Ghost and Minimal are never assigned at
+random — they are modes you choose.
 
 The window is a **transparent, borderless, fullscreen-sized** surface that floats
 over the desktop (always-on-top). Transparency is why it's borderless-fullscreen
