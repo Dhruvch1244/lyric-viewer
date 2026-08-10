@@ -1,11 +1,29 @@
 # Next steps
 
-Current as of **v0.14.0**. Written to be picked up cold — each item says what
+Current as of **v0.15.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
 
 ---
 
 ## Requested, not built
+
+### 0. Verify the new modes against real audio
+
+0.15.0's visuals were built and captured through an Electron screenshot harness
+with a *synthetic* heat map (see the recipe in the `gpu-swirl-field` note).
+Everything below was proven in that harness or by unit test:
+
+- the persistence round trip (learn → flush on track change → save → reload →
+  read forwards), including one save call per track change and the
+  duration-mismatch guard;
+- `lookahead` reporting a 0.79 rise 4s ahead of a learned drop;
+- section naming, and the beat-locked pose maths.
+
+**Not yet seen on real music**: the heat map filling in from live capture over a
+whole song, the anticipation coil landing on an actual drop, and whether four
+beats per platter revolution reads right at real tempos. All of it needs the `♫`
+chip and one full play. Nothing here is suspected broken — it is simply the
+difference between measured and watched.
 
 ### 1. Side poster panel
 
@@ -95,14 +113,29 @@ against a known BPM would settle it either way.
 - **Harness: one window per process, and `show: true`.** Hidden windows throttle
   `requestAnimationFrame`, which fabricates timing bugs that do not exist;
   creating several transparent/always-on-top windows in one process silently
-  produces no output at all.
+  produces no output at all. Drive it through the **real** preload and the real
+  IPC channel names — most renderer state is module-scoped and unreachable from
+  `executeJavaScript`, and going through the channels tests the wiring too.
+  Stub every `ipcMain.handle` the renderer invokes at startup (`get-offset`,
+  `get-prefs`, `get-transcribe-config`, `get-provider-status`, `list-synced`) or
+  boot stalls on a rejected promise.
+
+- **`null` on a load channel is ambiguous — resolve it deliberately.** Main
+  sends `heatmap: null` / `beatmap: null` to mean *nothing is stored yet*, which
+  is **not** the same as *forget what you have*. Treating the first as the second
+  wiped the empty map the track had just been given and left every song unable to
+  learn anything at all. This was caught only by running the round trip; unit
+  tests passed throughout, because each half was correct on its own.
 
 ---
 
 ## Suggested order
 
-1. **Release hygiene** — nothing outstanding; v0.14.0 is current.
-2. **Notification tray** — smaller, and the job data already exists.
-3. **Side poster** — decide the candidates API first, then build the panel.
-4. **Verify word alignment end to end** — cheap, and it de-risks a headline
-   feature that is currently only plausible.
+1. **Release hygiene** — nothing outstanding; v0.15.0 is current.
+2. **Play one song through with `♫` on** — settles item 0 and item "verify word
+   alignment" in the same sitting, since both need exactly one full play with
+   capture enabled.
+3. **Notification tray** — smaller, and the job data already exists.
+4. **Side poster** — decide the candidates API first, then build the panel.
+   Note that Vinyl already puts the cover art on screen at full crispness, so
+   part of the motivation for this may already be met.

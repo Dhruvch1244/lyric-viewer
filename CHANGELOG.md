@@ -2,6 +2,107 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.15.0 — 2026-08-10
+
+### Fixed
+
+- **The heatmap was never saved or written back — so it knew nothing.** 0.14.0
+  described a visualiser that learns the shape of a song and is "remembered
+  afterwards". It was not. `load()` and `takeForSave()` were written and
+  exported, and nothing ever called either one; `heatmap` was missing from the
+  cache's persisted fields, and every track change allocated a fresh empty map.
+
+  The mode could therefore only ever show the play you were in the middle of.
+  Its entire premise — *play it again and the whole arc is already known* —
+  silently did not hold, on any song, ever. The claim in the 0.14.0 notes below
+  was wrong; this release makes it true.
+
+- **A song's first listen could not learn anything.** Found while testing the
+  fix above, in the fix itself: the main process sends `heatmap: null` when it
+  has nothing stored, and treating that as "clear the map" wiped the empty map
+  the track had just been given. "Nothing stored yet" and "forget this" are not
+  the same instruction, and only the second one clears now.
+
+### Changed
+
+- **Heatmap is an ordinary visual preset again.** It had been built on Ghost's
+  `bare` flag — the switch that removes the 2D canvas from the page — and then
+  had to undo it mid-frame to draw anything at all. That made it the one preset
+  whose flags did not describe what it drew, and it silently cost the mode
+  everything the bare branch returns before: the dancers, ripples, drop flash,
+  confetti, colour glows and cover art.
+
+  It is now a layer like `aurora` or `galaxy`, so it composes with the rest and
+  is available inside other looks. **Ghost is unchanged** and remains the only
+  structurally different mode, which is the right shape for it: taking the
+  canvas out of the page is the whole point of Ghost.
+
+- **The song is drawn along the bottom edge, not as a ring around the lyrics.**
+  A ring puts the loudest moment of a track at whatever angle the clock happens
+  to point at, which is a poor way to compare two moments, and it competes with
+  the text for the middle of the screen. Left to right is how everyone already
+  reads a song. The dancers stand in front of it, so the skyline reads as the
+  floor they are on.
+
+### Added
+
+- **Anticipation — the first thing here that knows what has not happened yet.**
+  Every other input describes the sample being held. A stored heat map has
+  already heard the rest of the song, so a rise can be played *into* rather than
+  discovered a frame late: the field tightens, and the troupe gathers to the
+  middle of the stage and coils, while the build-up is still climbing.
+
+  Measured end to end on a learned track: standing at 76s, the app reports a
+  rise of 0.79 with the peak **4 seconds away** — before it arrives.
+
+  It feeds the existing build-up channel rather than adding a parallel one, so
+  the strongest source wins: a remembered map never talks over a real build the
+  app can currently hear. Songs that have not been heard get nothing rather than
+  a guess.
+
+- **Song structure, named.** The bins are clustered into sections — intro,
+  verse, build, drop, break, outro — and the current one is labelled under the
+  timeline, with a countdown replacing the label when a drop is within eight
+  seconds. Derived from the same bins rather than stored separately, so it costs
+  nothing extra to learn and cannot drift out of step with the heatmap. Nothing
+  is claimed until half the track has actually been heard: a section list built
+  from a quarter of a song is fiction.
+
+- **Vinyl — the cover art as a record on a deck.** It turns the whole time the
+  song plays, at a rate the music sets: one revolution every four beats once the
+  tempo has locked, which at ordinary tempos lands near a real platter's 33⅓
+  rpm. That is the difference between a record and a progress dial — it moves
+  because the music does. The tonearm creeps inward as the song plays, and a
+  drop nudges the platter forward. Parked to the left, so crisp artwork never
+  sits behind the lyric it would compete with.
+
+- **Stage — the dancers as the subject.** A lit floor, three spotlights that
+  punch on the kick, and the troupe enlarged and brought down onto the floor
+  line. Everywhere else the dancers are decoration at the bottom of a backdrop;
+  here they are what you are watching.
+
+- **The dancers are on the beat, not near it.** Every move ran on a private
+  free-running oscillator of roughly one cycle a second, so the element people
+  watch most closely was the one least connected to the music. All twenty-two
+  moves now run on musical time and cycle a whole number of times per beat,
+  driven by the same measured beat clock as everything else. The free-running
+  clock survives only as the fallback for when no tempo has been measured.
+
+  Each dancer carries a fraction of a beat of personal lateness, so a troupe
+  reads as several people feeling one beat rather than one sprite drawn eight
+  times.
+
+- **A safeguard against the wrong recording.** A stored map is refused when the
+  track length disagrees with what is playing by more than two seconds. Same
+  title, same artist, different arrangement is a real case — radio edit, extended
+  mix, live cut — and replaying a stored arc over the wrong recording would put
+  the drop confidently in the wrong place. The song relearns itself instead.
+
+- **The now-playing corner is one row.** A small animated indicator, then the
+  title and artist side by side on the same line, instead of two stacked lines
+  with nothing to say whether anything was playing. The bars animate only while
+  playback is actually running.
+
 ## 0.14.0 — 2026-08-10
 
 ### Fixed
@@ -50,6 +151,11 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   skipped, so a song heard once reads as "not known yet" instead of broken.
 
   Needs audio capture (`♫`) to learn, and is remembered afterwards.
+
+  > **Correction (0.15.0).** It was not remembered. Nothing saved the map and
+  > nothing loaded one, so the mode only ever showed the play in progress and
+  > the replay behaviour described above never happened. Fixed in 0.15.0, where
+  > the ring also became a bottom timeline.
 
 ## 0.13.0 — 2026-08-10
 
