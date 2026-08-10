@@ -1960,6 +1960,9 @@ window.player.onTranscribeProgress((data) => {
     case 'starting':
       setStatus('transcribing the last song…');
       break;
+    case 'relanguage':
+      setStatus('sounds Hindi — re-transcribing properly…');
+      break;
     case 'done':
       setStatus(`learned ${data.lines} lines — ready next play`);
       break;

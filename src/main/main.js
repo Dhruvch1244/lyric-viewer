@@ -669,18 +669,50 @@ app.whenReady().then(() => {
     send('transcribe-progress', { track, stage: 'starting', pct: 0 });
     try {
       const samples = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
-      const result = await transcribePcm(samples, {
-        modelId: settings.get('whisperModel') || DEFAULT_MODEL,
-        language: payload.language || undefined,
-        onProgress: (p) => {
-          // Model download only happens on the very first run.
-          if (p && p.status === 'progress' && typeof p.progress === 'number') {
-            send('transcribe-progress', {
-              track, stage: 'downloading', pct: Math.round(p.progress), file: p.file,
-            });
-          }
-        },
+      const modelId = settings.get('whisperModel') || DEFAULT_MODEL;
+      const forcedLanguage = payload.language || settings.get('whisperLanguage') || '';
+      const onProgress = (p) => {
+        // Model download only happens on the very first run.
+        if (p && p.status === 'progress' && typeof p.progress === 'number') {
+          send('transcribe-progress', {
+            track, stage: 'downloading', pct: Math.round(p.progress), file: p.file,
+          });
+        }
+      };
+
+      let result = await transcribePcm(samples, {
+        modelId,
+        language: forcedLanguage || undefined,
+        onProgress,
       });
+
+      /*
+        Auto-language, without asking the user to pick one.
+
+        Whisper does not detect language here — omitting it silently decodes as
+        English, which turns Hindi/Punjabi vocals into nonsense. But that
+        nonsense is itself the signal: forced to English, the model writes
+        phonetic approximations of Hindi that are thick with exactly the
+        function words detectIndic() already recognises ("hai", "mera",
+        "tera", ...). So we let the English pass happen, test its output, and
+        redo the pass properly as Hindi when it looks Indic.
+
+        Costs a second pass only for the tracks that need one, and only when
+        the user has not pinned a language.
+      */
+      if (!forcedLanguage && result.cues.length && detectIndic(result.cues).indic) {
+        send('transcribe-progress', { track, stage: 'relanguage', pct: 50 });
+        try {
+          const hindi = await transcribePcm(samples, {
+            modelId, language: 'hindi', onProgress,
+          });
+          // Only accept the retry if it actually produced something usable.
+          if (hindi.cues.length) result = hindi;
+        } catch (err) {
+          // Keep the English pass rather than losing the whole transcription.
+          console.warn('[transcribe] Hindi retry failed:', err.message);
+        }
+      }
 
       if (!result.cues.length) {
         send('transcribe-progress', { track, stage: 'empty', pct: 100 });
