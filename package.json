@@ -32,7 +32,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.png",
@@ -55,6 +57,8 @@
     "electron-builder": "^26.0.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0"
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@huggingface/transformers": "^4.2.0",
+    "wavefile": "^11.0.0"
   }
 }
