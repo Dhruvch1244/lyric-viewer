@@ -1597,6 +1597,34 @@ const TIMELINE_RIGHT = 0.96;
 /** A `drop` section closer than this gets a countdown on the timeline. */
 const COUNTDOWN_WINDOW_MS = 8000;
 
+/** Last measured structure-label width, keyed by the string it belongs to. */
+let labelWidthCache = { text: '', width: 0 };
+
+/**
+ * The live accent/tint, snapped to a hue bucket.
+ *
+ * Everything cached by colour has to key on a value that actually holds still.
+ * `accentLive` does not — it is `shiftHex(accent, bgHue)` and the hue drifts
+ * continuously, so keying on it rebuilt every few frames and cached almost
+ * nothing. (Measured: the timeline bitmap was being rebuilt on ~20% of frames.)
+ *
+ * Snapping the hue first is the same trade the lyric CSS variable already makes
+ * at 3°: the cached art's hue lags by up to one bucket, which is invisible on a
+ * soft fade and worth 60× fewer rebuilds. Live colours are still used for the
+ * crisp elements drawn on top — the playhead, the label, the tonearm.
+ *
+ * @returns {{key: string, accent: string, tint: string}}
+ */
+function quantisedColours() {
+  const hq = Math.round(bgHue / TIMELINE_HUE_STEP) * TIMELINE_HUE_STEP;
+  const base = (palette && palette[3]) || '#e94560';
+  return {
+    key: `${hq}|${base}|${baseTint}`,
+    accent: shiftHex(base, hq),
+    tint: shiftHex(baseTint, hq * 0.5),
+  };
+}
+
 /**
  * Draw the song as a timeline of cells along the bottom edge.
  *
@@ -1612,40 +1640,97 @@ const COUNTDOWN_WINDOW_MS = 8000;
  * @param {number} w @param {number} h
  * @param {string} accent @param {string} tint
  */
+/*
+  The timeline is pre-rendered to a bitmap and blitted, the same idiom the glow
+  sprites and the vignette already use in this file.
+
+  Drawing it live cost 96 fillRects every frame — measured at 164 per frame in
+  Heatmap against Liquid's 69 — to produce a picture that changes only when a
+  bin is learned or the window resizes.
+
+  The played/unplayed split does NOT go in the bitmap. Dimming is a single
+  uniform multiplier on alpha, so one bitmap drawn at full strength and blitted
+  twice — the played part at 1.0, the rest at DIM — is pixel-identical to
+  baking two variants, and keeps the playhead out of the cache key.
+
+  The hue is quantised because `accentLive` drifts continuously with `bgHue`;
+  keying the cache on the exact colour would rebuild every frame and cache
+  nothing. 12° is about one rebuild a second at normal drift, against 60.
+*/
+const TIMELINE_DIM = 0.44;
+const TIMELINE_HUE_STEP = 12;
+
+/** @type {{canvas: HTMLCanvasElement, key: string, left: number, baseY: number, span: number, maxH: number}|null} */
+let timelineSprite = null;
+
+/**
+ * Build (or reuse) the timeline bitmap for the current map, size and colour.
+ * @param {Array} cells @param {number} w @param {number} h
+ * @returns {{canvas: HTMLCanvasElement, left: number, baseY: number, span: number, maxH: number}}
+ */
+function timelineBitmap(cells, w, h) {
+  const q = quantisedColours();
+  const key = `${window.HeatMap.revision()}|${w}|${h}|${q.key}`;
+  if (timelineSprite && timelineSprite.key === key) return timelineSprite;
+  const { accent, tint } = q;
+
+  const n = cells.length;
+  const left = w * TIMELINE_LEFT;
+  const span = w * (TIMELINE_RIGHT - TIMELINE_LEFT);
+  const maxH = h * TIMELINE_MAX_H;
+  const baseY = h * TIMELINE_BASE_Y;
+  const cellW = span / n;
+  const gap = Math.min(2.5, cellW * 0.24);
+
+  const canvas = (timelineSprite && timelineSprite.canvas) || document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(span));
+  canvas.height = Math.max(1, Math.ceil(maxH));
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < n; i += 1) {
+    const c = cells[i];
+    // Height carries energy; brightness (applied at blit time) carries how far
+    // the playhead has reached — so the strip reads as a shape AND a position.
+    const barH = c.known ? Math.max(2, maxH * (0.05 + c.level * 0.95)) : 2;
+    const alpha = c.known ? 0.22 + c.level * 0.62 : 0.08;
+    // Bass-heavy slices lean to the accent, bright ones to the secondary tint.
+    g.fillStyle = hexA(c.bass >= c.treble ? accent : tint, alpha);
+    g.fillRect(i * cellW + gap / 2, maxH - barH, Math.max(1, cellW - gap), barH);
+  }
+
+  timelineSprite = { canvas, key, left, baseY, span, maxH };
+  return timelineSprite;
+}
+
 function drawHeatmap(w, h, accent, tint) {
   if (!window.HeatMap) return;
   const cells = window.HeatMap.cells();
   if (cells.length === 0) return;
   if (window.HeatMap.coverage() <= 0) return;   // nothing learned; say nothing
 
-  const n = cells.length;
-  const left = w * TIMELINE_LEFT;
-  const span = w * (TIMELINE_RIGHT - TIMELINE_LEFT);
-  const cellW = span / n;
-  const gap = Math.min(2.5, cellW * 0.24);
-  const baseY = h * TIMELINE_BASE_Y;
-  const maxH = h * TIMELINE_MAX_H;
+  const sprite = timelineBitmap(cells, w, h);
+  const { canvas, left, baseY, span, maxH } = sprite;
 
   const played = durationMs > 0
     ? Math.max(0, Math.min(1, estimatePosition() / durationMs))
     : 0;
-  const headIndex = Math.floor(played * n);
   const headX = left + played * span;
+  const headPx = Math.round(played * canvas.width);
+  const top = baseY - maxH;
 
   ctx.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < n; i += 1) {
-    const c = cells[i];
-
-    // Height carries energy, brightness carries how far the playhead has
-    // reached — so the strip reads as a shape AND as a position at a glance.
-    const heard = i <= headIndex;
-    const barH = c.known ? Math.max(2, maxH * (0.05 + c.level * 0.95)) : 2;
-    const dim = heard ? 1 : 0.44;
-    const alpha = (c.known ? 0.22 + c.level * 0.62 : 0.08) * dim;
-
-    // Bass-heavy slices lean to the accent, bright ones to the secondary tint.
-    ctx.fillStyle = hexA(c.bass >= c.treble ? accent : tint, alpha);
-    ctx.fillRect(left + i * cellW + gap / 2, baseY - barH, Math.max(1, cellW - gap), barH);
+  // Played: full strength.
+  if (headPx > 0) {
+    ctx.drawImage(canvas, 0, 0, headPx, canvas.height, left, top, headPx, maxH);
+  }
+  // Still to come: the same pixels, dimmed.
+  const restPx = canvas.width - headPx;
+  if (restPx > 0) {
+    ctx.globalAlpha = TIMELINE_DIM;
+    ctx.drawImage(canvas, headPx, 0, restPx, canvas.height,
+      left + headPx, top, restPx, maxH);
+    ctx.globalAlpha = 1;
   }
 
   // The playhead: a bright tick standing clear of the tallest cell.
@@ -1704,8 +1789,16 @@ function drawSongStructure(headX, left, span, baseY, maxH, accent) {
   ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
-  // Keep the label on screen when the playhead is near either end.
-  const tw = ctx.measureText(text).width;
+  /*
+    Keep the label on screen when the playhead is near either end. The width is
+    cached against the string: `measureText` forces a text-shaping pass, and the
+    countdown only ever shows one decimal, so this label takes at most ten
+    distinct values a second while being drawn sixty times.
+  */
+  if (text !== labelWidthCache.text) {
+    labelWidthCache = { text, width: ctx.measureText(text).width };
+  }
+  const tw = labelWidthCache.width;
   const x = Math.max(left + tw / 2, Math.min(left + span - tw / 2, headX));
   ctx.fillStyle = hexA(accent, toDropMs < COUNTDOWN_WINDOW_MS ? 0.95 : 0.5);
   ctx.fillText(text.toUpperCase(), x, labelY);
@@ -1735,6 +1828,72 @@ const VINYL_IDLE_PERIOD_MS = 1800;
     never cause a visible jump — a record does not teleport. */
 let vinylAngle = 0;
 
+/** @type {{platter: HTMLCanvasElement, sheen: HTMLCanvasElement, key: string}|null} */
+let vinylSprites = null;
+
+/**
+ * Pre-rendered platter (body + grooves) and sheen, both square and centred so
+ * the caller can rotate the sheen about the middle.
+ *
+ * Rebuilt only when the radius or the quantised colour changes — the hue drifts
+ * continuously, so an exact-colour key would cache nothing.
+ *
+ * @param {number} R platter radius (px)
+ * @returns {{platter: HTMLCanvasElement, sheen: HTMLCanvasElement}}
+ */
+function vinylBitmaps(R) {
+  const size = Math.max(2, Math.ceil(R * 2));
+  const q = quantisedColours();
+  const key = `${size}|${q.key}`;
+  if (vinylSprites && vinylSprites.key === key) return vinylSprites;
+  const { accent, tint } = q;
+
+  const make = () => {
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    return c;
+  };
+  const platter = (vinylSprites && vinylSprites.platter) || make();
+  const sheen = (vinylSprites && vinylSprites.sheen) || make();
+  for (const c of [platter, sheen]) { c.width = size; c.height = size; }
+
+  const mid = size / 2;
+  const r = size / 2;
+
+  // Body: near-black rather than black, so it reads as an object on a
+  // transparent overlay instead of a hole punched in the desktop.
+  const pg = platter.getContext('2d');
+  pg.fillStyle = '#0a0a0e';
+  pg.beginPath();
+  pg.arc(mid, mid, r, 0, Math.PI * 2);
+  pg.fill();
+  // Grooves: concentric, so rotating them would be invisible anyway.
+  pg.strokeStyle = hexA(tint, 0.20);
+  pg.lineWidth = 1;
+  pg.globalAlpha = 0.5;
+  for (let gr = r * 0.42; gr < r * 0.97; gr += Math.max(3, r * 0.055)) {
+    pg.beginPath();
+    pg.arc(mid, mid, gr, 0, Math.PI * 2);
+    pg.stroke();
+  }
+
+  // Sheen: the light catching the disc, baked along one axis. Rotating this
+  // bitmap is what reads as the platter turning.
+  const sg = sheen.getContext('2d');
+  const grad = sg.createLinearGradient(size, mid, 0, mid);
+  grad.addColorStop(0, hexA(tint, 0.28));
+  grad.addColorStop(0.5, hexA(accent, 0.04));
+  grad.addColorStop(1, hexA(tint, 0));
+  sg.fillStyle = grad;
+  sg.beginPath();
+  sg.arc(mid, mid, r * 0.98, 0, Math.PI * 2);
+  sg.fill();
+
+  vinylSprites = { platter, sheen, key };
+  return vinylSprites;
+}
+
 /**
  * Draw the spinning record.
  * @param {number} w @param {number} h @param {number} dt frame delta (ms)
@@ -1758,39 +1917,26 @@ function drawVinyl(w, h, dt, accent, tint) {
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
 
-  // Platter body. Near-black rather than black so it reads as an object on a
-  // transparent overlay instead of a hole punched in the desktop.
+  /*
+    Body, grooves and sheen come from two pre-rendered bitmaps.
+
+    Drawn live they cost ~11 arc strokes and a fresh linear gradient every
+    frame — measured at 31 arcs per frame in Vinyl against Liquid's 16 — for a
+    disc whose only moving parts are the sheen's angle and the label. The sheen
+    is baked flat and ROTATED at blit time, which is the same picture for one
+    drawImage instead of building a gradient sixty times a second.
+  */
+  const disc = vinylBitmaps(R);
+
   ctx.globalAlpha = 0.82;
-  ctx.fillStyle = '#0a0a0e';
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.drawImage(disc.platter, cx - R, cy - R, R * 2, R * 2);
 
-  // Grooves. Concentric, and NOT rotated — grooves are circles, so spinning
-  // them would be invisible anyway and would only cost draw calls.
-  ctx.globalAlpha = 0.5;
-  ctx.strokeStyle = hexA(tint, 0.20);
-  ctx.lineWidth = 1;
-  for (let r = R * 0.42; r < R * 0.97; r += Math.max(3, R * 0.055)) {
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  // A sheen sweeping round with the platter: the light catching the disc is
-  // what actually reads as rotation on a featureless black circle.
   ctx.globalAlpha = 0.5 + beatFlash * 0.3;
-  const sheen = ctx.createLinearGradient(
-    cx + Math.cos(vinylAngle) * R, cy + Math.sin(vinylAngle) * R,
-    cx - Math.cos(vinylAngle) * R, cy - Math.sin(vinylAngle) * R
-  );
-  sheen.addColorStop(0, hexA(tint, 0.28));
-  sheen.addColorStop(0.5, hexA(accent, 0.04));
-  sheen.addColorStop(1, hexA(tint, 0));
-  ctx.fillStyle = sheen;
-  ctx.beginPath();
-  ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(vinylAngle);
+  ctx.drawImage(disc.sheen, -R, -R, R * 2, R * 2);
+  ctx.restore();
 
   // The label: cover art if we have it, the palette if we do not. This is the
   // part that visibly turns.
@@ -1863,6 +2009,48 @@ function drawVinyl(w, h, dt, accent, tint) {
 */
 const STAGE_FLOOR_Y = 0.90;
 
+/* Brightest a beam / the floor ever gets. The cached gradients are built at
+   these levels and scaled down with globalAlpha, so the stops never change. */
+const STAGE_BEAM_MAX = 0.16 + 0.34 + 0.28 + 0.14;
+const STAGE_FLOOR_MAX = 0.20 + 0.12;
+
+/** @type {{key: string, beamAccent: CanvasGradient, beamTint: CanvasGradient, floor: CanvasGradient}|null} */
+let stageGrads = null;
+
+/**
+ * Cached stage gradients, rebuilt only on a resize or a colour change.
+ *
+ * Built live they were four fresh `createLinearGradient` calls per frame — the
+ * highest gradient churn of any preset — for stops that are constant apart from
+ * a brightness the caller can apply with globalAlpha instead.
+ *
+ * @param {number} w @param {number} h @param {number} floorY
+ */
+function stageGradients(w, h, floorY) {
+  const q = quantisedColours();
+  const key = `${w}|${h}|${q.key}`;
+  if (stageGrads && stageGrads.key === key) return stageGrads;
+  const { accent, tint } = q;
+
+  const beam = (colour) => {
+    const g = ctx.createLinearGradient(0, -h * 0.05, 0, floorY);
+    g.addColorStop(0, hexA(colour, STAGE_BEAM_MAX));
+    g.addColorStop(1, hexA(colour, 0));
+    return g;
+  };
+  const floor = ctx.createLinearGradient(0, floorY - h * 0.01, 0, h);
+  floor.addColorStop(0, hexA(accent, STAGE_FLOOR_MAX));
+  // The mid stop used to be a flat 0.10 while only the lit edge pulsed. It now
+  // rides the same globalAlpha as the rest, so the whole floor brightens
+  // together — a smaller change than it sounds, and more coherent than a lit
+  // edge floating over a fall-off that ignored the beat.
+  floor.addColorStop(0.25, hexA(tint, 0.10));
+  floor.addColorStop(1, 'rgba(0,0,0,0)');
+
+  stageGrads = { key, beamAccent: beam(accent), beamTint: beam(tint), floor };
+  return stageGrads;
+}
+
 /**
  * Draw the floor and the spotlights. Called before the sprites so they stand in
  * front of it.
@@ -1871,6 +2059,7 @@ const STAGE_FLOOR_Y = 0.90;
  */
 function drawStage(w, h, now, accent, tint) {
   const floorY = h * STAGE_FLOOR_Y;
+  const grads = stageGradients(w, h, floorY);
 
   // Three beams from above the top edge onto the floor. They sway slowly, and
   // each brightens on its own beat subdivision so the rig reads as lit BY the
@@ -1887,10 +2076,15 @@ function drawStage(w, h, now, accent, tint) {
     const power = 0.16 + beat * 0.34 + dropFlash * 0.28 + buildup * 0.14;
     const width = w * (0.055 + beat * 0.02);
 
-    const grad = ctx.createLinearGradient(originX, -h * 0.05, targetX, floorY);
-    grad.addColorStop(0, hexA(i === 1 ? accent : tint, power));
-    grad.addColorStop(1, hexA(i === 1 ? accent : tint, 0));
-    ctx.fillStyle = grad;
+    /*
+      The beam's fade is vertical, and its brightness is applied with
+      globalAlpha rather than baked into the colour stops — so one cached
+      gradient per colour serves every beam at every power, instead of three
+      fresh gradients a frame that differed only in alpha and in a horizontal
+      skew nobody can see across a soft fade.
+    */
+    ctx.globalAlpha = Math.min(1, power / STAGE_BEAM_MAX);
+    ctx.fillStyle = i === 1 ? grads.beamAccent : grads.beamTint;
     ctx.beginPath();
     ctx.moveTo(originX - width * 0.16, -h * 0.05);
     ctx.lineTo(originX + width * 0.16, -h * 0.05);
@@ -1909,14 +2103,13 @@ function drawStage(w, h, now, accent, tint) {
   }
   ctx.restore();
 
-  // The floor itself: a lit edge with the light falling away below it.
+  // The floor itself: a lit edge with the light falling away below it. Same
+  // trick as the beams — cached stops, brightness through globalAlpha.
   ctx.save();
-  const floor = ctx.createLinearGradient(0, floorY - h * 0.01, 0, h);
-  floor.addColorStop(0, hexA(accent, 0.20 + beatFlash * 0.12));
-  floor.addColorStop(0.25, hexA(tint, 0.10));
-  floor.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = floor;
+  ctx.globalAlpha = Math.min(1, (0.20 + beatFlash * 0.12) / STAGE_FLOOR_MAX);
+  ctx.fillStyle = grads.floor;
   ctx.fillRect(0, floorY - h * 0.01, w, h - floorY + h * 0.01);
+  ctx.globalAlpha = 1;
   ctx.strokeStyle = hexA(accent, 0.45 + beatFlash * 0.35);
   ctx.lineWidth = 1.5;
   ctx.beginPath();

@@ -70,6 +70,8 @@
   let revision = 0;
   /** @type {{revision: number, value: Array}|null} */
   let structureCache = null;
+  /** @type {{revision: number, value: Array}|null} */
+  let cellsCache = null;
 
   /**
    * Start (or resume) recording for a track of known length.
@@ -155,19 +157,31 @@
    * scale, because the interesting thing is a track's internal dynamics — where
    * it lifts and where it drops away — not how hot it was mastered.
    *
+   * Memoised against the same revision counter as `sections`, because the
+   * renderer asks every frame while the answer changes only when a bin does:
+   * rebuilding allocated 96 objects and an array 60 times a second to hand back
+   * identical values.
+   *
+   * The returned array is SHARED — treat it as read-only. Nothing in the app
+   * writes to it, and copying defensively would reintroduce the allocation this
+   * cache exists to remove.
+   *
    * @returns {Array<{level: number, bass: number, treble: number, known: boolean}>}
    */
   function cells() {
     if (!map) return [];
+    if (cellsCache && cellsCache.revision === revision) return cellsCache.value;
     let peak = 0;
     for (const b of map.bins) if (b.level > peak) peak = b.level;
     const scale = peak > 0 ? 1 / peak : 0;
-    return map.bins.map((b) => ({
+    const value = map.bins.map((b) => ({
       level: Math.min(1, b.level * scale),
       bass: Math.min(1, b.bass * scale),
       treble: Math.min(1, b.treble * scale),
       known: b.n >= MIN_SAMPLES,
     }));
+    cellsCache = { revision, value };
+    return value;
   }
 
   /**
@@ -372,9 +386,19 @@
     return map;
   }
 
+  /**
+   * A counter that changes whenever a bin does. Lets a caller cache anything
+   * derived from the map — the renderer pre-renders the timeline to a bitmap
+   * and keys it on this — without comparing 96 cells every frame.
+   * @returns {number}
+   */
+  function currentRevision() {
+    return revision;
+  }
+
   window.HeatMap = {
     start, load, note, get, cells, coverage, isDirty, takeForSave,
-    lookahead, sections, sectionAt,
+    lookahead, sections, sectionAt, revision: currentRevision,
     BIN_COUNT, MIN_SAMPLES, MIN_STRUCTURE_COVERAGE, DURATION_TOLERANCE_MS,
   };
 })();

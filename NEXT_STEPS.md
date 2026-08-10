@@ -5,6 +5,63 @@ is missing, why it was left, and what the first move is.
 
 ---
 
+## Decided for 0.16.0
+
+Agreed after the 0.15.0 draw-cost audit:
+
+1. **Draw-cost payback** — done, see "Per-frame draw cost" below.
+2. **Close the `♫` gap** — a one-time, dismissible prompt per install. Most of
+   0.15.0 does nothing without capture, and nothing currently says so.
+3. **Notification tray** — item 2 below.
+4. **Artwork candidates / side poster** — item 3 below.
+5. **More visual modes** — the layer system composes cleanly now, so each new
+   look is far cheaper than Vinyl and Stage were.
+
+Verification against real audio (item 0) was considered and **not** picked up
+this round. It stays open and unchanged: the longer it waits, the more of the
+release rests on harness evidence alone.
+
+---
+
+## Per-frame draw cost
+
+Measured by patching the canvas prototype from the page — call counts, not frame
+rate, because repeated identical runs vary 3–4× in fps here and cannot rank two
+presets. Reproduce with the perf harness (same rules as the screenshot harness).
+
+| preset | fillRect | arc | stroke | gradients |
+| --- | --- | --- | --- | --- |
+| Ghost | 0 | 0 | 0 | 0 |
+| Liquid | 69.5 | 16.4 | 4.6 | 0.2 |
+| Heatmap | 164 → **72** | 16 | 6 | 0.2 |
+| Vinyl | 166 → **72** | 31 → **21** | 18 → **10** | 1 → **0** |
+| Stage | 72 | 17 | 6 | 4 → **0.1** |
+| Concert | 66.6 | **300** | 46 | 0.2 |
+
+0.15.0 shipped three regressions against this file's own idiom (it already
+caches the vignette on resize and pre-renders glow sprites by colour). All three
+are now fixed: the timeline and the vinyl platter are pre-rendered bitmaps, the
+stage gradients are cached, and `HeatMap.cells()` is memoised against the same
+revision counter `sections()` already used.
+
+**The trap worth remembering:** the first attempt keyed those caches on
+`accentLive`, which is `shiftHex(accent, bgHue)` and therefore changes every
+frame — so the caches rebuilt constantly and saved almost nothing (measured:
+still 144 fillRect against an expected 72). Anything cached by colour must key
+on a **snapped** hue; see `quantisedColours()`.
+
+**Still open, both pre-existing:**
+
+- **Concert is the real heavyweight** at 300 `fill` + 300 `arc` per frame, from
+  the 260-point galaxy plus the constellation web — 4–10× any other preset. It
+  is `cost: 3` by design, and was left alone deliberately rather than changing a
+  look people already know.
+- **Sprite nameplates call `measureText` per dancer per frame** (~2.4/frame with
+  three dancers). The structure label now caches its width; the nameplates do
+  not. Small, but it is the same fix.
+
+---
+
 ## Requested, not built
 
 ### 0. Verify the new modes against real audio

@@ -239,6 +239,21 @@ test('sectionAt finds the section covering a position', () => {
   assert.equal(HeatMap.sectionAt(-1), null);
 });
 
+test('cells is not rebuilt while nothing changes', () => {
+  // The renderer asks every frame. Rebuilding allocated 96 objects and an array
+  // sixty times a second to hand back identical values, so the same array must
+  // come back until a bin actually moves.
+  record(96000, () => 0.5);
+  const first = HeatMap.cells();
+  assert.equal(HeatMap.cells(), first, 'same revision should return the same array');
+
+  const binMs = 96000 / HeatMap.BIN_COUNT;
+  HeatMap.note(binMs / 2, env(1.0));            // a new peak in bin 0
+  const after = HeatMap.cells();
+  assert.notEqual(after, first, 'a learned peak must invalidate it');
+  assert.equal(after[0].level, 1);
+});
+
 test('structure follows the map when something new is learned', () => {
   record(96000, () => 0.5);
   assert.equal(HeatMap.sections().length, 1);
