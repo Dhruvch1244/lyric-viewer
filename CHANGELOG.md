@@ -2,7 +2,7 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.11.1 — 2026-08-10
 
 ### Changed
 

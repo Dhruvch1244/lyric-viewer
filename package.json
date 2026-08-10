@@ -1,6 +1,6 @@
 {
   "name": "lyric-overlay",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Beat-aware synced lyric overlay for Windows. Detects any media app via SMTC.",
   "main": "src/main/main.js",
   "scripts": {
