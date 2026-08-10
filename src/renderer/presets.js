@@ -103,7 +103,7 @@
       name: 'Concert',
       cost: 3,
       // Everything on: the loud one, for drops and parties.
-      layers: { aurora: true, bokeh: true, galaxy: true, eq: true, rays: true, math: true, web: true },
+      layers: { aurora: true, bokeh: true, galaxy: true, eq: false, rays: true, math: true, web: true },
       swirl: { bandBias: 1.35, vortexBias: 1.4, glowBias: 1.3 },
     },
     {

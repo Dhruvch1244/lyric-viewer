@@ -807,3 +807,64 @@ body.keybox-open .hud {
   background: var(--accent);
   transition: width 220ms linear;
 }
+
+/* ---- live band meters (top edge) ----
+   Replaces the equalizer bars that used to run across the backdrop. Three
+   compact readouts carry the same information in a fraction of the screen and
+   cost no fill rate, which the full-width bars very much did. */
+.meters {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  gap: 14px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.30);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  letter-spacing: 0.09em;
+  color: var(--ink-mid);
+}
+
+.meter__icon { font-size: 0.8rem; line-height: 1; color: var(--accent-live, var(--accent)); }
+.meter__label { min-width: 2.4em; }
+
+/* The bar itself. Width is written from JS each frame; a transform would be
+   cheaper still, but at 44px wide across three elements this is not the thing
+   that costs anything. */
+.meter__bar {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.meter__bar > i {
+  position: absolute;
+  inset: 0 100% 0 0;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent-live2, #4cc9f0) 80%, transparent),
+    var(--accent-live, var(--accent)));
+  border-radius: 2px;
+}
+
+/* Tabular figures so the number does not jitter the layout as it changes. */
+.meter__db {
+  min-width: 3.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+}
