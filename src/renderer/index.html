@@ -36,6 +36,31 @@
       </div>
     </main>
 
+    <!-- Live band meters. Replaces the equalizer bars that used to sit across
+         the backdrop: three readouts at the top edge say the same thing in a
+         fraction of the screen and none of the fill rate. Hidden until audio
+         capture is running, since without it every value would read zero. -->
+    <div id="meters" class="meters" aria-hidden="true" hidden>
+      <div class="meter" data-band="bass">
+        <span class="meter__icon">▁</span>
+        <span class="meter__label">BASS</span>
+        <span class="meter__bar"><i></i></span>
+        <span class="meter__db">-∞</span>
+      </div>
+      <div class="meter" data-band="mid">
+        <span class="meter__icon">▃</span>
+        <span class="meter__label">MID</span>
+        <span class="meter__bar"><i></i></span>
+        <span class="meter__db">-∞</span>
+      </div>
+      <div class="meter" data-band="treble">
+        <span class="meter__icon">▆</span>
+        <span class="meter__label">TREB</span>
+        <span class="meter__bar"><i></i></span>
+        <span class="meter__db">-∞</span>
+      </div>
+    </div>
+
     <footer id="hud" class="hud">
       <div class="hud__group">
         <button id="btn-script" class="chip" type="button">अ</button>

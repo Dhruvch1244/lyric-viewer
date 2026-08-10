@@ -21,6 +21,7 @@ const els = {
   fps: document.getElementById('hud-fps'),
   bpm: document.getElementById('hud-bpm'),
   work: document.getElementById('hud-work'),
+  meters: document.getElementById('meters'),
   syncEarlierBtn: document.getElementById('btn-sync-earlier'),
   syncLaterBtn: document.getElementById('btn-sync-later'),
   progressFill: document.getElementById('hud-progress-fill'),
@@ -1604,6 +1605,7 @@ function drawBackdrop(now) {
     // Real-audio envelope (null when capture is off). When present it becomes the
     // source of truth for kicks/build-ups/drops below.
     audioEnv = (audioEnabled && window.AudioReactive) ? window.AudioReactive.sample(now) : null;
+    updateMeters(audioEnv);
     const audioActive = Boolean(audioEnv && audioEnv.active);
 
     // Adaptive quality: track FPS and ease `quality` so heavy layers back off when
@@ -1776,7 +1778,9 @@ function drawBackdrop(now) {
     // substitutes a cheaper preset wholesale instead of gutting this one.
     // With real audio the bottom equalizer reads as a live spectrum, so it is
     // worth having wherever the preset can afford it.
-    if (audioActive && activePreset.cost > 1) scene.eq = true;
+    // The equalizer bars used to be force-enabled whenever audio was live.
+    // The band meters at the top edge now carry that information in a fraction
+    // of the screen, so the full-width bars are no longer switched on here.
 
     const accentLive = shiftHex(accent, bgHue);
     const tintLive = shiftHex(baseTint, bgHue * 0.5);
@@ -2119,6 +2123,59 @@ function setJob(name, label) {
   els.work.hidden = false;
   els.work.textContent = `⟳ ${[...jobs.values()].join(' · ')}`;
   els.work.title = `Background work in progress:\n${[...jobs.values()].join('\n')}`;
+}
+
+/* Band meters. Cached element handles and last-written values, because this
+   runs every frame and the DOM should only be touched when a number actually
+   changes — the same reason paintWords caches its spans. */
+let meterEls = null;
+const meterLast = { bass: -999, mid: -999, treble: -999 };
+
+/**
+ * Linear band level (0..1) to decibels, floored at -60.
+ *
+ * The envelope is an average of the analyser's byte magnitudes, so it is a
+ * linear amplitude ratio and 20·log10 is the right conversion. Anything below
+ * -60dB is inaudible against music and reads as silence.
+ *
+ * @param {number} v 0..1
+ * @returns {number} dB, -60..0
+ */
+function toDb(v) {
+  if (!(v > 0)) return -60;
+  return Math.max(-60, Math.min(0, 20 * Math.log10(v)));
+}
+
+/**
+ * Update the three band readouts from the live envelope.
+ * @param {{bass: number, mid: number, treble: number}|null} env
+ */
+function updateMeters(env) {
+  if (!els.meters) return;
+
+  const active = Boolean(env && env.active);
+  if (els.meters.hidden === active) els.meters.hidden = !active;
+  if (!active) return;
+
+  if (!meterEls) {
+    meterEls = {};
+    for (const band of ['bass', 'mid', 'treble']) {
+      const row = els.meters.querySelector(`[data-band="${band}"]`);
+      meterEls[band] = { fill: row.querySelector('.meter__bar > i'), db: row.querySelector('.meter__db') };
+    }
+  }
+
+  for (const band of ['bass', 'mid', 'treble']) {
+    const db = toDb(env[band]);
+    // Whole decibels: finer than that is noise on a 44px bar and would rewrite
+    // the DOM on every single frame.
+    const rounded = Math.round(db);
+    if (rounded === meterLast[band]) continue;
+    meterLast[band] = rounded;
+    const el = meterEls[band];
+    el.db.textContent = rounded <= -60 ? '-∞ dB' : `${rounded} dB`;
+    el.fill.style.right = `${Math.round((1 - (rounded + 60) / 60) * 100)}%`;
+  }
 }
 
 /** Show the measured tempo, or hide the chip when nothing is locked. */
