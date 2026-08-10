@@ -2,6 +2,36 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.12.1 — 2026-08-10
+
+### Fixed
+
+- **One dead API key could silently disable every LLM feature.** The provider
+  list (Gemini → Groq → HuggingFace → Claude) was treated as a *selection*
+  rather than a *chain*: the highest-precedence configured provider was picked,
+  and if it failed the request failed with it.
+
+  Found on a real setup where a Gemini key had exhausted its free quota. It
+  returned `429` on every call, so translation, transliteration and mood were
+  all dead — even though a HuggingFace token was configured and next in line.
+  It was never tried. Nothing surfaced the reason; the features simply did
+  nothing.
+
+  Every configured provider is now tried in order and the first success wins.
+  Failures are logged instead of swallowed, and when all of them fail the error
+  names each provider and its reason, so a dead key is diagnosable instead of
+  invisible:
+
+  ```
+  gemini: 429 You exceeded your current quota
+  huggingface: 403 This authentication method does not have sufficient
+               permissions to call Inference Providers
+  ```
+
+  Note for HuggingFace tokens: calling Inference Providers needs a
+  **fine-grained** token with the *"Make calls to Inference Providers"*
+  permission. A plain read token returns 403.
+
 ## 0.12.0 — 2026-08-10
 
 ### Fixed
