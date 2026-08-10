@@ -84,6 +84,18 @@ body.lang-devanagari .ln.is-active {
   font-weight: 800;
 }
 
+/* GPU swirl field. Renders below CSS resolution and is stretched back up —
+   the field is soft by design, so the upscale is invisible and costs far less
+   fill rate. z-index 0 keeps it beneath #backdrop's particle layers. */
+#swirl {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
 #backdrop {
   position: fixed;
   inset: 0;

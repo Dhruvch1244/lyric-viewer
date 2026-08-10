@@ -43,6 +43,7 @@ const els = {
   keySave: document.getElementById('keybox-save'),
   keyStatus: document.getElementById('keybox-status'),
   canvas: document.getElementById('backdrop'),
+  swirl: document.getElementById('swirl'),
   hero: document.getElementById('np-hero'),
   heroTitle: document.getElementById('np-hero-title'),
   heroArtist: document.getElementById('np-hero-artist'),
@@ -251,6 +252,58 @@ function lineEnergy(index) {
   if (words === 0) return 0;
   const wps = words / (lineDurationMs(index) / 1000);
   return Math.max(0, Math.min(1, wps / 4.5));
+}
+
+/**
+ * How hard the GPU swirl field should spiral right now, 0..1.
+ *
+ * The rule is "swirl into the space the lyrics aren't using". Big spirals are
+ * gorgeous but they fight dense text for attention, so the field opens up when
+ * there is visual headroom and pulls back when there is a lot to read:
+ *
+ *   - no lyrics at all / instrumental tail  -> fully open, nothing to compete with
+ *   - a short line held for a long time     -> open, the screen is mostly empty
+ *   - a long, fast, wordy bar               -> calm, keep the text legible
+ *
+ * Build-ups and drops override the calm-down, because a drop should always be
+ * allowed to take over the screen.
+ *
+ * @param {number} positionMs current playback position
+ * @returns {number} 0..1 target swirl strength
+ */
+function swirlTarget(positionMs) {
+  // Energy floor: hyped songs keep more motion even mid-verse.
+  const floor = 0.16 + baseEnergy * 0.30;
+
+  // Nothing to read — either no synced lyrics, lyrics hidden, or an
+  // instrumental stretch. This is the "swirl big" case.
+  const noText = cues.length === 0 || activeIndex < 0 || !lyricsVisible || instrumentalGap;
+  let target;
+  if (noText) {
+    target = 0.82;
+  } else {
+    const cue = cues[activeIndex];
+    const chars = (cue && cue.text ? cue.text.trim().length : 0);
+    if (chars === 0) {
+      target = 0.82;
+    } else {
+      // Occupancy: how much of this line's on-screen time is actually spent
+      // delivering text. ~14 chars/second is a normal sung cadence, so a line
+      // at or above that reads as "dense" and damps the swirl toward the floor.
+      const seconds = lineDurationMs(activeIndex) / 1000;
+      const density = Math.min(1, (chars / 14) / Math.max(0.35, seconds));
+      // Short lines (hooks, one-word ad-libs) get extra room on top.
+      const brevity = 1 - Math.min(1, chars / 46);
+      target = floor + (1 - density) * 0.55 + brevity * 0.20;
+    }
+  }
+
+  // Musical surges always win over the text-density damping.
+  target = Math.max(target, buildup * 0.95, dropFlash * 0.9);
+  // A little continuous lift from overall loudness so quiet passages settle.
+  target += intensity * 0.10;
+
+  return Math.max(0, Math.min(1, target));
 }
 
 /**
@@ -564,6 +617,24 @@ function frame() {
 /* --------------------------------------------------------------- starfield */
 
 const ctx = els.canvas.getContext('2d');
+
+/* GPU swirl field (src/renderer/swirl.js). When it initialises, it owns the
+   fluid colour base and the 2D flat wash below is thinned right down so the
+   shader shows through; when WebGL2 is missing this stays false and the
+   original wash is painted at full strength. */
+const swirlOn = (() => {
+  try {
+    return Boolean(window.SwirlField && window.SwirlField.init(els.swirl));
+  } catch (err) {
+    console.warn('[swirl] init threw, using the 2D wash:', err && err.message);
+    return false;
+  }
+})();
+
+/* Smoothed 0..1 swirl drive. Eased rather than set directly so the spiral
+   accelerates and unwinds over ~a second instead of snapping between lines. */
+let swirlDrive = 0;
+
 let stars = [];
 let glows = [];
 let palette = ['#0d0d1a', '#4361ee', '#7209b7', '#4cc9f0'];
@@ -640,6 +711,11 @@ function resizeCanvas() {
 
   const w = window.innerWidth;
   const h = window.innerHeight;
+
+  // The swirl field is soft and upscaled by the compositor, so it renders at a
+  // fraction of CSS resolution — the cheapest quality lever it has. Lite mode
+  // halves it again.
+  if (swirlOn) window.SwirlField.resize(w, h, liteMode ? 0.45 : 0.7);
   vignette = ctx.createRadialGradient(w / 2, h * 0.5, 0, w / 2, h * 0.5, Math.max(w, h) * 0.8);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
@@ -1253,12 +1329,37 @@ function drawBackdrop(now) {
       drawArtCover(w, h, artAlpha);
     }
 
+    // --- GPU swirl field -------------------------------------------------
+    // Ease the swirl drive toward its target so spirals wind up and unwind
+    // smoothly. Opening up is slower than calming down: a drop should be able
+    // to snap the field shut, but the big swirl should bloom in, not pop.
+    if (swirlOn) {
+      const target = swirlTarget(estimatePosition());
+      const rate = target > swirlDrive ? 0.020 : 0.055;
+      swirlDrive += (target - swirlDrive) * (1 - Math.pow(1 - rate, dt / 16));
+
+      window.SwirlField.setQuality(liteMode ? 0.5 : quality);
+      window.SwirlField.render({
+        timeMs: now,
+        palette: [tintLive, palette[1], palette[2], accentLive],
+        // Matches the wash's own art-thinning so a cover photo still reads.
+        alpha: Math.min(1, level.alpha * (1 - artAlpha * 0.7)),
+        life,
+        swirl: swirlDrive,
+        buildup,
+        drop: dropFlash,
+        beat: beatFlash,
+        bass: audioActive ? audioEnv.bass : 0,
+      });
+    }
+
     // Wash opacity follows the level and swells with build-up/drop so colour
     // change reads even through a transparent overlay. When a cover photo is
     // present the wash is thinned so the photo stays visible beneath the colour.
-    // With a cover present, thin the colour wash hard so the poster shows through
-    // (the scrim already handles lyric legibility); without one, keep it full.
-    const washAlpha = Math.min(1, level.alpha * (1 - artAlpha * 0.85) + buildup * 0.12 + dropFlash * 0.15);
+    // With the GPU field active it supplies the colour base, so the flat wash
+    // drops to a thin unifying tint instead of hiding the shader behind it.
+    const washBase = swirlOn ? level.alpha * 0.16 : level.alpha;
+    const washAlpha = Math.min(1, washBase * (1 - artAlpha * 0.85) + buildup * 0.12 + dropFlash * 0.15);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = washAlpha;
     ctx.fillStyle = tintLive;
