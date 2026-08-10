@@ -70,6 +70,11 @@ uniform float u_drop;
 uniform float u_beat;
 uniform float u_bass;
 uniform int   u_octaves;
+// Per-preset character multipliers (see presets.js): how tightly the field
+// bands, how hard it spirals, and how much the vortex cores glow.
+uniform float u_bandBias;
+uniform float u_vortexBias;
+uniform float u_glowBias;
 
 const int MAX_OCTAVES = 6;
 
@@ -91,6 +96,21 @@ float noise(vec2 p) {
   float c = hash(i + vec2(0.0, 1.0));
   float d = hash(i + vec2(1.0, 1.0));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/*
+  Two-octave fbm for the domain-warp stages.
+
+  The warp only needs low-frequency displacement — the fine detail it adds is
+  destroyed by the very warping it feeds. Running full octaves here was
+  invisible on screen and cost most of the shader's budget: the field used
+  5 fbm calls x 5 octaves x 4 hashes = ~100 hash evaluations per pixel, which
+  at 1080p is ~100M per frame and is why weak/integrated GPUs sat at ~20fps.
+*/
+float fbmWarp(vec2 p) {
+  float sum = noise(p) * 0.5;
+  sum += noise(p * 2.02) * 0.25;
+  return sum / 0.75;
 }
 
 float fbm(vec2 p) {
@@ -141,9 +161,10 @@ void main() {
   vec2 c2 = vec2(cos(t * 0.09 + 4.0) * 0.30, sin(t * -0.23 + 2.5) * 0.30);
 
   vec2 p = uv;
-  p = vortex(p, c0, spiral * 0.95);
-  p = vortex(p, c1, spiral * -0.70);
-  p = vortex(p, c2, spiral * 0.55);
+  float vb = u_vortexBias;
+  p = vortex(p, c0, spiral * 0.95 * vb);
+  p = vortex(p, c1, spiral * -0.70 * vb);
+  p = vortex(p, c2, spiral * 0.55 * vb);
 
   // Bass squeezes the whole field toward/away from centre — a subtle "pump".
   p *= 1.0 - u_bass * 0.10 - u_beat * 0.05;
@@ -153,10 +174,11 @@ void main() {
   // The scale has to be high enough to show structure — too low and the whole
   // screen is one smooth blob that reads as a plain gradient.
   float scale = 2.30 + u_life * 0.90;
-  vec2 q = vec2(fbm(p * scale + vec2(0.0, t * 0.09)),
-                fbm(p * scale + vec2(4.7, -t * 0.07)));
-  vec2 r = vec2(fbm(p * scale + q * (1.6 + u_swirl * 1.4) + vec2(1.7, 9.2) + t * 0.05),
-                fbm(p * scale + q * (1.6 + u_swirl * 1.4) + vec2(8.3, 2.8) - t * 0.04));
+  vec2 q = vec2(fbmWarp(p * scale + vec2(0.0, t * 0.09)),
+                fbmWarp(p * scale + vec2(4.7, -t * 0.07)));
+  vec2 warp = q * (1.6 + u_swirl * 1.4);
+  vec2 r = vec2(fbmWarp(p * scale + warp + vec2(1.7, 9.2) + t * 0.05),
+                fbmWarp(p * scale + warp + vec2(8.3, 2.8) - t * 0.04));
 
   float f = fbm(p * scale + r * (1.8 + u_buildup * 1.2));
 
@@ -168,7 +190,7 @@ void main() {
     spiralling legible. More swirl -> more bands, so the field visibly
     "tightens" as it winds in.
   */
-  float bands = 2.5 + u_swirl * 4.5;
+  float bands = (2.5 + u_swirl * 4.5) * u_bandBias;
   float ribbon = 0.5 + 0.5 * sin((f * bands + length(r) * 0.55 - t * 0.10) * 6.28318);
   ribbon = pow(ribbon, 2.2 - u_life);          // tighten into distinct filaments
 
@@ -188,7 +210,7 @@ void main() {
   // Vortex glow: brighten the cores so the spirals have visible eyes.
   float g0 = 1.0 - smoothstep(0.0, 0.55, length(uv - c0));
   float g1 = 1.0 - smoothstep(0.0, 0.45, length(uv - c1));
-  col += u_pal3 * (g0 * 0.16 + g1 * 0.12) * (0.35 + u_life + u_beat * 0.8);
+  col += u_pal3 * (g0 * 0.16 + g1 * 0.12) * (0.35 + u_life + u_beat * 0.8) * u_glowBias;
 
   // Build-up bloom from the centre, and a full-field flash on the drop.
   float centre = 1.0 - smoothstep(0.0, 0.9, length(uv));
@@ -307,6 +329,7 @@ void main() {
     for (const name of [
       'u_res', 'u_time', 'u_pal0', 'u_pal1', 'u_pal2', 'u_pal3', 'u_alpha',
       'u_life', 'u_swirl', 'u_buildup', 'u_drop', 'u_beat', 'u_bass', 'u_octaves',
+      'u_bandBias', 'u_vortexBias', 'u_glowBias',
     ]) {
       u[name] = gl.getUniformLocation(prog, name);
     }
@@ -326,11 +349,11 @@ void main() {
    * biggest performance lever this layer has.
    * @param {number} cssW
    * @param {number} cssH
-   * @param {number} [scale=0.7] drawing-buffer scale relative to CSS pixels
+   * @param {number} [scale=0.55] drawing-buffer scale relative to CSS pixels
    */
   function resize(cssW, cssH, scale) {
     if (!active || !gl || !cv) return;
-    const s = Math.max(0.35, Math.min(1, scale || 0.7));
+    const s = Math.max(0.3, Math.min(1, scale || 0.55));
     const w = Math.max(1, Math.floor(cssW * s));
     const h = Math.max(1, Math.floor(cssH * s));
     if (cv.width === w && cv.height === h) return;
@@ -344,7 +367,9 @@ void main() {
    * @param {number} q 0..1
    */
   function setQuality(q) {
-    octaves = q > 0.85 ? 5 : q > 0.6 ? 4 : q > 0.4 ? 3 : 2;
+    // Ribbons supply the visible structure, so extra octaves cost real
+    // milliseconds for detail the contour banding hides anyway.
+    octaves = q > 0.85 ? 3 : q > 0.5 ? 2 : 1;
   }
 
   /**
@@ -378,6 +403,10 @@ void main() {
     gl.uniform1f(u.u_drop, s.drop || 0);
     gl.uniform1f(u.u_beat, s.beat || 0);
     gl.uniform1f(u.u_bass, s.bass || 0);
+    const style = s.style || {};
+    gl.uniform1f(u.u_bandBias, style.bandBias == null ? 1 : style.bandBias);
+    gl.uniform1f(u.u_vortexBias, style.vortexBias == null ? 1 : style.vortexBias);
+    gl.uniform1f(u.u_glowBias, style.glowBias == null ? 1 : style.glowBias);
     gl.uniform1i(u.u_octaves, octaves);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
