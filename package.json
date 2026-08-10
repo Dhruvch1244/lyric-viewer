@@ -28,6 +28,7 @@
       "!**/*.map",
       "!**/*.md",
       "!src/main/secrets.js",
+      "!node_modules/@huggingface/transformers/.cache${/*}",
       "!node_modules/onnxruntime-node/bin/napi-v6/darwin${/*}",
       "!node_modules/onnxruntime-node/bin/napi-v6/linux${/*}",
       "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64${/*}",
