@@ -747,7 +747,11 @@ app.whenReady().then(() => {
         indic,
       });
 
-      send('transcribe-progress', { track, stage: 'done', pct: 100, lines: result.cues.length });
+      send('transcribe-progress', {
+        track, stage: 'done', pct: 100,
+        lines: result.cues.length,
+        dropped: result.droppedInstrumental || 0,
+      });
       // Only surface the lyrics now if that song is still the one playing.
       if (currentTrack && trackKey(currentTrack) === key) {
         send('lyrics', { track, ...payloadOut, origin: 'whisper' });
