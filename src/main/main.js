@@ -15,7 +15,8 @@ app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
 app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
-const { fetchSyncedLyrics, detectIndic, cleanArtist } = require('./lyrics');
+const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist } = require('./lyrics');
+const { alignLyrics, splitPlainLyrics } = require('./align');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
@@ -725,12 +726,42 @@ app.whenReady().then(() => {
         return { status: 'empty' };
       }
 
+      /*
+        Second lyric source: LRCLIB's *plain* lyrics.
+
+        Far more songs have plain lyrics than synced ones. Alone they cannot
+        scroll, but Whisper is much better at knowing WHEN a line was sung than
+        WHAT its words were — so aligning the real words onto the transcribed
+        timings beats the transcription outright. Only adopted when enough
+        lines actually anchor; a weak alignment is mostly interpolation and the
+        honest transcription is the better answer then.
+      */
+      let usedSource = 'whisper';
+      try {
+        const plain = await fetchPlainLyrics(track);
+        if (plain) {
+          const lines = splitPlainLyrics(plain.plain);
+          const aligned = alignLyrics(lines, result.cues, { durationMs: track.durationMs });
+          if (aligned.coverage >= 0.35 && aligned.cues.length) {
+            result = { ...result, cues: aligned.cues };
+            usedSource = 'lrclib-plain+whisper';
+            send('transcribe-progress', {
+              track, stage: 'aligned', pct: 90,
+              lines: aligned.cues.length,
+              coverage: Math.round(aligned.coverage * 100),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[align] plain-lyric alignment skipped:', err.message);
+      }
+
       const indic = detectIndic(result.cues).indic;
       const payloadOut = {
         cues: result.cues,
         cuesDevanagari: null,
         cuesEnglish: null,
-        source: { name: 'whisper', artistName: track.artist || null },
+        source: { name: usedSource, artistName: track.artist || null },
         status: 'ok',
         indic,
         transliterationAvailable: isTransliterationAvailable(),
