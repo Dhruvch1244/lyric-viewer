@@ -757,6 +757,25 @@ function paintWords(positionMs) {
   }
 }
 
+/**
+ * Why the translation line is not showing, or '' when it is fine.
+ *
+ * Translations are looked up BY INDEX, so a list of a different length is
+ * unusable and gets hidden — correct, but until now completely silent, which
+ * left "does translation work with sync?" unanswerable from the UI. The honest
+ * answer is that they work together until the line counts disagree, and that
+ * now says so.
+ *
+ * @returns {string}
+ */
+function translationBlockedReason() {
+  if (!cuesEnglish) return '';
+  if (cuesEnglish.length !== cues.length) {
+    return `${cues.length} lyric lines, ${cuesEnglish.length} translated — can't line them up`;
+  }
+  return '';
+}
+
 function updateTranslation(index) {
   // The translation is looked up BY INDEX, so it is only meaningful against the
   // exact list it was produced from. A Devanagari track fetched as its own
@@ -997,15 +1016,75 @@ let lastSwirlScaleAt = 0;
 /** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
 let canvasHidden = false;
 
+/*
+  Resolution ladder for the 2D backdrop, mirroring the swirl's.
+
+  The swirl could already shed pixels under load; the 2D canvas could not, so
+  when the machine struggled only half the fill cost was adjustable. Compositing
+  these two full-screen layers is by far the largest single cost in any profile
+  (`(program)` sits near 850ms/s against ~50ms/s for all app JavaScript), and
+  backing-store size is the only lever we have on it.
+
+  Deliberately shallower than the swirl's ladder and it only engages under real
+  pressure. The swirl is soft and upscales invisibly; this canvas carries the
+  pixel-art dancers and the timeline, which soften visibly when downscaled. A
+  slightly soft dancer beats a dropped frame, but only when frames are actually
+  being dropped.
+*/
+const CANVAS_SCALES = [0.70, 0.85, 1.0];
+let canvasScale = 1.0;
+let lastCanvasScaleAt = 0;
+
+/**
+ * Move the 2D canvas up or down a rung based on presented frame cadence.
+ * Uses the same signal and hysteresis as applySwirlScale — resolution is a GPU
+ * lever and needs a GPU signal, not our JavaScript cost.
+ * @param {number} now
+ */
+function applyCanvasScale(now) {
+  let rung = CANVAS_SCALES.indexOf(canvasScale);
+  if (rung < 0) rung = CANVAS_SCALES.length - 1;
+
+  if (frameIntervalMs > 24 && rung > 0) {
+    rung -= 1;
+    lastCanvasScaleAt = now;
+  } else if (frameIntervalMs < 13 && rung < CANVAS_SCALES.length - 1
+    && now - lastCanvasScaleAt > 1500) {
+    rung += 1;
+    lastCanvasScaleAt = now;
+  }
+
+  const next = CANVAS_SCALES[rung];
+  if (next === canvasScale) return;
+  canvasScale = next;
+  /*
+    Only the backing store — NOT the full resizeCanvas, which also reseeds the
+    stars, bokeh, web, galaxy and wormhole. Reseeding on a rung change would
+    visibly reshuffle every particle layer, so a frame-rate dip would announce
+    itself as the starfield jumping. Everything cached by CSS-pixel dimensions
+    (the timeline bitmap, the vinyl platter, the stage gradients) stays valid,
+    because setTransform keeps drawing in CSS pixels either way.
+  */
+  sizeBackdropCanvas();
+}
+
+/** Size the 2D backing store for the current DPR cap and governor rung. */
+function sizeBackdropCanvas() {
+  // Cap DPR at 1.0: the backdrop is soft glows, gradients and blur, so native
+  // hi-DPI is pure wasted fill-rate (the single biggest cause of lag on 4K).
+  // Lyrics stay crisp regardless — they are DOM, not canvas.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.0) * canvasScale;
+  els.canvas.width = Math.floor(window.innerWidth * dpr);
+  els.canvas.height = Math.floor(window.innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
 function resizeCanvas() {
   // Cap DPR at 1.0 for the backdrop canvas: it is all soft glows, gradients and
   // blur, so rendering at native hi-DPI resolution is pure wasted fill-rate (the
   // single biggest cause of lag on 4K screens). Lyrics stay crisp — they're DOM,
   // unaffected by the canvas backing-store resolution.
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
-  els.canvas.width = Math.floor(window.innerWidth * dpr);
-  els.canvas.height = Math.floor(window.innerHeight * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sizeBackdropCanvas();
 
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -1602,12 +1681,18 @@ function drawWormhole(w, h, dt, life) {
       removes the recycle pop without ever dimming a ring you can still see.
     */
     const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 10);
-    const alpha = (0.10 + z * 0.78) * fade * (0.55 + life * 0.6);
+    /*
+      Softer than a neon tunnel: lower opacity and wider, lighter strokes so the
+      rings read as vapour lit from within rather than as drawn lines. Widening
+      while dimming is the trick — a thick faint stroke on `lighter` blends into
+      its neighbours and loses its edge, which is what "ghostly" means here.
+    */
+    const alpha = (0.09 + z * 0.58) * fade * (0.55 + life * 0.6);
     if (alpha < 0.01) continue;
 
     ctx.globalAlpha = Math.min(1, alpha);
     ctx.strokeStyle = i % 2 === 0 ? q.accent : q.tint;
-    ctx.lineWidth = 1 + z * z * 6 + beatFlash * 1.2;
+    ctx.lineWidth = 1.5 + z * z * 11 + beatFlash * 1.6;
     ctx.beginPath();
     // Rotation grows with depth, which is what makes the tunnel look twisted
     // rather than like a stack of rings.
@@ -1618,8 +1703,8 @@ function drawWormhole(w, h, dt, life) {
 
   // The throat: a bright core so the vanishing point reads as somewhere the
   // tunnel is coming FROM. Uses the cached glow sprite, so it is one blit.
-  const glowR = Math.min(w, h) * (0.06 + beatFlash * 0.03 + anticipation * 0.05);
-  ctx.globalAlpha = Math.min(1, 0.35 + beatFlash * 0.35 + anticipation * 0.4);
+  const glowR = Math.min(w, h) * (0.08 + beatFlash * 0.03 + anticipation * 0.06);
+  ctx.globalAlpha = Math.min(1, 0.20 + beatFlash * 0.22 + anticipation * 0.3);
   ctx.drawImage(accentGlow(q.accent), cx - glowR, cy - glowR, glowR * 2, glowR * 2);
 
   ctx.globalAlpha = 1;
@@ -2621,20 +2706,43 @@ function drawBackdrop(now) {
       return;   // `finally` still prices the frame and re-arms the loop
     }
 
+    // Shed or reclaim backdrop pixels when the compositor is struggling. Only
+    // in the non-bare path: Ghost has no 2D canvas in the page to resize.
+    applyCanvasScale(now);
+
     ctx.clearRect(0, 0, w, h);
 
     // Album-art backdrop photo (pre-blurred + darkened), painted behind the wash.
     // Fades in over ~0.9s when a new cover arrives; capped by the backdrop level
     // so a "faint" overlay still lets the desktop show through.
+    /*
+      Solo: this preset's layer and the words, nothing else.
+
+      Ghost's `bare` cannot serve a mode that has to draw something — it takes
+      the canvas out of the page. Solo is the weaker version: the canvas stays,
+      the named layers draw, and every always-on extra below is suppressed —
+      cover photo, wash, vignette, glows, stars, shooting stars, ripples, the
+      build-up bloom, flicker, the timeline, the dancers and confetti.
+    */
+    const solo = Boolean(activePreset.soloLayer);
+
     let artAlpha = 0;
-    if (artReady && artBlurred) {
+    if (!solo && artReady && artBlurred) {
       artFadeIn = Math.min(1, artFadeIn + dt / 900);
       artAlpha = artFadeIn * level.alpha;
       drawArtCover(w, h, artAlpha);
     }
 
-    // Matches the wash's own art-thinning so a cover photo still reads.
-    renderSwirl(now, dt, life, Math.min(1, level.alpha * (1 - artAlpha * 0.7)),
+    /*
+      Matches the wash's own art-thinning so a cover photo still reads.
+
+      A solo look also thins the field hard. In Ghost the field IS the picture,
+      so it runs at full strength; here the tunnel is, and at full strength the
+      shader simply swallowed it — the rings were technically drawn and
+      practically invisible.
+    */
+    const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.42 : 1);
+    renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
       activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
 
     // Wash opacity follows the level and swells with build-up/drop so colour
@@ -2644,11 +2752,13 @@ function drawBackdrop(now) {
     // drops to a thin unifying tint instead of hiding the shader behind it.
     const washBase = swirlOn ? level.alpha * 0.16 : level.alpha;
     const washAlpha = Math.min(1, washBase * (1 - artAlpha * 0.85) + buildup * 0.12 + dropFlash * 0.15);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = washAlpha;
-    ctx.fillStyle = tintLive;
-    ctx.fillRect(0, 0, w, h);
-    ctx.globalAlpha = 1;
+    if (!solo) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = washAlpha;
+      ctx.fillStyle = tintLive;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalAlpha = 1;
+    }
 
     // Reactive background layers (each self-limits by scene flags + energy).
     if (scene.aurora) drawAurora(now, w, h, life);
@@ -2669,6 +2779,10 @@ function drawBackdrop(now) {
     if (scene.web) drawConstellation(now, w, h, life);
     // The stage floor goes down before anything that stands on it.
     if (scene.stage) drawStage(w, h, now, accentLive, tintLive);
+
+    // Solo looks stop here: the layer above IS the picture. `finally` still
+    // prices the frame and re-arms the loop, as it does for the bare path.
+    if (solo) return;
     // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
     // 'source-over' — the layers above leave the composite op set to 'lighter',
     // under which a black gradient would add nothing.
@@ -3074,6 +3188,19 @@ function refreshButtons() {
   els.scriptBtn.disabled = cuesLatin.length === 0 || (!cuesDevanagari && !transliterationAvailable);
   els.translateBtn.setAttribute('aria-pressed', String(showTranslation && Boolean(cuesEnglish)));
   els.translateBtn.disabled = cuesLatin.length === 0 || (!cuesEnglish && !translationAvailable);
+
+  /*
+    Say why, when there is a why. A translation that exists but cannot be lined
+    up with the current cue list is hidden deliberately — captioning a line with
+    its neighbour's translation is worse than showing nothing — but silence made
+    that indistinguishable from a broken feature.
+  */
+  const blocked = translationBlockedReason();
+  els.translateBtn.title = blocked
+    ? `Translation unavailable — ${blocked}`
+    : (cuesEnglish ? 'Show / hide the English line' : 'English translation');
+  els.translateBtn.classList.toggle('chip--warn', Boolean(blocked));
+  if (blocked && showTranslation) setStatus(`no translation — ${blocked}`);
 }
 
 /**

@@ -890,6 +890,13 @@ body.keybox-open .hud {
   cursor: default;
 }
 
+/* A chip whose feature is present but currently unusable, with the reason in
+   its tooltip. Distinct from :disabled, which means "nothing to offer at all". */
+.chip--warn {
+  border-color: rgba(255, 190, 90, 0.45);
+  color: rgba(255, 205, 130, 0.95);
+}
+
 .chip--muted {
   color: var(--ink-mid);
   cursor: default;

@@ -143,7 +143,18 @@
         and winds up in the seconds BEFORE a drop the stored heat map already
         knows about, so the acceleration leads the music.
       */
-      layers: { wormhole: true, bokeh: true },
+      /*
+        `soloLayer` is a weaker relative of `bare`. Bare removes the 2D canvas
+        from the page entirely, which is why it belongs to Ghost alone — a
+        preset that needs to DRAW something cannot use it. Solo keeps the canvas
+        but suppresses everything the layer flags do not name: no stars, glows,
+        vignette, ripples, confetti, shooting stars or dancers.
+
+        So this is Ghost's idea applied to a mode that has a picture: the tunnel
+        and the words, nothing else.
+      */
+      soloLayer: true,
+      layers: { wormhole: true },
       swirl: { bandBias: 0.7, vortexBias: 1.35, glowBias: 1.1, kick: 2.6 },
     },
     {
@@ -201,7 +212,12 @@
   function normalize(preset) {
     const layers = {};
     for (const key of LAYER_KEYS) layers[key] = Boolean(preset.layers && preset.layers[key]);
-    return { ...preset, layers, bare: Boolean(preset.bare) };
+    return {
+      ...preset,
+      layers,
+      bare: Boolean(preset.bare),
+      soloLayer: Boolean(preset.soloLayer),
+    };
   }
 
   const NORMALIZED = PRESETS.map(normalize);
