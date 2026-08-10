@@ -15,7 +15,7 @@ app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
 app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
-const { fetchSyncedLyrics, detectIndic } = require('./lyrics');
+const { fetchSyncedLyrics, detectIndic, cleanArtist } = require('./lyrics');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
@@ -522,7 +522,13 @@ app.whenReady().then(() => {
 
   const watcher = new SmtcWatcher({ intervalMs: 250 });
 
-  watcher.on('track', (track) => {
+  watcher.on('track', (rawTrack) => {
+    // Clean the artist credit once, here at the SMTC boundary, so every
+    // consumer downstream sees the same tidy value: lyric matching, artwork
+    // search, the dancer registry, the cache key and the on-screen label.
+    // YouTube Music reports "Seedhe Maut - Topic" and VEVO uploads append
+    // "VEVO"; both wreck matching and look wrong on screen.
+    const track = { ...rawTrack, artist: cleanArtist(rawTrack.artist) };
     currentTrack = track;
     send('track', { ...track, ...paletteForTrack(track) });
     send('offset', { offsetMs: activeOffsetMs(), perTrack: true });

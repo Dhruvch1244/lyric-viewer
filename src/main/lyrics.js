@@ -15,7 +15,63 @@ const TITLE_NOISE = [
   /\b(?:official\s+)?(?:music\s+)?video\b/gi,
   /\bfull\s+(?:song|video|album)\b/gi,
   /\bremaster(?:ed)?(?:\s+\d{4})?\b/gi,
+  // More browser/YouTube shapes seen in the wild.
+  /\b(?:official\s+)?(?:audio|lyrical|lyric)\b/gi,
+  /\bout\s+now\b/gi,
+  /\s*[-–—]\s*youtube\s*$/gi,
 ];
+
+/**
+ * Words that mark a *different recording* of the same song. A studio LRC file
+ * lines up with the studio cut and nothing else, so matching "Song (Live)" to
+ * the studio entry yields lyrics that drift immediately. Duration alone does
+ * not catch this — plenty of remixes run within a few seconds of the original.
+ */
+const VERSION_TOKENS = [
+  'live', 'remix', 'acoustic', 'unplugged', 'instrumental', 'slowed', 'reverb',
+  'sped', 'speedup', 'remastered', 'cover', 'karaoke', 'demo', 'extended',
+  'mashup', 'reprise', 'bonus', 'edit', 'rework', 'flip', 'bootleg',
+];
+
+/**
+ * Version markers present in a title, taken from the RAW string — cleanTitle
+ * strips several of these, so this must run before it.
+ *
+ * @param {string} raw
+ * @returns {Set<string>}
+ */
+function versionTags(raw) {
+  const found = new Set();
+  if (!raw) return found;
+  const words = new Set(normalize(raw).split(' ').filter(Boolean));
+  for (const token of VERSION_TOKENS) if (words.has(token)) found.add(token);
+  return found;
+}
+
+/**
+ * Strip platform noise from an artist credit.
+ *
+ * YouTube Music auto-generated channels report the artist as "Seedhe Maut -
+ * Topic", and VEVO uploads append "VEVO". Both poison artist matching against
+ * LRCLIB and the artwork APIs, and the "- Topic" suffix also leaks into the
+ * on-screen artist label and the dancer registry lookup.
+ *
+ * @param {string} raw Raw artist string from SMTC.
+ * @returns {string} Cleaned artist, or the original if cleaning emptied it.
+ */
+function cleanArtist(raw) {
+  if (!raw) return '';
+  const out = raw
+    .replace(/\s*[-–—]\s*topic\s*$/i, '')
+    // VEVO channel names are concatenated ("TheWeekndVEVO"), so there is no
+    // word boundary to anchor on — strip it as a suffix instead.
+    .replace(/vevo\s*$/i, '')
+    .replace(/\s*[-–—]\s*official(?:\s+(?:channel|artist))?\s*$/i, '')
+    .replace(/\s*\((?:official)?\s*\)\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return out || raw.trim();
+}
 
 /**
  * Strip platform noise from a raw media title.
@@ -105,8 +161,9 @@ function scoreCandidate(candidate, target) {
     tokenSimilarity(cleanedTarget, `${candidate.trackName} ${candidate.artistName}`)
   );
 
-  const artistScore = target.artist
-    ? tokenSimilarity(target.artist, candidate.artistName || '')
+  const cleanedArtist = cleanArtist(target.artist);
+  const artistScore = cleanedArtist
+    ? tokenSimilarity(cleanedArtist, candidate.artistName || '')
     : 0;
 
   let score = titleScore * 2 + artistScore;
@@ -119,6 +176,19 @@ function scoreCandidate(candidate, target) {
     else if (deltaSec <= 5) score += 0.75;
     else if (deltaSec > 20) score -= 1.0;
   }
+
+  /*
+    Version guard. Duration catches gross mismatches, but a remix or a slowed
+    edit often lands within a few seconds of the original, scores well on
+    title/artist, and then plays with lyrics that drift from the first line.
+    Penalise each version marker present on one side and missing on the other.
+  */
+  const wantVersions = versionTags(target.title);
+  const haveVersions = versionTags(`${candidate.trackName || ''} ${candidate.albumName || ''}`);
+  let versionMismatch = 0;
+  for (const tag of wantVersions) if (!haveVersions.has(tag)) versionMismatch += 1;
+  for (const tag of haveVersions) if (!wantVersions.has(tag)) versionMismatch += 1;
+  score -= versionMismatch * 1.25;
 
   return score;
 }
@@ -325,6 +395,8 @@ async function fetchSyncedLyrics(track) {
 
 module.exports = {
   cleanTitle,
+  cleanArtist,
+  versionTags,
   normalize,
   tokenSimilarity,
   scoreCandidate,
