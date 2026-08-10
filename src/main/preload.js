@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('player', {
   onMood: (cb) => ipcRenderer.on('mood', (_e, data) => cb(data)),
   onArtwork: (cb) => ipcRenderer.on('artwork', (_e, data) => cb(data)),
   onBeatmap: (cb) => ipcRenderer.on('beatmap', (_e, data) => cb(data)),
+  onHeatmap: (cb) => ipcRenderer.on('heatmap', (_e, data) => cb(data)),
   onPresyncProgress: (cb) => ipcRenderer.on('presync-progress', (_e, data) => cb(data)),
   onTranscribeProgress: (cb) => ipcRenderer.on('transcribe-progress', (_e, data) => cb(data)),
   onIdle: (cb) => ipcRenderer.on('idle', () => cb()),
@@ -28,6 +29,7 @@ contextBridge.exposeInMainWorld('player', {
   getProviderStatus: () => ipcRenderer.invoke('get-provider-status'),
   setApiKey: (name, value) => ipcRenderer.invoke('set-api-key', name, value),
   saveBeatmap: (payload) => ipcRenderer.invoke('save-beatmap', payload),
+  saveHeatmap: (payload) => ipcRenderer.invoke('save-heatmap', payload),
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
   listSynced: () => ipcRenderer.invoke('list-synced'),
 

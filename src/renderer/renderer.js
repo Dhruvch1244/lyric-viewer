@@ -907,6 +907,18 @@ const TEMPO_LOCK_OUT = 0.40;
 /** Onsets required before the clock is handed over — a couple of bars. */
 const TEMPO_LOCK_ONSETS = 24;
 
+/* ------------------------------------------------------------ anticipation */
+
+/* How far ahead the learned heat map is read. Long enough to cover a build-up
+   (they run four to eight bars), short enough that a rise forty seconds out
+   does not colour the present. */
+const ANTICIPATION_WINDOW_MS = 6000;
+
+/** Expectation of a rise, 0..1, from the stored map. Zero on an unheard song. */
+let anticipation = 0;
+/** Time to the expected peak (ms), for the countdown on the timeline. */
+let anticipationToPeakMs = 0;
+
 let beatPeriodMs = 500;     // current estimated beat length
 let beatClockMs = 0;        // accumulates dt, wraps every beatPeriodMs
 let beatPhase = 0;          // 0..1 within the current beat
@@ -1562,16 +1574,40 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
   });
 }
 
+/* ------------------------------------------------- the learned song, drawn */
+
+/*
+  Timeline geometry, in viewport fractions.
+
+  The song reads as a skyline along the bottom edge rather than a ring around
+  the lyrics. A ring puts the loudest part of the song at whatever angle the
+  clock happens to point at, which is a poor way to compare two moments, and it
+  competes with the text for the middle of the screen. Left-to-right is how
+  everyone already reads a track, and the bottom strip is space the lyrics were
+  never using.
+
+  The dancers roam down to 0.96, so they stand in front of the skyline. That is
+  deliberate: the bar becomes the floor they dance on.
+*/
+const TIMELINE_BASE_Y = 0.965;
+const TIMELINE_MAX_H = 0.10;
+const TIMELINE_LEFT = 0.04;
+const TIMELINE_RIGHT = 0.96;
+
+/** A `drop` section closer than this gets a countdown on the timeline. */
+const COUNTDOWN_WINDOW_MS = 8000;
+
 /**
- * Draw the song as a ring of cells around the lyrics.
+ * Draw the song as a timeline of cells along the bottom edge.
  *
  * Each cell is one slice of the track, so the whole song is visible at once:
- * the ring runs clockwise from twelve o'clock, the played part is lit, and the
- * part still to come is drawn from what was learned on an earlier listen. That
- * is the point of the mode — on a replay you can see the drop coming.
+ * the played part is lit and the part still to come is drawn from what was
+ * learned on an earlier listen. That is the point of the mode — on a replay you
+ * can see the drop coming.
  *
- * Cells that have never been heard are drawn as a faint tick rather than
- * skipped, so an unlearned song reads as "not known yet" instead of broken.
+ * Cells never heard are drawn as a faint stub rather than skipped, so a song
+ * heard once reads as "not known yet" instead of broken. A song never heard at
+ * all draws nothing, because a row of 96 identical stubs is not information.
  *
  * @param {number} w @param {number} h
  * @param {string} accent @param {string} tint
@@ -1580,54 +1616,314 @@ function drawHeatmap(w, h, accent, tint) {
   if (!window.HeatMap) return;
   const cells = window.HeatMap.cells();
   if (cells.length === 0) return;
+  if (window.HeatMap.coverage() <= 0) return;   // nothing learned; say nothing
 
-  const cx = w / 2;
-  const cy = h / 2;
-  const radius = Math.min(w, h) * 0.36;
   const n = cells.length;
-  const step = (Math.PI * 2) / n;
-  // A hair of padding between cells so they read as discrete slices.
-  const gap = step * 0.16;
+  const left = w * TIMELINE_LEFT;
+  const span = w * (TIMELINE_RIGHT - TIMELINE_LEFT);
+  const cellW = span / n;
+  const gap = Math.min(2.5, cellW * 0.24);
+  const baseY = h * TIMELINE_BASE_Y;
+  const maxH = h * TIMELINE_MAX_H;
 
   const played = durationMs > 0
     ? Math.max(0, Math.min(1, estimatePosition() / durationMs))
     : 0;
   const headIndex = Math.floor(played * n);
+  const headX = left + played * span;
 
   ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < n; i += 1) {
     const c = cells[i];
-    const a0 = -Math.PI / 2 + i * step + gap / 2;
-    const a1 = a0 + step - gap;
 
-    // Length carries energy, brightness carries how close the playhead is —
-    // so the ring reads as a shape AND as a position at a glance.
+    // Height carries energy, brightness carries how far the playhead has
+    // reached — so the strip reads as a shape AND as a position at a glance.
     const heard = i <= headIndex;
-    const lvl = c.known ? c.level : 0;
-    const len = radius * (0.04 + lvl * 0.30);
-    const dim = heard ? 1 : 0.42;
-    const alpha = (c.known ? 0.20 + lvl * 0.65 : 0.07) * dim;
+    const barH = c.known ? Math.max(2, maxH * (0.05 + c.level * 0.95)) : 2;
+    const dim = heard ? 1 : 0.44;
+    const alpha = (c.known ? 0.22 + c.level * 0.62 : 0.08) * dim;
 
     // Bass-heavy slices lean to the accent, bright ones to the secondary tint.
-    const colour = c.bass >= c.treble ? accent : tint;
-
-    ctx.strokeStyle = hexA(colour, alpha);
-    ctx.lineWidth = Math.max(2, radius * 0.020);
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius + len / 2, a0, a1);
-    ctx.stroke();
+    ctx.fillStyle = hexA(c.bass >= c.treble ? accent : tint, alpha);
+    ctx.fillRect(left + i * cellW + gap / 2, baseY - barH, Math.max(1, cellW - gap), barH);
   }
 
-  // The playhead: a bright tick at the current position.
-  const ha = -Math.PI / 2 + (headIndex + 0.5) * step;
-  ctx.strokeStyle = hexA(accent, 0.85);
-  ctx.lineWidth = Math.max(2, radius * 0.016);
+  // The playhead: a bright tick standing clear of the tallest cell.
+  ctx.strokeStyle = hexA(accent, 0.9);
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(cx + Math.cos(ha) * (radius - radius * 0.06), cy + Math.sin(ha) * (radius - radius * 0.06));
-  ctx.lineTo(cx + Math.cos(ha) * (radius + radius * 0.40), cy + Math.sin(ha) * (radius + radius * 0.40));
+  ctx.moveTo(headX, baseY + 3);
+  ctx.lineTo(headX, baseY - maxH * 1.12);
   ctx.stroke();
 
   ctx.globalCompositeOperation = 'source-over';
+  drawSongStructure(headX, left, span, baseY, maxH, accent);
+}
+
+/**
+ * Name the part of the song being played, and count down to the next drop.
+ *
+ * Only drawn once enough of the track has been heard for the sections to mean
+ * anything — `HeatMap.sections()` returns nothing before then, so a half-learned
+ * song stays quiet rather than labelling a guess.
+ *
+ * @param {number} headX playhead x (px)
+ * @param {number} left @param {number} span @param {number} baseY @param {number} maxH
+ * @param {string} accent
+ */
+function drawSongStructure(headX, left, span, baseY, maxH, accent) {
+  const sections = window.HeatMap.sections();
+  if (sections.length === 0 || durationMs <= 0) return;
+
+  const pos = estimatePosition();
+  const toX = (ms) => left + Math.max(0, Math.min(1, ms / durationMs)) * span;
+
+  // Boundary ticks, so the shape reads as sections rather than one long graph.
+  ctx.strokeStyle = hexA(accent, 0.28);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < sections.length; i += 1) {
+    const x = toX(sections[i].startMs);
+    ctx.moveTo(x, baseY + 2);
+    ctx.lineTo(x, baseY - maxH * 0.28);
+  }
+  ctx.stroke();
+
+  const here = sections.find((s) => pos >= s.startMs && pos < s.endMs);
+  const nextDrop = sections.find((s) => s.kind === 'drop' && s.startMs > pos);
+  const toDropMs = nextDrop ? nextDrop.startMs - pos : Infinity;
+
+  // A countdown outranks the label: knowing a drop is four seconds away is
+  // worth more than being told the current bar is a verse.
+  const text = toDropMs < COUNTDOWN_WINDOW_MS
+    ? `drop in ${(toDropMs / 1000).toFixed(1)}s`
+    : (here ? here.kind : '');
+  if (!text) return;
+
+  const labelY = baseY - maxH * 1.12 - 10;
+  ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  // Keep the label on screen when the playhead is near either end.
+  const tw = ctx.measureText(text).width;
+  const x = Math.max(left + tw / 2, Math.min(left + span - tw / 2, headX));
+  ctx.fillStyle = hexA(accent, toDropMs < COUNTDOWN_WINDOW_MS ? 0.95 : 0.5);
+  ctx.fillText(text.toUpperCase(), x, labelY);
+  ctx.textAlign = 'start';
+}
+
+/*
+  Vinyl — the cover art as a record on a deck.
+
+  It turns the whole time the song plays, at a rate the music sets: one
+  revolution every four beats once the tempo has locked, which at ordinary
+  tempos lands near a real platter's 33⅓ rpm. That is the difference between a
+  record and a progress dial — it is moving because the music is, not because
+  the song is a certain fraction done. The timeline along the bottom is what
+  says where in the track you are.
+
+  Parked to the left rather than centred, so the crisp artwork never sits behind
+  the lyric it would be competing with.
+*/
+const VINYL_CX = 0.20;
+const VINYL_CY = 0.42;
+const VINYL_R = 0.20;
+/** Fallback revolution time (ms) with no measured tempo: 33⅓ rpm. */
+const VINYL_IDLE_PERIOD_MS = 1800;
+
+/** Accumulated platter angle (radians). Kept across frames so tempo changes
+    never cause a visible jump — a record does not teleport. */
+let vinylAngle = 0;
+
+/**
+ * Draw the spinning record.
+ * @param {number} w @param {number} h @param {number} dt frame delta (ms)
+ * @param {string} accent @param {string} tint
+ */
+function drawVinyl(w, h, dt, accent, tint) {
+  const cx = w * VINYL_CX;
+  const cy = h * VINYL_CY;
+  const R = Math.min(w, h) * VINYL_R;
+
+  /*
+    Four beats per revolution while the tempo is locked, clamped so a half- or
+    double-time reading cannot spin the platter absurdly. A drop nudges it
+    forward — the scratch a DJ puts in by hand.
+  */
+  const revMs = tempoLocked
+    ? Math.max(1200, Math.min(2600, beatPeriodMs * 4))
+    : VINYL_IDLE_PERIOD_MS;
+  vinylAngle += (dt / revMs) * Math.PI * 2 * (1 + dropFlash * 0.9);
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+
+  // Platter body. Near-black rather than black so it reads as an object on a
+  // transparent overlay instead of a hole punched in the desktop.
+  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = '#0a0a0e';
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Grooves. Concentric, and NOT rotated — grooves are circles, so spinning
+  // them would be invisible anyway and would only cost draw calls.
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = hexA(tint, 0.20);
+  ctx.lineWidth = 1;
+  for (let r = R * 0.42; r < R * 0.97; r += Math.max(3, R * 0.055)) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // A sheen sweeping round with the platter: the light catching the disc is
+  // what actually reads as rotation on a featureless black circle.
+  ctx.globalAlpha = 0.5 + beatFlash * 0.3;
+  const sheen = ctx.createLinearGradient(
+    cx + Math.cos(vinylAngle) * R, cy + Math.sin(vinylAngle) * R,
+    cx - Math.cos(vinylAngle) * R, cy - Math.sin(vinylAngle) * R
+  );
+  sheen.addColorStop(0, hexA(tint, 0.28));
+  sheen.addColorStop(0.5, hexA(accent, 0.04));
+  sheen.addColorStop(1, hexA(tint, 0));
+  ctx.fillStyle = sheen;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2);
+  ctx.fill();
+
+  // The label: cover art if we have it, the palette if we do not. This is the
+  // part that visibly turns.
+  const labelR = R * 0.38;
+  ctx.globalAlpha = 1;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(vinylAngle);
+  ctx.beginPath();
+  ctx.arc(0, 0, labelR, 0, Math.PI * 2);
+  ctx.clip();
+  if (artReady && artImage) {
+    ctx.drawImage(artImage, -labelR, -labelR, labelR * 2, labelR * 2);
+  } else {
+    ctx.fillStyle = accent;
+    ctx.fillRect(-labelR, -labelR, labelR * 2, labelR * 2);
+  }
+  /*
+    A cue mark turning with the label, so the rotation is unmistakable even on a
+    cover with no strong features — or none at all, which is the case until the
+    artwork lands.
+
+    A shadow wedge was tried first and rejected: at the opacity needed to read
+    against real artwork it turned the flat fallback label into a pie chart. A
+    single radial line says the same thing and cannot be misread as data.
+  */
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = Math.max(1, R * 0.012);
+  ctx.beginPath();
+  ctx.moveTo(labelR * 0.34, 0);
+  ctx.lineTo(labelR * 0.94, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  // Spindle.
+  ctx.fillStyle = '#e9e9ef';
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(1.5, R * 0.022), 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tonearm, resting on the record and creeping inward as the song plays —
+  // the one part of the deck that legitimately tracks progress.
+  const played = durationMs > 0 ? Math.max(0, Math.min(1, estimatePosition() / durationMs)) : 0;
+  const pivotX = cx + R * 1.06;
+  const pivotY = cy - R * 0.92;
+  const armAngle = 2.36 + played * 0.34;              // sweeps toward the spindle
+  const armLen = R * 1.28;
+  ctx.strokeStyle = hexA(tint, 0.75);
+  ctx.lineWidth = Math.max(2, R * 0.028);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pivotX, pivotY);
+  ctx.lineTo(pivotX + Math.cos(armAngle) * armLen, pivotY + Math.sin(armAngle) * armLen);
+  ctx.stroke();
+  ctx.fillStyle = hexA(accent, 0.9);
+  ctx.beginPath();
+  ctx.arc(pivotX, pivotY, Math.max(3, R * 0.05), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineCap = 'butt';
+
+  ctx.restore();
+}
+
+/*
+  Stage — the dancers as the subject.
+
+  Everywhere else the troupe is decoration at the bottom of a backdrop. Here
+  they get a lit floor and spotlights that punch on the kick, and the renderer
+  pulls them forward and enlarges them (see the sprite block in drawBackdrop).
+*/
+const STAGE_FLOOR_Y = 0.90;
+
+/**
+ * Draw the floor and the spotlights. Called before the sprites so they stand in
+ * front of it.
+ * @param {number} w @param {number} h @param {number} now
+ * @param {string} accent @param {string} tint
+ */
+function drawStage(w, h, now, accent, tint) {
+  const floorY = h * STAGE_FLOOR_Y;
+
+  // Three beams from above the top edge onto the floor. They sway slowly, and
+  // each brightens on its own beat subdivision so the rig reads as lit BY the
+  // music rather than merely near it.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 3; i += 1) {
+    const sway = Math.sin(now / (2600 + i * 700) + i * 2.1);
+    const originX = w * (0.22 + i * 0.28);
+    const targetX = w * (0.22 + i * 0.28) + sway * w * 0.14;
+    const beat = i === 1 ? beatFlash : beatFlash * (i === 0 ? 0.7 : 0.55);
+    // A rig that only shows itself on the kick is a rig you cannot see between
+    // kicks, so the beams carry a standing level and the beat adds on top.
+    const power = 0.16 + beat * 0.34 + dropFlash * 0.28 + buildup * 0.14;
+    const width = w * (0.055 + beat * 0.02);
+
+    const grad = ctx.createLinearGradient(originX, -h * 0.05, targetX, floorY);
+    grad.addColorStop(0, hexA(i === 1 ? accent : tint, power));
+    grad.addColorStop(1, hexA(i === 1 ? accent : tint, 0));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(originX - width * 0.16, -h * 0.05);
+    ctx.lineTo(originX + width * 0.16, -h * 0.05);
+    ctx.lineTo(targetX + width, floorY);
+    ctx.lineTo(targetX - width, floorY);
+    ctx.closePath();
+    ctx.fill();
+
+    // The pool of light where the beam lands.
+    ctx.globalAlpha = Math.min(0.7, power * 2.2);
+    ctx.fillStyle = hexA(i === 1 ? accent : tint, 0.5);
+    ctx.beginPath();
+    ctx.ellipse(targetX, floorY, width * 1.5, h * 0.018, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+
+  // The floor itself: a lit edge with the light falling away below it.
+  ctx.save();
+  const floor = ctx.createLinearGradient(0, floorY - h * 0.01, 0, h);
+  floor.addColorStop(0, hexA(accent, 0.20 + beatFlash * 0.12));
+  floor.addColorStop(0.25, hexA(tint, 0.10));
+  floor.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, floorY - h * 0.01, w, h - floorY + h * 0.01);
+  ctx.strokeStyle = hexA(accent, 0.45 + beatFlash * 0.35);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, floorY);
+  ctx.lineTo(w, floorY);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawBackdrop(now) {
@@ -1798,6 +2094,33 @@ function drawBackdrop(now) {
       if (audioEnv.drop) triggerDrop();
     }
 
+    /*
+      Anticipation — the one thing here that knows what has not happened yet.
+
+      Every other input describes the sample being held. A stored heat map has
+      already heard the rest of the song, so a rise can be played INTO rather
+      than discovered a frame late: the field tightens and the dancers crouch
+      while the build-up is still climbing, and the drop lands on a screen that
+      was already leaning toward it.
+
+      It feeds the existing `buildup` rather than adding a parallel channel,
+      because "something is coming" is exactly what buildup already means to
+      every layer downstream. Strongest source wins, as with live audio and the
+      beat map: a learned map should not talk over a real build it can hear.
+
+      Eased, never snapped. Bin boundaries are ~2s apart on a 3-minute track, so
+      reading the raw value straight out would step visibly at every crossing.
+    */
+    if (window.HeatMap && durationMs > 0) {
+      const ahead = window.HeatMap.lookahead(estimatePosition(), ANTICIPATION_WINDOW_MS);
+      const want = Math.min(1, ahead.rise * 1.35) * ahead.imminence;
+      anticipation += (want - anticipation) * Math.min(1, dt / 260);
+      anticipationToPeakMs = ahead.toPeakMs;
+      if (anticipation > buildup) buildup = anticipation;
+    } else {
+      anticipation = 0;
+    }
+
     // Beat map: while capturing live audio, LEARN this song's beats against its
     // playback position; otherwise PLAY BACK a previously learned map so drops,
     // kicks and anticipatory build-ups fire from memory — no capture required.
@@ -1903,14 +2226,6 @@ function drawBackdrop(now) {
       // No cover photo is painted in this mode, so the field is never thinned.
       renderSwirl(now, dt, life, Math.min(1, level.alpha), activePreset.swirl,
         audioActive ? audioEnv.bass : 0, tintLive, accentLive);
-      // Heatmap is the one thing allowed to draw in a bare look, because it IS
-      // the look. Everything else stays off.
-      if (activePreset.heatmap) {
-        els.canvas.style.display = '';
-        canvasHidden = false;
-        ctx.clearRect(0, 0, w, h);
-        drawHeatmap(w, h, accentLive, tintLive);
-      }
       return;   // `finally` still prices the frame and re-arms the loop
     }
 
@@ -1957,6 +2272,8 @@ function drawBackdrop(now) {
     if (scene.galaxy) drawGalaxy(now, w, h, life);
     if (scene.math) drawMathCurves(now, w, h, life, motion);
     if (scene.web) drawConstellation(now, w, h, life);
+    // The stage floor goes down before anything that stands on it.
+    if (scene.stage) drawStage(w, h, now, accentLive, tintLive);
     // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
     // 'source-over' — the layers above leave the composite op set to 'lighter',
     // under which a black gradient would add nothing.
@@ -2025,6 +2342,10 @@ function drawBackdrop(now) {
       ctx.stroke();
       if (shooting.life <= 0) shooting = null;
     }
+
+    // The deck. After the glows and stars so the platter reads as a solid
+    // object in front of the field rather than something lit through.
+    if (scene.vinyl) drawVinyl(w, h, dt, accentLive, tintLive);
 
     // Expanding rings (spawned per lyric line + drops).
     if (ripples.length) drawRipples(w, h);
@@ -2127,15 +2448,56 @@ function drawBackdrop(now) {
       ctx.globalAlpha = 1;
     }
 
+    // The learned song, along the bottom edge. Drawn before the dancers so they
+    // stand in front of it — the skyline reads as the floor they are on.
+    ctx.globalCompositeOperation = 'source-over';
+    if (scene.heatmap) drawHeatmap(w, h, accentLive, tintLive);
+
     // Pixel-art artist dancers roaming the whole screen (they steer around the
     // central lyric zone); each names + positions itself and reacts to the same
     // energy envelope as the backdrop.
     ctx.globalCompositeOperation = 'source-over';
     if (spritesEnabled && window.ArtistSprites && (spriteActors.length > 0 || spriteClones.length > 0)) {
-      const env = { intensity, pulse, drop: dropFlash, buildup };
-      // Kept small so even the tallest dancer's head stays clear of the centred
-      // lyric; dancers now roam a taller band + full width (see sprites.js).
-      const unit = Math.max(3, Math.round(h * 0.010));
+      /*
+        The envelope every dancer reads.
+
+        `beat` and `beatPhase` come from the same clock the rest of the app runs
+        on, so a move can land ON the beat instead of near it — the dancers used
+        to run on their own free tempo, which meant the one element people watch
+        most closely was the one least connected to the music.
+
+        `anticipation` is what the stored heat map knows is coming. It is kept
+        separate from `buildup` here (which already absorbs it) so a dancer can
+        tell "the music is getting louder right now" from "something big is
+        about to happen", and crouch for the second.
+      */
+      const env = {
+        intensity,
+        pulse,
+        drop: dropFlash,
+        buildup,
+        anticipation,
+        beat: beatFlash,
+        beatPhase,
+        beatPeriodMs,
+        tempoLocked,
+      };
+      /*
+        Stage mode makes the dancers the subject: they are enlarged and their
+        roaming band is compressed onto the lit floor so the troupe reads as a
+        group performing, rather than as scattered decoration. Every other look
+        keeps the small unit that guarantees even the tallest dancer's head
+        stays clear of the centred lyric.
+      */
+      const onStage = Boolean(scene.stage);
+      const unit = Math.max(3, Math.round(h * (onStage ? 0.0145 : 0.010)));
+      // On stage the band is a shallow strip sitting ON the floor line, not a
+      // region above it: dancers roaming a tall band read as floating, which is
+      // the one thing a lit floor makes obvious.
+      window.ArtistSprites.setBand(
+        onStage ? STAGE_FLOOR_Y - 0.045 : 0.60,
+        onStage ? STAGE_FLOOR_Y + 0.010 : 0.96
+      );
       for (const actor of spriteActors) {
         actor.update(now, env);
         actor.draw(ctx, w, h, unit, now, env);
@@ -2571,6 +2933,29 @@ function flushBeatmap() {
   });
 }
 
+/**
+ * Save the heat map learned for the CURRENT track. Called at the same points as
+ * the beat map — before switching away, on idle, and on window close.
+ *
+ * Skipped when nothing new was heard this play, so replaying a song already
+ * fully learned costs no disk writes. The map itself peak-holds across plays,
+ * so writing it back can only ever add detail, never blunt what is stored.
+ */
+function flushHeatmap() {
+  if (!currentTrack || !window.HeatMap) return;
+  if (!window.HeatMap.isDirty()) return;
+  const heatmap = window.HeatMap.takeForSave();
+  if (!heatmap) return;
+  window.player.saveHeatmap({
+    track: {
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      durationMs: currentTrack.durationMs || durationMs,
+    },
+    heatmap,
+  });
+}
+
 /* ------------------------------------------- Whisper transcription (learn) */
 
 /**
@@ -2676,6 +3061,7 @@ window.player.getTranscribeConfig().then((cfg) => {
 
 window.player.onTrack((track) => {
   flushBeatmap();                 // persist what we learned for the previous song
+  flushHeatmap();                 // ...including the shape of it
   flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
   durationMs = track.durationMs || 0;
@@ -2725,7 +3111,11 @@ window.player.onTrack((track) => {
   // Begin learning this song's beats afresh; the stored map (if any) arrives via
   // the `beatmap` event that main sends right after this one.
   if (window.Tempo) window.Tempo.reset();   // a new song has its own tempo
+  // An empty map for this track; the stored one (if any) arrives via `heatmap`
+  // right after and replaces it, provided the track lengths agree.
   if (window.HeatMap) window.HeatMap.start(track.durationMs || 0);
+  anticipation = 0;                         // nothing is known about this song yet
+  anticipationToPeakMs = 0;
   if (window.BeatMap) {
     window.BeatMap.load(null);
     window.BeatMap.startRecording();
@@ -2741,6 +3131,34 @@ window.player.onBeatmap((data) => {
   window.BeatMap.load(data.beatmap || null);
 });
 
+/*
+  The learned energy arc for the current song, restored from disk.
+
+  Without this the heat map was rebuilt from nothing on every track change and
+  discarded on exit, so the mode could only ever show the play you were in the
+  middle of — the whole premise ("play it again and the shape is already known")
+  silently did not hold, and neither did anything reading the map forwards.
+
+  `start` has already made an empty map for the track that is actually playing,
+  so `load` rejecting a mismatch (a different edit of the same song) leaves the
+  song learning itself rather than drawing a confident, wrong arc.
+*/
+window.player.onHeatmap((data) => {
+  if (!window.HeatMap) return;
+  if (!isForCurrentTrack(data.track)) return;
+  /*
+    A null payload means "nothing stored for this song", which is NOT the same
+    as "forget the map" — `load(null)` clears, and clearing here would wipe the
+    empty map `start` just made and leave the track unable to learn anything at
+    all. That is the exact failure this whole change exists to fix, so the first
+    listen of every song must fall through untouched.
+
+    Idle still clears deliberately, by calling load(null) itself.
+  */
+  if (!data.heatmap) return;
+  window.HeatMap.load(data.heatmap);
+});
+
 /* Cover art + richer artist credit fetched in the main process. */
 window.player.onArtwork((data) => {
   if (!isForCurrentTrack(data.track)) return;
@@ -2750,6 +3168,12 @@ window.player.onArtwork((data) => {
 });
 
 window.player.onTick((state) => {
+  // Drives the now-playing indicator's animation. Toggled through a class on
+  // the body rather than inline styles so the CSS owns the whole look, and
+  // written only on a real change to avoid a style recalc every tick.
+  if (state.status !== playbackStatus) {
+    document.body.classList.toggle('is-playing', state.status === 'Playing');
+  }
   playbackStatus = state.status;
   anchorPositionMs = state.positionMs ?? 0;
   anchorAt = performance.now();
@@ -2856,9 +3280,12 @@ window.player.onTranslation((payload) => {
 
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
+  flushHeatmap();                 // ...and its energy arc
   flushTranscription();           // playback stopped — the song is over, so learn it
   if (window.Tempo) window.Tempo.reset();
   if (window.BeatMap) window.BeatMap.load(null);
+  if (window.HeatMap) window.HeatMap.load(null);
+  anticipation = 0;
   currentTrack = null;
   cuesLatin = [];
   cuesDevanagari = null;
@@ -2875,6 +3302,7 @@ window.player.onIdle(() => {
   setStatus('nothing playing');
   els.title.textContent = '';
   els.artist.textContent = '';
+  document.body.classList.remove('is-playing');
   els.progressFill.style.width = '0%';
   updateHero();
 });
@@ -3278,7 +3706,11 @@ window.addEventListener('mousemove', () => {
 });
 
 window.addEventListener('resize', resizeCanvas);
-window.addEventListener('beforeunload', flushBeatmap); // save learned beats on close
+// Save everything learned about the current song on close.
+window.addEventListener('beforeunload', () => {
+  flushBeatmap();
+  flushHeatmap();
+});
 
 /* Bootstrap. */
 try {

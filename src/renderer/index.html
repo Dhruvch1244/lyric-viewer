@@ -14,9 +14,13 @@
     <canvas id="backdrop" aria-hidden="true"></canvas>
 
     <header id="topbar" class="topbar">
+      <!-- One row: a small playing indicator, then the title and artist side by
+           side on the same baseline. The bars animate only while the track is
+           actually playing, so the corner says "playing" without a word of text. -->
       <div class="now-playing">
-        <div id="np-title" class="np-title"></div>
-        <div id="np-artist" class="np-artist"></div>
+        <span id="np-icon" class="np-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span id="np-title" class="np-title"></span>
+        <span id="np-artist" class="np-artist"></span>
       </div>
       <div id="status" class="status" role="status"></div>
     </header>

@@ -116,3 +116,134 @@ test('tolerates junk input', () => {
   HeatMap.note(500, null);
   assert.equal(HeatMap.coverage(), 0);
 });
+
+test('load rejects a map recorded from a different-length recording', () => {
+  // Same title and artist, different arrangement — a radio edit against an
+  // extended mix. Adopting it would put the drop confidently in the wrong place.
+  HeatMap.start(96000);
+  HeatMap.note(500, env(0.8));
+  const saved = HeatMap.takeForSave();
+
+  HeatMap.start(300000);                 // a much longer cut of "the same" song
+  assert.equal(HeatMap.load(saved), false);
+  assert.equal(HeatMap.get().durationMs, 300000, 'the playing track keeps its own map');
+
+  HeatMap.start(96000 + 500);            // within tolerance: the same recording
+  assert.equal(HeatMap.load(saved), true);
+});
+
+/* ------------------------------------------------------------- anticipation */
+
+/**
+ * Fill a whole song: `level(binIndex)` supplies each bin's energy.
+ *
+ * Clears first, because `start` deliberately RESUMES a track of the same length
+ * rather than wiping it — that is how peaks survive a replay — and these tests
+ * reuse 96000ms so their bins line up with round numbers.
+ */
+function record(durationMs, level) {
+  HeatMap.load(null);
+  HeatMap.start(durationMs);
+  const binMs = durationMs / HeatMap.BIN_COUNT;
+  for (let i = 0; i < HeatMap.BIN_COUNT; i += 1) {
+    for (let s = 0; s < HeatMap.MIN_SAMPLES; s += 1) {
+      HeatMap.note(i * binMs + binMs / 2, env(level(i)));
+    }
+  }
+}
+
+test('lookahead says nothing about a song that has not been heard', () => {
+  HeatMap.load(null);
+  HeatMap.start(96000);
+  const ahead = HeatMap.lookahead(1000, 6000);
+  assert.equal(ahead.rise, 0);
+  assert.equal(ahead.imminence, 0);
+});
+
+test('lookahead sees a rise before it arrives', () => {
+  // 96s track, 1s per bin: quiet until bin 50, loud after.
+  record(96000, (i) => (i < 50 ? 0.2 : 1.0));
+
+  // Standing at 45s, the jump at 50s is inside a 6s window.
+  const early = HeatMap.lookahead(45000, 6000);
+  assert.ok(early.rise > 0.7, `expected a big rise, got ${early.rise}`);
+  assert.ok(early.toPeakMs > 4000 && early.toPeakMs <= 5000, `got ${early.toPeakMs}`);
+
+  // Standing at 49s it is the same rise, but now imminent.
+  const late = HeatMap.lookahead(49000, 6000);
+  assert.ok(late.imminence > early.imminence, 'imminence should grow as it nears');
+});
+
+test('lookahead reports no rise when the loud part is already playing', () => {
+  record(96000, (i) => (i < 50 ? 0.2 : 1.0));
+  const ahead = HeatMap.lookahead(60000, 6000);
+  assert.equal(ahead.rise, 0, 'nothing ahead is louder than now');
+  assert.equal(ahead.level, 1);
+});
+
+test('lookahead ignores a rise beyond its window', () => {
+  record(96000, (i) => (i < 50 ? 0.2 : 1.0));
+  assert.equal(HeatMap.lookahead(20000, 6000).rise, 0, '30s out is not anticipation');
+});
+
+/* ---------------------------------------------------------------- structure */
+
+test('sections stay silent until enough of the song is known', () => {
+  HeatMap.load(null);
+  HeatMap.start(96000);
+  for (let i = 0; i < 10; i += 1) {
+    HeatMap.note(i * 1000 + 500, env(0.5));
+    HeatMap.note(i * 1000 + 600, env(0.5));
+  }
+  assert.ok(HeatMap.coverage() < HeatMap.MIN_STRUCTURE_COVERAGE);
+  assert.deepEqual(HeatMap.sections(), [], 'structure from a tenth of a track is fiction');
+});
+
+test('sections name a quiet intro, a build and a drop', () => {
+  // Quiet · mid · loud · quiet, in four equal quarters.
+  record(96000, (i) => {
+    if (i < 24) return 0.15;
+    if (i < 48) return 0.55;
+    if (i < 72) return 1.0;
+    return 0.15;
+  });
+  const kinds = HeatMap.sections().map((s) => s.kind);
+  assert.deepEqual(kinds, ['intro', 'build', 'drop', 'outro'], `got ${kinds.join(',')}`);
+});
+
+test('a mid-energy stretch that leads nowhere is a verse, not a build', () => {
+  // Mid · quiet · loud · quiet. The first mid stretch drops away instead of
+  // climbing, so it is a verse; only a mid stretch that runs INTO the loud one
+  // is a build. Levels are relative to this song's own peak, so the loud
+  // quarter is what makes the first quarter read as mid at all.
+  record(96000, (i) => {
+    if (i < 24) return 0.5;
+    if (i < 48) return 0.15;
+    if (i < 72) return 1.0;
+    return 0.15;
+  });
+  const kinds = HeatMap.sections().map((s) => s.kind);
+  assert.deepEqual(kinds, ['verse', 'break', 'drop', 'outro'], `got ${kinds.join(',')}`);
+});
+
+test('a single loud bin is a cymbal, not a section', () => {
+  record(96000, (i) => (i === 40 ? 1.0 : 0.5));
+  const sections = HeatMap.sections();
+  assert.equal(sections.length, 1, `one flat song, got ${sections.length} sections`);
+});
+
+test('sectionAt finds the section covering a position', () => {
+  record(96000, (i) => (i < 48 ? 0.15 : 1.0));
+  assert.equal(HeatMap.sectionAt(5000).kind, 'intro');
+  assert.equal(HeatMap.sectionAt(90000).kind, 'drop');
+  assert.equal(HeatMap.sectionAt(-1), null);
+});
+
+test('structure follows the map when something new is learned', () => {
+  record(96000, () => 0.5);
+  assert.equal(HeatMap.sections().length, 1);
+  // A loud second half arrives on a later play; the cached answer must not hold.
+  const binMs = 96000 / HeatMap.BIN_COUNT;
+  for (let i = 48; i < HeatMap.BIN_COUNT; i += 1) HeatMap.note(i * binMs + binMs / 2, env(1.0));
+  assert.ok(HeatMap.sections().length > 1, 'the new drop should split the song');
+});
