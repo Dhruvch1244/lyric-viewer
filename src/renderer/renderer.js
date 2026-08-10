@@ -1031,6 +1031,7 @@ function resizeCanvas() {
   seedBars();
   seedWeb();
   seedGalaxy();
+  seedWormhole();
 
   // Re-center after a resize.
   const idx = activeIndex;
@@ -1197,6 +1198,10 @@ function seedGalaxy() {
     rad: Math.sqrt(i / count),      // normalised 0..1
     tw: Math.random() * Math.PI * 2, // twinkle phase
     hue: (i / count) * 90 - 45,
+    // Index into the bucketed colour table, resolved once at seed time so the
+    // draw loop never computes a colour.
+    bucket: Math.min(GALAXY_HUE_BUCKETS - 1,
+      Math.floor((i / count) * GALAXY_HUE_BUCKETS)),
   }));
 }
 
@@ -1367,6 +1372,10 @@ function mathRadius(kind, a, now, pass) {
   }
 }
 
+/* Opacity steps the constellation's links are grouped into. Eight is enough
+   that a 1px line at these alphas reads as a continuous falloff. */
+const WEB_ALPHA_BUCKETS = 8;
+
 /* ---- constellation web ----
    Nodes ride smooth parametric orbits; any two within a threshold are linked by
    a line whose opacity falls with distance. The link threshold widens on the
@@ -1385,6 +1394,24 @@ function drawConstellation(now, w, h, life) {
   const linkDist = maxDim * (0.14 + life * 0.06 + beatFlash * 0.05);
   const linkCol = shiftHex(palette[3] || '#4cc9f0', bgHue);
   ctx.lineWidth = 1;
+
+  /*
+    Links are batched by opacity rather than stroked one at a time.
+
+    At 28 nodes the pair loop reaches 378 links, and each one used to cost a
+    `hexA` string build plus its own beginPath/moveTo/lineTo/stroke — the
+    heaviest stroke load in the app. Opacity is the only thing that varied, so
+    the segments are collected into a handful of buckets and each bucket is
+    stroked once. Eight steps of alpha on a 1px line at these opacities is not
+    distinguishable from continuous.
+
+    Path2D has no clear operation, so the buckets are reallocated each frame —
+    eight small objects against the 378 strings and 378 stroke calls removed.
+  */
+  const paths = [];
+  for (let k = 0; k < WEB_ALPHA_BUCKETS; k += 1) paths.push(new Path2D());
+
+  const linkBase = 0.16 + life * 0.22 + beatFlash * 0.2;
   for (let i = 0; i < nUsed; i += 1) {
     const a = webNodes[i];
     for (let j = i + 1; j < nUsed; j += 1) {
@@ -1393,26 +1420,78 @@ function drawConstellation(now, w, h, life) {
       const dy = a.y - b.y;
       const d = Math.hypot(dx, dy);
       if (d < linkDist) {
-        const alpha = (1 - d / linkDist) * (0.16 + life * 0.22 + beatFlash * 0.2);
-        ctx.strokeStyle = hexA(linkCol, alpha);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
+        const t = 1 - d / linkDist;
+        const bucket = Math.min(WEB_ALPHA_BUCKETS - 1, Math.floor(t * WEB_ALPHA_BUCKETS));
+        const path = paths[bucket];
+        path.moveTo(a.x, a.y);
+        path.lineTo(b.x, b.y);
       }
     }
-    // Node dot, pulsing on the beat.
-    const nr = (1.4 + life * 1.8 + beatFlash * 2.2);
-    ctx.fillStyle = hexA(linkCol, 0.5 + beatFlash * 0.4);
-    ctx.beginPath();
-    ctx.arc(a.x, a.y, nr, 0, Math.PI * 2);
-    ctx.fill();
   }
+
+  ctx.strokeStyle = linkCol;
+  for (let k = 0; k < WEB_ALPHA_BUCKETS; k += 1) {
+    // Bucket centre, so a bucket reads as the average of the links it holds.
+    const t = (k + 0.5) / WEB_ALPHA_BUCKETS;
+    ctx.globalAlpha = Math.min(1, t * linkBase);
+    ctx.stroke(paths[k]);
+  }
+
+  // Node dots, pulsing on the beat. fillRect for the same reason as the galaxy.
+  ctx.globalAlpha = Math.min(1, 0.5 + beatFlash * 0.4);
+  ctx.fillStyle = linkCol;
+  const nd = (1.4 + life * 1.8 + beatFlash * 2.2) * DOT_SQUARE_SCALE;
+  for (let i = 0; i < nUsed; i += 1) {
+    const a = webNodes[i];
+    ctx.fillRect(a.x - nd / 2, a.y - nd / 2, nd, nd);
+  }
+  ctx.globalAlpha = 1;
 }
 
 /* ---- phyllotaxis galaxy ----
    The golden-angle spiral of stars, rotated slowly and pulsing on the beat. The
    sunflower packing gives it real mathematical structure while staying organic. */
+/*
+  Colour buckets for the galaxy.
+
+  Each particle carries its own hue offset spanning 90°, and the old code turned
+  that into a colour PER PARTICLE PER FRAME: `shiftHex` is a full RGB→HSL→hex
+  round trip ending in a string build, and `hexA` added a second one. At 260
+  particles that was ~31,000 string-building colour operations a second — the
+  single most expensive thing in Concert, and invisible to a draw-call probe
+  because none of it is a canvas call.
+
+  Twelve buckets across 90° is 7.5° apart, which is not perceptible on a 2px
+  twinkling dot. Rebuilt only when the snapped hue or the palette changes.
+*/
+const GALAXY_HUE_BUCKETS = 12;
+
+/* Square side that covers the same area as a circle of radius r, doubled for
+   diameter: 2·r·√π/2. Keeps a dot's visual weight unchanged when it is drawn
+   with fillRect instead of arc+fill. */
+const DOT_SQUARE_SCALE = Math.sqrt(Math.PI);
+/** @type {{key: string, colours: string[]}|null} */
+let galaxyPalette = null;
+
+/**
+ * The bucketed colour table for the galaxy.
+ * @returns {string[]} GALAXY_HUE_BUCKETS colours, dim → bright hue offset
+ */
+function galaxyColours() {
+  const hq = Math.round(bgHue / TIMELINE_HUE_STEP) * TIMELINE_HUE_STEP;
+  const base = palette[2] || '#7209b7';
+  const key = `${hq}|${base}`;
+  if (galaxyPalette && galaxyPalette.key === key) return galaxyPalette.colours;
+  const colours = [];
+  for (let i = 0; i < GALAXY_HUE_BUCKETS; i += 1) {
+    // Mirrors the particle hue spread: (i/count)*90 - 45.
+    const hue = (i / (GALAXY_HUE_BUCKETS - 1)) * 90 - 45;
+    colours.push(shiftHex(base, hq + hue));
+  }
+  galaxyPalette = { key, colours };
+  return colours;
+}
+
 function drawGalaxy(now, w, h, life) {
   ctx.globalCompositeOperation = 'lighter';
   const cx = w / 2;
@@ -1420,6 +1499,8 @@ function drawGalaxy(now, w, h, life) {
   const spin = now * 0.00006 + beatFlash * 0.05;
   const spread = Math.min(w, h) * (0.42 + life * 0.10 + beatFlash * 0.04);
   const step = Math.max(1, Math.round(1 / Math.max(0.4, quality))); // thin out when slow
+  const colours = galaxyColours();
+  const twBase = 0.10 + life * 0.16;
   for (let gi = 0; gi < galaxy.length; gi += step) {
     const p = galaxy[gi];
     const a = p.ang + spin;
@@ -1427,13 +1508,122 @@ function drawGalaxy(now, w, h, life) {
     const x = cx + Math.cos(a) * r;
     const y = cy + Math.sin(a) * r * 0.72; // slight tilt → disc, not flat ring
     const tw = 0.5 + 0.5 * Math.sin(now * 0.002 + p.tw);
-    const col = shiftHex(palette[2] || '#7209b7', bgHue + p.hue);
-    ctx.fillStyle = hexA(col, (0.10 + life * 0.16) * tw + beatFlash * 0.12);
-    const dot = 0.8 + p.rad * 1.6 + beatFlash * 1.2;
-    ctx.beginPath();
-    ctx.arc(x, y, dot, 0, Math.PI * 2);
-    ctx.fill();
+    // Alpha rides globalAlpha instead of being baked into a fresh colour string.
+    ctx.globalAlpha = Math.min(1, twBase * tw + beatFlash * 0.12);
+    ctx.fillStyle = colours[p.bucket];
+    // fillRect over beginPath+arc+fill, the same trade the stars layer already
+    // makes below — these dots are a few px and the shape is not readable.
+    // Sized by EQUAL AREA, not equal width: a square of side 2r covers 27% more
+    // than the circle it replaces, which made the galaxy read heavier than it
+    // used to. sqrt(pi)/2 ≈ 0.886 restores the original weight.
+    const d = (0.8 + p.rad * 1.6 + beatFlash * 1.2) * DOT_SQUARE_SCALE;
+    ctx.fillRect(x - d / 2, y - d / 2, d, d);
   }
+  ctx.globalAlpha = 1;
+}
+
+/* ---- wormhole ----
+
+   A tunnel flying toward the viewer: rings travel from a vanishing point out
+   past the corners, each one rotated a little further than the last so the
+   whole thing reads as twisting.
+
+   The perspective is what sells it. Radius goes as z², so rings bunch up near
+   the throat and accelerate as they approach the edge — linear spacing looks
+   like concentric circles expanding, not like travel.
+
+   Geometry is seeded once and recycled (z wraps past 1), so the draw loop
+   allocates nothing. Cost is one ellipse stroke per ring.
+
+   This is also where anticipation pays off best: the tunnel tightens and speeds
+   up before a drop the stored heat map already knows about, so the acceleration
+   leads the music instead of reacting to it. */
+const WORMHOLE_RINGS = 26;
+
+/** @type {Array<{z: number, twist: number, squash: number}>} */
+let wormholeRings = [];
+/** Accumulated tunnel roll (radians), kept across frames so it never jumps. */
+let wormholeSpin = 0;
+
+function seedWormhole() {
+  wormholeRings = Array.from({ length: WORMHOLE_RINGS }, (_, i) => ({
+    // Evenly spaced in depth, so the tunnel is continuous from the first frame.
+    z: i / WORMHOLE_RINGS,
+    twist: (i / WORMHOLE_RINGS) * Math.PI * 2,
+    // A little per-ring variation, so it reads as a rough tunnel not a machine.
+    squash: 0.78 + Math.random() * 0.10,
+  }));
+}
+
+/**
+ * Draw the wormhole.
+ * @param {number} w @param {number} h @param {number} dt frame delta (ms)
+ * @param {number} life overall energy 0..1
+ */
+function drawWormhole(w, h, dt, life) {
+  if (wormholeRings.length === 0) seedWormhole();
+
+  const cx = w / 2;
+  const cy = h * 0.44;
+  // Past the corners, so rings leave the screen rather than stopping at it.
+  const maxR = Math.hypot(w, h) * 0.62;
+
+  /*
+    Travel speed. The beat gives it a pulse, a drop punches it, and
+    anticipation winds it up BEFORE the drop — the tunnel is leaning into
+    something that has not happened yet.
+  */
+  const speed = (0.00011 + baseEnergy * 0.00009 + life * 0.00010)
+    * (1 + beatFlash * 0.8 + dropFlash * 2.4 + anticipation * 1.6);
+  wormholeSpin += dt * 0.00006 * (1 + anticipation * 2.2 + dropFlash * 1.5);
+
+  // Anticipation also narrows the throat, so the tunnel visibly constricts.
+  const squeeze = 1 - anticipation * 0.22;
+
+  const q = quantisedColours();
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < wormholeRings.length; i += 1) {
+    const ring = wormholeRings[i];
+    ring.z += dt * speed;
+    if (ring.z >= 1) ring.z -= 1;
+
+    const z = ring.z;
+    const r = maxR * z * z * squeeze;
+    if (r < 1) continue;
+
+    /*
+      Near rings must be the brightest and heaviest thing on screen — that
+      contrast against the dim throat IS the depth cue. An earlier version faded
+      them out as they grew, which flattened the whole tunnel into a target.
+
+      They need almost no fade-out, because `maxR` is past the corners: a ring
+      leaves the viewport at about z = 0.9, so fading only over the last tenth
+      removes the recycle pop without ever dimming a ring you can still see.
+    */
+    const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 10);
+    const alpha = (0.10 + z * 0.78) * fade * (0.55 + life * 0.6);
+    if (alpha < 0.01) continue;
+
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.strokeStyle = i % 2 === 0 ? q.accent : q.tint;
+    ctx.lineWidth = 1 + z * z * 6 + beatFlash * 1.2;
+    ctx.beginPath();
+    // Rotation grows with depth, which is what makes the tunnel look twisted
+    // rather than like a stack of rings.
+    ctx.ellipse(cx, cy, r, r * ring.squash, ring.twist + wormholeSpin + z * 2.6,
+      0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // The throat: a bright core so the vanishing point reads as somewhere the
+  // tunnel is coming FROM. Uses the cached glow sprite, so it is one blit.
+  const glowR = Math.min(w, h) * (0.06 + beatFlash * 0.03 + anticipation * 0.05);
+  ctx.globalAlpha = Math.min(1, 0.35 + beatFlash * 0.35 + anticipation * 0.4);
+  ctx.drawImage(accentGlow(q.accent), cx - glowR, cy - glowR, glowR * 2, glowR * 2);
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 /* Expanding rings (per lyric line + drops) and confetti (drops). */
@@ -1818,12 +2008,18 @@ function drawSongStructure(headX, left, span, baseY, maxH, accent) {
   the song is a certain fraction done. The timeline along the bottom is what
   says where in the track you are.
 
-  Parked to the left rather than centred, so the crisp artwork never sits behind
-  the lyric it would be competing with.
+  Parked to the left rather than centred, so the artwork mostly stays clear of
+  the lyric. Only mostly: lyric lines are 80vw centred, so a long one reaches
+  x≈10vw and will cross the platter's top-right. That is accepted — the artwork
+  is the point of the mode, and the lyric carries its own shadow. If it ever
+  reads badly, the platter's 0.82 alpha is the lever, not the radius.
 */
-const VINYL_CX = 0.20;
+const VINYL_CX = 0.22;
 const VINYL_CY = 0.42;
-const VINYL_R = 0.20;
+const VINYL_R = 0.26;
+/** Label radius as a share of the platter. A real 7" is nearer 0.33, but the
+    cover art is the subject here and at that ratio it read as a coaster. */
+const VINYL_LABEL_RATIO = 0.42;
 /** Fallback revolution time (ms) with no measured tempo: 33⅓ rpm. */
 const VINYL_IDLE_PERIOD_MS = 1800;
 
@@ -1943,7 +2139,7 @@ function drawVinyl(w, h, dt, accent, tint) {
 
   // The label: cover art if we have it, the palette if we do not. This is the
   // part that visibly turns.
-  const labelR = R * 0.38;
+  const labelR = R * VINYL_LABEL_RATIO;
   ctx.globalAlpha = 1;
   ctx.save();
   ctx.translate(cx, cy);
@@ -2466,6 +2662,9 @@ function drawBackdrop(now) {
     // The 260-point galaxy is the heaviest always-on layer; auto-drop it when the
     // frame rate sags (in addition to Lite mode) so weak GPUs recover toward 60.
     if (scene.galaxy) drawGalaxy(now, w, h, life);
+    // Behind the curves and the web, so anything else in the look sits inside
+    // the tunnel rather than being swallowed by it.
+    if (scene.wormhole) drawWormhole(w, h, dt, life);
     if (scene.math) drawMathCurves(now, w, h, life, motion);
     if (scene.web) drawConstellation(now, w, h, life);
     // The stage floor goes down before anything that stands on it.

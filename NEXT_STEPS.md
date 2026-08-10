@@ -1,7 +1,14 @@
 # Next steps
 
-Current as of **v0.16.0**. Written to be picked up cold — each item says what
+Current as of **v0.17.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
+
+> **Profile before optimising anything in the render loop.** 0.16.0's draw-call
+> audit ranked Concert by canvas calls and concluded the galaxy was 300 arcs.
+> The actual cost was `shiftHex` running once per particle per frame — no canvas
+> call at all, and 5× the expense. `scratchpad/profile.js` (DevTools profiler,
+> self time per function) is the tool that found it; call counts alone will
+> mislead you again.
 
 ---
 
@@ -55,15 +62,21 @@ frame — so the caches rebuilt constantly and saved almost nothing (measured:
 still 144 fillRect against an expected 72). Anything cached by colour must key
 on a **snapped** hue; see `quantisedColours()`.
 
-**Still open, both pre-existing:**
+**Concert was addressed in 0.17.0** — see the changelog. `drawGalaxy` fell from
+17.62 to 2.44 ms/s and `drawConstellation` from 2.94 to 0.85 ms/s, measured by
+profiler self time.
 
-- **Concert is the real heavyweight** at 300 `fill` + 300 `arc` per frame, from
-  the 260-point galaxy plus the constellation web — 4–10× any other preset. It
-  is `cost: 3` by design, and was left alone deliberately rather than changing a
-  look people already know.
+**Still open:**
+
 - **Sprite nameplates call `measureText` per dancer per frame** (~2.4/frame with
-  three dancers). The structure label now caches its width; the nameplates do
-  not. Small, but it is the same fix.
+  three dancers). The structure label caches its width; the nameplates do not.
+  Small, and the same fix.
+- **`(program)` dominates every profile** at ~850 ms/s against ~45 ms/s for all
+  app JavaScript combined. That is native compositing of a full-screen
+  transparent always-on-top window, and it confirms the standing note that
+  rewriting the drawing in a native language would optimise something that is
+  already not the constraint. Further JS micro-optimisation has little left to
+  win.
 
 ---
 
