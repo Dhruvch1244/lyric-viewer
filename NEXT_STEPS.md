@@ -1,25 +1,30 @@
 # Next steps
 
-Current as of **v0.15.0**. Written to be picked up cold — each item says what
+Current as of **v0.16.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
 
 ---
 
-## Decided for 0.16.0
+## Where 0.16.0 landed
 
-Agreed after the 0.15.0 draw-cost audit:
+Agreed after the 0.15.0 draw-cost audit, then cut as a release before the whole
+list was worked through. **Shipped in 0.16.0:**
 
-1. **Draw-cost payback** — done, see "Per-frame draw cost" below.
-2. **Close the `♫` gap** — a one-time, dismissible prompt per install. Most of
-   0.15.0 does nothing without capture, and nothing currently says so.
+1. **Draw-cost payback** — see "Per-frame draw cost" below.
+2. **The `♫` prompt** — one-time and dismissible, per install.
+
+**Agreed but not built, so these carry into 0.17.0:**
+
 3. **Notification tray** — item 2 below.
 4. **Artwork candidates / side poster** — item 3 below.
 5. **More visual modes** — the layer system composes cleanly now, so each new
    look is far cheaper than Vinyl and Stage were.
 
-Verification against real audio (item 0) was considered and **not** picked up
-this round. It stays open and unchanged: the longer it waits, the more of the
-release rests on harness evidence alone.
+Verification against real audio (item 0) was offered twice and declined both
+times. It is now **two releases deep**: 0.15.0 and 0.16.0 both rest entirely on
+harness and unit-test evidence, and both are in a published installer. This is
+the item most likely to be the source of an embarrassing bug report, and it
+costs one song.
 
 ---
 
