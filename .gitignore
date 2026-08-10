@@ -10,3 +10,6 @@ out/
 
 # Shipped API keys — bundled into the installer, never committed
 src/main/secrets.js
+
+# Promo stills are regenerated, not authored — keep them out of git.
+promo/stills/
