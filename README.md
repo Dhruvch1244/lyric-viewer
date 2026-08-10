@@ -78,7 +78,7 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
-| `◈` chip | Cycle the visual preset: Ghost → Heatmap → Vinyl → Stage → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
+| `◈` chip | Cycle the visual preset: Ghost → Heatmap → Vinyl → Stage → Wormhole → Liquid → Starfield → Geometry → Concert → Minimal (persisted per song) |
 | `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
@@ -94,6 +94,7 @@ rather than a random shuffle of layers:
 | **Heatmap** | The shape of the song as a timeline along the bottom edge, learned by listening and remembered. On a replay the drop is on screen while the build-up is still playing. |
 | **Vinyl** | The cover art as a record on a deck, turning the whole time — one revolution every four beats once the tempo has locked. The tonearm creeps inward as the song plays. |
 | **Stage** | The dancers as the subject: a lit floor, spotlights that punch on the kick, and the troupe pushed forward. A drop fills the stage with clones. |
+| **Wormhole** | A twisting tunnel flying toward you, rings accelerating out of a vanishing point behind the lyric. Constricts and winds up in the seconds *before* a drop it already knows is coming. |
 | **Liquid** | The signature look: the GPU field carries it, only the softest 2D layers stay on. Default. |
 | **Starfield** | Depth and drift — galaxy plus constellation web. |
 | **Geometry** | The parametric curves are the subject; the field calms to a backdrop. |

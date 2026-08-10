@@ -2,6 +2,63 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.17.0 — 2026-08-11
+
+### Added
+
+- **Wormhole — a tunnel flying toward you.** Rings travel out of a vanishing
+  point behind the lyric, each rotated a little further than the last so the
+  whole thing twists as it comes. The perspective is what sells it: radius goes
+  as z², so rings bunch at the throat and accelerate toward the edge — spaced
+  linearly they read as circles getting bigger, not as travel.
+
+  It is the look where **anticipation** is the headline. The tunnel constricts
+  and winds up in the seconds *before* a drop the stored heat map already knows
+  about, so the acceleration leads the music instead of reacting to it. A drop
+  then punches it forward.
+
+  Cheap: 0.56 ms of CPU per second, less than the bokeh layer it sits with.
+
+- **The Vinyl platter is half again as large**, and the label is a bigger share
+  of it — a 288px disc with a 109px label becomes a 374px disc with a 157px
+  label at 1280×720. The cover art is the entire point of that mode and it was
+  rendering as a coaster in a lot of black.
+
+  A long lyric line can now cross the platter's top-right corner. That is
+  accepted rather than designed around: the artwork matters more, and the lyric
+  carries its own shadow. The comment claiming the deck "never sits behind the
+  lyric" was already optimistic and has been corrected.
+
+### Performance
+
+- **The galaxy was the most expensive thing in the app, and it was invisible.**
+  0.16.0's audit measured Concert at 300 `fill` + 300 `arc` per frame and left
+  it alone. That measurement understated it badly: the dominant cost was not a
+  canvas call at all. `drawGalaxy` called `shiftHex` **once per particle per
+  frame** — a full RGB→HSL→hex round trip ending in a string build — plus a
+  `hexA` each. At 260 particles that is roughly 31,000 string-building colour
+  operations a second, in a layer three presets use.
+
+  Measured with the DevTools profiler, self time per function:
+
+  | | before | after |
+  | --- | --- | --- |
+  | `drawGalaxy` | 17.62 ms/s | **2.44 ms/s** |
+  | `drawConstellation` | 2.94 ms/s | **0.85 ms/s** |
+  | `hexA` | 1.63 ms/s | *off the profile* |
+
+  About 17 ms of CPU returned per second of playback in Concert. The hue is
+  bucketed into 12 steps across the 90° the particles span, alpha rides
+  `globalAlpha` instead of a fresh colour string, and the dots use `fillRect` —
+  the trade this file already documents for the stars layer.
+
+  The constellation's links were one string build and one `stroke` each, up to
+  378 of them; they are now batched into 8 opacity buckets and stroked 8 times.
+
+  Dots are sized by **equal area**, not equal width: a square of side 2r covers
+  27% more than the circle it replaces, and at first pass the galaxy visibly
+  read heavier than it used to.
+
 ## 0.16.0 — 2026-08-10
 
 ### Performance

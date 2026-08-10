@@ -46,7 +46,7 @@
    * drop flash and confetti that every other look gets, because the bare branch
    * returns before all of that. As layers they compose like everything else.
    */
-  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy', 'heatmap', 'vinyl', 'stage'];
+  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy', 'heatmap', 'vinyl', 'stage', 'wormhole'];
 
   /** @type {Preset[]} */
   const PRESETS = [
@@ -128,6 +128,23 @@
       */
       layers: { stage: true, rays: true, bokeh: true },
       swirl: { bandBias: 1.05, vortexBias: 0.9, glowBias: 1.15, kick: 2.0 },
+    },
+    {
+      id: 'wormhole',
+      name: 'Wormhole',
+      cost: 1,
+      /*
+        A tunnel flying toward you, twisting as it comes. Rings travel from a
+        vanishing point out past the corners with a z² perspective, so they
+        bunch at the throat and accelerate away — that acceleration is what
+        reads as travel rather than as circles getting bigger.
+
+        The one look where anticipation is the headline: the tunnel constricts
+        and winds up in the seconds BEFORE a drop the stored heat map already
+        knows about, so the acceleration leads the music.
+      */
+      layers: { wormhole: true, bokeh: true },
+      swirl: { bandBias: 0.7, vortexBias: 1.35, glowBias: 1.1, kick: 2.6 },
     },
     {
       id: 'liquid',
