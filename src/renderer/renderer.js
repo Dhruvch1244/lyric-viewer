@@ -70,6 +70,13 @@ let anchorAt = performance.now();
 /** DOM line elements, one per cue, and the active one. */
 let lineEls = [];
 let activeIndex = -1;
+/**
+ * Word spans of the ACTIVE line only, with their timing bounds and last painted
+ * state — `{el, startMs, endMs, state}`. Rebuilt by renderWords; read by
+ * paintWords on every frame, which is why it holds numbers rather than making
+ * the frame loop go back to the DOM for them.
+ */
+let activeWords = [];
 
 /** True while in a long instrumental gap — the flickering song-name hero owns
     the centre and the lyric column is dimmed. Driven from the frame loop. */
@@ -202,19 +209,29 @@ function findCueIndex(positionMs) {
   return found;
 }
 
+/**
+ * Per-word timings for a line — syllable-weighted, see wordtiming.js.
+ *
+ * Kept as a thin wrapper so the renderer still works if that script fails to
+ * load: the fallback is the old even split, which is worse but never blank.
+ *
+ * @param {string} text
+ * @param {number} startMs
+ * @param {number} endMs
+ * @returns {Array<{word: string, startMs: number, endMs: number}>}
+ */
 function buildWordTimings(text, startMs, endMs) {
-  const words = text.split(/\s+/).filter(Boolean);
+  if (window.WordTiming) return window.WordTiming.build(text, startMs, endMs);
+
+  const words = String(text || '').split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
   const span = Math.max(0, Math.min(endMs - startMs, MAX_WORD_SPREAD_MS));
-  const totalWeight = words.reduce((sum, w) => sum + w.length, 0) || words.length;
-
-  let cursor = startMs;
-  return words.map((word) => {
-    const share = (word.length / totalWeight) * span;
-    const timing = { word, startMs: cursor, endMs: cursor + share };
-    cursor += share;
-    return timing;
-  });
+  const each = span / words.length;
+  return words.map((word, i) => ({
+    word,
+    startMs: startMs + each * i,
+    endMs: startMs + each * (i + 1),
+  }));
 }
 
 /**
@@ -454,6 +471,7 @@ function buildColumn() {
     return el;
   });
   activeIndex = -1;
+  activeWords = [];   // the old line's spans are gone with the old column
 }
 
 /** Render a cue's words (interpolated per-word timing) into an element. */
@@ -464,13 +482,15 @@ function renderWords(el, index) {
   const timings = buildWordTimings(cue.text, cue.timeMs, lineEndMs(index));
 
   el.textContent = '';
+  activeWords = [];
   const n = timings.length;
   timings.forEach((timing, i) => {
     const span = document.createElement('span');
     span.className = 'word';
     span.textContent = timing.word;
-    span.dataset.start = String(timing.startMs);
-    span.dataset.end = String(timing.endMs);
+    // Bounds are kept alongside the element (see paintWords) rather than read
+    // back out of the DOM every frame.
+    activeWords.push({ el: span, startMs: timing.startMs, endMs: timing.endMs, state: -1 });
     // Stagger the entrance so words fire at different times; the mode is picked
     // per line (sequential / reverse / random / centre-out).
     let d;
@@ -527,6 +547,9 @@ function setActive(index) {
   }
 
   if (index < 0) {
+    // No line is active, so the cached spans above now point at detached
+    // elements — drop them rather than let paintWords keep styling orphans.
+    activeWords = [];
     els.column.style.transform = `translateY(${targetCenterPx}px)`;
     updateTranslation(index);
     updateHero();
@@ -638,13 +661,37 @@ function setActive(index) {
   updateTranslation(index);
 }
 
+/* Word states, cheap to compare. */
+const WORD_PENDING = 0;
+const WORD_SINGING = 1;
+const WORD_SUNG = 2;
+
+/**
+ * Highlight the word being sung.
+ *
+ * Runs every frame, so it does no DOM *reading* at all: the spans and their
+ * numeric bounds are captured once in renderWords, and each word remembers the
+ * state it is already in so the class list is only touched on a transition —
+ * roughly once per word per line instead of once per word per frame.
+ *
+ * The previous version called querySelectorAll and re-parsed two dataset
+ * attributes (string → number) for every word on every frame: for a 10-word
+ * line that was 600 queries and 1200 string parses a second, to produce about
+ * ten actual changes.
+ *
+ * @param {number} positionMs
+ */
 function paintWords(positionMs) {
-  if (activeIndex < 0 || !lineEls[activeIndex]) return;
-  for (const span of lineEls[activeIndex].querySelectorAll('.word')) {
-    const start = Number(span.dataset.start);
-    const end = Number(span.dataset.end);
-    span.classList.toggle('word--active', positionMs >= start && positionMs < end);
-    span.classList.toggle('word--sung', positionMs >= end);
+  for (let i = 0; i < activeWords.length; i += 1) {
+    const w = activeWords[i];
+    const state = positionMs >= w.endMs ? WORD_SUNG
+      : positionMs >= w.startMs ? WORD_SINGING
+        : WORD_PENDING;
+    if (state === w.state) continue;
+    w.state = state;
+    const cl = w.el.classList;
+    cl.toggle('word--active', state === WORD_SINGING);
+    cl.toggle('word--sung', state === WORD_SUNG);
   }
 }
 
@@ -1911,6 +1958,7 @@ function clearColumn() {
   els.column.textContent = '';
   lineEls = [];
   activeIndex = -1;
+  activeWords = [];
   els.column.style.transform = `translateY(${targetCenterPx}px)`;
   els.translation.classList.remove('is-visible');
   els.translation.textContent = '';
