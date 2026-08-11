@@ -72,6 +72,7 @@ const els = {
   keyStatus: document.getElementById('keybox-status'),
   canvas: document.getElementById('backdrop'),
   swirl: document.getElementById('swirl'),
+  milkdrop: document.getElementById('milkdrop'),
   hero: document.getElementById('np-hero'),
   heroTitle: document.getElementById('np-hero-title'),
   heroArtist: document.getElementById('np-hero-artist'),
@@ -1066,6 +1067,36 @@ let canvasHidden = false;
    and on this app compositing is the dominant cost. */
 let swirlHidden = false;
 
+/* ------------------------------------------------------------ visual engine */
+/*
+  Two engines, never both. The swirl field is the signature look and the
+  default; Butterchurn (MilkDrop presets) is the variety answer — see
+  milkdrop.js for why it exists and what it must not become.
+
+  They are mutually exclusive because each is a full-screen WebGL2 context, and
+  two alive at once doubles GPU cost for no benefit on an app whose dominant
+  cost is already compositing. Switching tears the idle one down.
+*/
+let activeEngine = 'swirl';
+
+/** The MilkDrop preset currently loaded, so a cycle can advance from it. */
+let milkdropName = null;
+
+/** Guards the beat-synced transition against firing repeatedly in one drop. */
+let lastMilkdropSwitchAt = 0;
+
+/** Last size sent across the frame boundary, so resizes are not sent per frame. */
+let milkdropSize = '';
+
+/**
+ * Minimum seconds between beat-synced preset changes.
+ *
+ * Long, deliberately. Plane9's scene transitions are what make a visualiser
+ * feel designed, but a MilkDrop preset needs time to develop — cutting every
+ * drop in a four-on-the-floor track would be a strobe, not a sequence.
+ */
+const MILKDROP_SWITCH_MS = 42000;
+
 /*
   Resolution ladder for the 2D backdrop, mirroring the swirl's.
 
@@ -2022,6 +2053,87 @@ function applySwirlScale(now) {
  * @param {string} tintLive base tint for this frame
  * @param {string} accentLive accent for this frame
  */
+/**
+ * Put the right engine on screen, and draw it if it is the MilkDrop one.
+ *
+ * The swirl field is rendered further down the backdrop loop, where it can be
+ * thinned against a cover photo and a solo look. MilkDrop has nothing to thin
+ * against — it owns the screen — so it is simplest to draw it here, next to the
+ * decision that selects it.
+ *
+ * @param {object} preset the preset actually being rendered
+ * @param {number} now rAF timestamp
+ * @param {number} dt frame delta (ms)
+ * @param {number} w @param {number} h CSS pixels
+ */
+function applyEngine(preset, now, dt, w, h) {
+  if (!window.MilkDrop || !els.milkdrop) return;
+  const wanted = preset.engine === 'milkdrop' ? 'milkdrop' : 'swirl';
+
+  if (wanted !== activeEngine) {
+    activeEngine = wanted;
+    if (wanted === 'milkdrop') {
+      els.milkdrop.hidden = false;
+      window.MilkDrop.init(els.milkdrop);
+      window.MilkDrop.resize(w, h);
+      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
+      // Cut rather than blend on the way in: there is nothing to blend FROM,
+      // and a fade from black reads as the app being slow to start.
+      milkdropName = window.MilkDrop.loadPreset(preset.milkdrop, 0);
+      lastMilkdropSwitchAt = now;
+    } else {
+      window.MilkDrop.destroy();
+      els.milkdrop.hidden = true;
+    }
+  }
+
+  if (activeEngine !== 'milkdrop') return;
+
+  /*
+    The engine reports whether it is actually alive only once its frame has
+    loaded and parsed the preset packs — WebGL2 support, a bundle that failed to
+    load and a pack that would not parse are all invisible from out here. Until
+    then, draw nothing and keep the frame hidden-but-present so it can finish
+    starting. It settles within a second of the first switch.
+  */
+  if (!window.MilkDrop.isSupported()) return;
+
+  // A preset change within the same engine (Milkdrop → Milkdrop Soft).
+  if (preset.milkdrop && preset.milkdrop !== milkdropName && now - lastMilkdropSwitchAt > 500) {
+    milkdropName = window.MilkDrop.loadPreset(preset.milkdrop);
+    lastMilkdropSwitchAt = now;
+  }
+
+  /*
+    Beat-synced transitions, borrowed from Plane9 — cutting on a drop rather
+    than on a timer is most of why a visualiser feels alive rather than like a
+    screensaver on shuffle.
+
+    Gated on a real drop AND a long cooldown. A MilkDrop preset needs time to
+    develop, so cutting on every drop in a four-on-the-floor track would be a
+    strobe rather than a sequence.
+  */
+  if (dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
+    const all = window.MilkDrop.names();
+    if (all.length > 1) {
+      const i = all.indexOf(milkdropName);
+      milkdropName = window.MilkDrop.loadPreset(all[(i + 1) % all.length]);
+      lastMilkdropSwitchAt = now;
+      setStatus(`MilkDrop — ${milkdropName}`);
+    }
+  }
+
+  // Resize crosses a frame boundary, so it is sent only on a real change rather
+  // than every frame — the CSS already stretches the frame itself.
+  const size = `${Math.floor(w)}x${Math.floor(h)}`;
+  if (size !== milkdropSize) {
+    milkdropSize = size;
+    window.MilkDrop.resize(w, h);
+  }
+
+  window.MilkDrop.render(dt / 1000);
+}
+
 function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
   if (!swirlOn) return;
 
@@ -2908,6 +3020,9 @@ function drawBackdrop(now) {
     // whole overlay stays as see-through (faint) or solid as the user picked.
     const level = BACKDROP_LEVELS[backdropLevel] || BACKDROP_LEVELS[2];
 
+    // Engine selection, before anything draws. See `activeEngine`.
+    applyEngine(activePreset, now, dt, w, h);
+
     const bare = Boolean(activePreset.bare);
     if (bare !== canvasHidden) {
       canvasHidden = bare;
@@ -3704,6 +3819,10 @@ async function enableAudio() {
   // Finding the chip unprompted answers the question as well as the prompt
   // does, so the nudge should never appear afterwards.
   if (ok) closeCaptureNudge();
+  /* Starting capture replaces the whole audio graph. A MilkDrop visualizer
+     built against the old context would keep reading zeros forever — silently,
+     because a preset with no audio still animates. */
+  if (window.MilkDrop) window.MilkDrop.reconnect();
   return ok;
 }
 
@@ -4907,6 +5026,8 @@ if (window.LocalPlayer) {
       els.audioBtn.setAttribute('aria-pressed', String(audioEnabled));
       // Playing our own file answers the capture question for good.
       closeCaptureNudge();
+      // Same reason as enableAudio(): this replaced the audio graph.
+      if (window.MilkDrop) window.MilkDrop.reconnect();
     }
   });
 

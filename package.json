@@ -74,6 +74,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@huggingface/transformers": "^4.2.0",
+    "butterchurn": "^2.6.7",
+    "butterchurn-presets": "^2.4.7",
     "electron-updater": "^6.8.9",
     "wavefile": "^11.0.0"
   }

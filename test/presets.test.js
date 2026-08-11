@@ -60,8 +60,11 @@ test('soloLayer is a weaker relative of bare, and never the same preset', () => 
   }
 });
 
-test('a solo preset names exactly the layer it draws', () => {
-  const solo = VisualPresets.all.filter((p) => p.soloLayer);
+test('a solo swirl preset names exactly the layer it draws', () => {
+  // Scoped to the swirl engine on purpose. A solo MilkDrop look draws through
+  // the other engine and correctly names no 2D layer at all; asserting "exactly
+  // one" across both engines would be asserting the wrong thing.
+  const solo = VisualPresets.all.filter((p) => p.soloLayer && p.engine === 'swirl');
   assert.deepEqual(solo.map((p) => p.id), ['wormhole']);
   for (const preset of solo) {
     const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
@@ -69,7 +72,7 @@ test('a solo preset names exactly the layer it draws', () => {
   }
 });
 
-test('transparentBg is declared by every preset, and only claimed by wormhole', () => {
+test('transparentBg is declared by every preset', () => {
   // Same invariant as `bare` and `soloLayer`: an omitted flag must read as
   // false, so a preset written today cannot inherit a background policy added
   // tomorrow. The flag suppresses the GPU field, which is NOT a layer flag and
@@ -78,17 +81,118 @@ test('transparentBg is declared by every preset, and only claimed by wormhole', 
     assert.equal(typeof preset.transparentBg, 'boolean',
       `${preset.id} lacks transparentBg`);
   }
-  const clear = VisualPresets.all.filter((p) => p.transparentBg).map((p) => p.id);
+});
+
+test('wormhole is the only swirl preset with a transparent background', () => {
+  // Every MilkDrop look also has it — see the engine test — but for the
+  // opposite reason: it suppresses a field that would draw under an opaque
+  // canvas, rather than clearing a background so smoke has something to be
+  // smoke against.
+  const clear = VisualPresets.all
+    .filter((p) => p.transparentBg && p.engine === 'swirl')
+    .map((p) => p.id);
   assert.deepEqual(clear, ['wormhole']);
 });
 
 test('a transparent-background preset still draws something', () => {
   // Combining `transparentBg` with `bare` would remove the 2D canvas AND the
   // field, leaving a look with no picture at all — Ghost with extra steps.
+  // What counts as "something" depends on the engine: a swirl look must name a
+  // layer, a MilkDrop look IS its engine.
   for (const preset of VisualPresets.all.filter((p) => p.transparentBg)) {
     assert.ok(!preset.bare, `${preset.id} claims both transparentBg and bare`);
+    if (preset.engine === 'milkdrop') {
+      assert.equal(typeof preset.milkdrop, 'string', `${preset.id} draws nothing`);
+      continue;
+    }
     const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
     assert.ok(on.length > 0, `${preset.id} has a transparent background and no layers`);
+  }
+});
+
+test('every preset names an engine, and only known ones', () => {
+  // Defaulted rather than required, so presets written before there was a
+  // second engine keep working — but an unknown string must never survive
+  // normalisation, or the renderer silently draws nothing.
+  for (const preset of VisualPresets.all) {
+    assert.ok(['swirl', 'milkdrop'].includes(preset.engine),
+      `${preset.id} has engine "${preset.engine}"`);
+  }
+});
+
+test('the swirl engine is still the default and the majority', () => {
+  // The signature look must not be quietly demoted by adding preset packs.
+  assert.equal(VisualPresets.byId(VisualPresets.DEFAULT_ID).engine, 'swirl');
+  const swirl = VisualPresets.all.filter((p) => p.engine === 'swirl').length;
+  assert.ok(swirl > VisualPresets.all.length / 2, 'the second engine has taken over');
+});
+
+test('every milkdrop preset names a starting preset and owns the screen', () => {
+  const milk = VisualPresets.all.filter((p) => p.engine === 'milkdrop');
+  assert.ok(milk.length > 0, 'no milkdrop presets registered');
+  for (const preset of milk) {
+    assert.equal(typeof preset.milkdrop, 'string',
+      `${preset.id} has no starting preset name`);
+    // The MilkDrop canvas fills the screen and is opaque, so the swirl field
+    // and the 2D extras would be drawing underneath it for nothing.
+    assert.equal(preset.transparentBg, true, `${preset.id} would draw the field under an opaque canvas`);
+    assert.equal(preset.soloLayer, true, `${preset.id} would draw 2D extras under an opaque canvas`);
+    assert.equal(preset.bare, false, `${preset.id} claims bare, which removes a canvas it needs`);
+  }
+});
+
+test('every named milkdrop preset actually exists in the shipped pack', () => {
+  /*
+    This test earns its keep: both starting presets were originally written from
+    memory, both were wrong, and nothing complained — `loadPreset` falls back to
+    the pack's first entry for a name it does not recognise, so the app showed a
+    preset nobody chose and looked like it was working.
+
+    The fallback is still right (packs are versioned independently of this app,
+    and a name that disappears must not black the screen), which is exactly why
+    the names need checking here instead.
+  */
+  /* The same four packs milkdrop.html loads, merged the same way. Checking only
+     the base pack would let a name that exists solely in an extra pack pass
+     here and then fall back at runtime if that pack were ever dropped. */
+  const available = new Set();
+  for (const file of ['butterchurnPresetsMD1', 'butterchurnPresetsExtra2',
+    'butterchurnPresetsExtra', 'butterchurnPresets']) {
+    const pack = require(`butterchurn-presets/lib/${file}.min.js`);
+    const lib = pack.default || pack;
+    const presets = typeof lib.getPresets === 'function' ? lib.getPresets() : lib;
+    for (const name of Object.keys(presets)) available.add(name);
+  }
+  assert.ok(available.size > 300, `only ${available.size} presets loaded`);
+
+  for (const preset of VisualPresets.all.filter((p) => p.engine === 'milkdrop')) {
+    assert.ok(available.has(preset.milkdrop),
+      `${preset.id} names "${preset.milkdrop}", which is not in the pack`);
+  }
+});
+
+test('swirl presets never carry a milkdrop preset name', () => {
+  // A stray name would be dead config that looks meaningful — the next reader
+  // would reasonably assume the preset switches engines.
+  for (const preset of VisualPresets.all.filter((p) => p.engine === 'swirl')) {
+    assert.equal(preset.milkdrop, null, `${preset.id} names a MilkDrop preset it cannot use`);
+  }
+});
+
+test('second-engine looks are never handed out at random', () => {
+  // A MilkDrop preset that cannot run degrades to a blank screen with lyrics on
+  // it. Being handed that unasked, for a song you did not choose it for, is far
+  // worse than never being offered it — so it stays a deliberate choice.
+  const poolIds = VisualPresets.RANDOM_POOL.map((p) => p.id);
+  for (const id of VisualPresets.SECOND_ENGINE) {
+    assert.ok(!poolIds.includes(id), `${id} can be assigned at random`);
+  }
+  assert.ok(VisualPresets.RANDOM_POOL.length > 0, 'the random pool is empty');
+});
+
+test('the random pool is still all swirl', () => {
+  for (const preset of VisualPresets.RANDOM_POOL) {
+    assert.equal(preset.engine, 'swirl', `${preset.id} is in the random pool`);
   }
 });
 

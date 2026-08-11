@@ -29,6 +29,8 @@
 (function () {
   /** @type {AudioContext|null} */ let audioCtx = null;
   /** @type {AnalyserNode|null} */ let analyser = null;
+  /** @type {AudioNode|null} The node feeding the analyser, shared with MilkDrop. */
+  let sourceNode = null;
   /** @type {MediaStream|null} */ let mediaStream = null;
   /** @type {Uint8Array|null} */ let freq = null;
   let running = false;
@@ -122,6 +124,10 @@
    * @param {AudioNode} src
    */
   function buildAnalyser(src) {
+    // Kept so other consumers can tap the same graph. Butterchurn wants a node
+    // to attach its own analysers to, and building it a second capture would
+    // mean a second permission prompt for sound we already have.
+    sourceNode = src;
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                  // 512 bins
     /*
@@ -149,7 +155,7 @@
   function stop() {
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
     if (audioCtx) audioCtx.close().catch(() => {});
-    audioCtx = null; analyser = null; mediaStream = null; freq = null;
+    audioCtx = null; analyser = null; sourceNode = null; mediaStream = null; freq = null;
     running = false;
     env.active = false;
   }
@@ -246,5 +252,25 @@
 
   window.AudioReactive = {
     start, startFromElement, stop, sample, isActive: () => running, getStream,
+    /* The live graph, for consumers that do their own analysis rather than
+       reading our envelope. Both are null when capture is off; a consumer must
+       cope with that rather than assume sound is available. */
+    getContext: () => audioCtx,
+    getSource: () => sourceNode,
+    /**
+     * Fill `out` with time-domain samples from the live analyser.
+     *
+     * Time domain, not the frequency data `sample()` returns: MilkDrop presets
+     * draw the waveform itself, so a spectrum is the wrong shape entirely. The
+     * caller supplies the buffer so this allocates nothing at 60fps.
+     *
+     * @param {Uint8Array} out
+     * @returns {boolean} whether anything was written
+     */
+    timeDomain: (out) => {
+      if (!running || !analyser || !out) return false;
+      analyser.getByteTimeDomainData(out);
+      return true;
+    },
   };
 })();

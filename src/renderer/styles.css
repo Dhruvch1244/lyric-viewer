@@ -97,6 +97,23 @@ body.lang-devanagari .ln.is-active {
   pointer-events: none;
 }
 
+/* The second engine sits at the same depth as the swirl field, because it
+   replaces it rather than layering with it. */
+#milkdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  border: 0;
+  /* Never steal a click, and never take focus: this is scenery, and the overlay
+     is click-through scenery in particular. */
+  pointer-events: none;
+  background: transparent;
+}
+
+#milkdrop[hidden] { display: none; }
+
 #backdrop {
   position: fixed;
   inset: 0;

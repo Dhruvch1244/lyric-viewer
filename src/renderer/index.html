@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self';" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -11,6 +11,18 @@
     <!-- GPU swirl field (WebGL2). Sits behind #backdrop and renders the fluid
          colour base; #backdrop keeps the discrete particle/curve layers. -->
     <canvas id="swirl" aria-hidden="true"></canvas>
+    <!-- The second engine (Butterchurn / MilkDrop presets).
+
+         An iframe rather than a canvas, because MilkDrop presets are equation
+         sources that Butterchurn compiles to JavaScript and therefore need
+         'unsafe-eval'. milkdrop.html grants that to itself alone, so the page
+         that handles network-sourced lyrics, artwork and translations keeps its
+         strict policy. See milkdrop.js.
+
+         Mutually exclusive with #swirl: both are full-screen WebGL2 contexts,
+         and running two at once doubles GPU cost for nothing. -->
+    <iframe id="milkdrop" title="MilkDrop visualiser" aria-hidden="true" hidden
+            src="milkdrop.html" tabindex="-1" scrolling="no"></iframe>
     <canvas id="backdrop" aria-hidden="true"></canvas>
 
     <header id="topbar" class="topbar">
@@ -203,6 +215,10 @@
       </div>
     </section>
 
+    <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles
+         themselves are loaded by milkdrop.html, not here — this page must not
+         have them, and must not have eval. -->
+    <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>
     <script src="sprites.js"></script>
