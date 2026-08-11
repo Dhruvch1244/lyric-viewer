@@ -6,6 +6,7 @@ const fs = require('fs');
 const { identify } = require('./tags');
 const { AppTray } = require('./tray');
 const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
+const { PresetLibrary } = require('./presetlib');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -87,6 +88,11 @@ let appTray = null;
 
 /** @type {import('./updater').AppUpdater|null} */
 let appUpdater = null;
+
+/* The preset corpus. Constructed eagerly and loaded lazily — the index is only
+   read the first time the MilkDrop engine or its browser asks for anything, so
+   a session that never uses MilkDrop never touches it. */
+const presetLibrary = new PresetLibrary();
 
 /** Current display size: fullscreen overlay, floating bar, or taskbar strip. */
 let displayMode = 'full';
@@ -850,6 +856,11 @@ app.whenReady().then(() => {
      renderer was listening — a cold start that finds an update ready reaches
      'ready' well before the first frame. */
   ipcMain.handle('get-update-state', () => updateStateForRenderer());
+
+  /* The MilkDrop corpus. The renderer holds names; the bytes stay here until a
+     preset is actually shown. See presetlib.js for why main owns the files. */
+  ipcMain.handle('milkdrop-catalogue', () => presetLibrary.names());
+  ipcMain.handle('milkdrop-preset', (_e, name) => presetLibrary.get(name));
 
   ipcMain.handle('update-action', (_e, action) => {
     if (!appUpdater) return { status: 'unavailable' };

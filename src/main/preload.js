@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('player', {
   setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
   getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
 
+  /** Every MilkDrop preset name the installed app holds. */
+  milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),
+  /** One preset, parsed. Read from disk in main; see presetlib.js. */
+  milkdropPreset: (name) => ipcRenderer.invoke('milkdrop-preset', name),
+
   onUpdateState: (cb) => ipcRenderer.on('update-state', (_e, data) => cb(data)),
   getUpdateState: () => ipcRenderer.invoke('get-update-state'),
   /** @param {'install'|'dismiss'|'check'} action */

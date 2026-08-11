@@ -10,13 +10,17 @@
 
     parent → frame
       {type:'init'}                       build the visualizer, report the catalogue
-      {type:'preset', name, blend}        load a preset (blend in seconds)
+      {type:'preset', name, blend, data}  load a preset (blend in seconds); `data`
+                                          is the preset object for anything not in
+                                          the resident pack
       {type:'resize', width, height}      CSS pixels
       {type:'render', t, l, r, elapsed}   draw one frame with this audio
 
     frame → parent
-      {type:'ready', names:[...]}         the catalogue, once it is known
+      {type:'ready', names:[...]}         the resident catalogue, once it is known
       {type:'loaded', name}               which preset is actually showing
+      {type:'missing', name}              asked for a preset it does not hold, and
+                                          was sent no data for it
       {type:'error', message}
 
   THE PARENT DRIVES THE CLOCK. The frame has no requestAnimationFrame of its
@@ -36,9 +40,15 @@
   const canvas = document.getElementById('cv');
 
   let visualizer = null;
+  /** The resident pack. Never added to; it is the fallback, not the catalogue. */
   let presetMap = null;
+  /** Resident names only, so `names[0]` is always something that can be drawn. */
   let names = [];
   let currentName = null;
+
+  /** Presets the parent has sent in, most-recent-last. */
+  const sent = new Map();
+  const SENT_CACHE_MAX = 256;
 
   /* Butterchurn wants a context even when it is fed audio externally: it builds
      its internal AudioProcessor against one. Nothing is ever connected to this,
@@ -71,15 +81,13 @@
 
     try {
       /*
-        Every pack that loaded, merged into one catalogue. Listed rather than
-        discovered so a pack that fails to load is a missing set of names, not a
-        silent catalogue of a different size — and the base pack is applied last
-        so its versions win any name collision, since those are the ones the
-        preset chooser in presets.js is checked against.
+        The resident pack, which is the floor rather than the catalogue: the
+        other 1654 presets are files the parent reads and sends in. Listed
+        rather than discovered so a pack that fails to load is a missing set of
+        names, not a silent catalogue of a different size.
       */
       presetMap = {};
-      for (const global of ['butterchurnPresetsMD1', 'butterchurnPresetsExtra2',
-        'butterchurnPresetsExtra', 'butterchurnPresets']) {
+      for (const global of ['butterchurnPresets']) {
         const pack = unwrap(window[global]);
         if (!pack) continue;
         const got = typeof pack.getPresets === 'function' ? pack.getPresets() : pack;
@@ -100,17 +108,45 @@
   }
 
   /**
-   * Load a preset by name.
+   * Load a preset by name, optionally with the preset object supplied.
    *
-   * A name that a preset-pack upgrade removed resolves to the first available
-   * preset rather than to a black screen: names are persisted per song, and the
-   * packs are versioned independently of this app.
+   * `data` is how everything outside the resident pack arrives: the parent
+   * reads it from a file and sends it across. It is cached here so that
+   * stepping back and forth through the browser does not re-read the same file
+   * on every keypress, and so a re-load after a resize costs nothing.
+   *
+   * A name that is neither resident nor supplied is reported as missing rather
+   * than silently substituted — the parent knows what it asked for and can
+   * decide, where here the only options are a lie or a black screen. A name
+   * that is missing *and* has no fallback still falls back, because a black
+   * screen is the one outcome worth avoiding outright.
    */
-  function loadPreset(name, blend) {
-    if (!visualizer || names.length === 0) return;
-    const key = name && presetMap[name] ? name : names[0];
+  function loadPreset(name, blend, data) {
+    if (!visualizer) return;
+
+    if (data && name) {
+      sent.set(name, data);
+      /* Bounded, because stepping through the whole catalogue would otherwise
+         hold all 8.4MB of it. Oldest first — the browser walks forwards, so the
+         entry least likely to be wanted next is the one longest unused. */
+      if (sent.size > SENT_CACHE_MAX) sent.delete(sent.keys().next().value);
+    }
+
+    let key = name;
+    let preset = key ? (presetMap[key] || sent.get(key)) : null;
+    if (!preset) {
+      /* Reported rather than silently substituted: the parent knows what it
+         asked for and can re-read the file. Here the only options are a lie or
+         a black screen — and a black screen is the one outcome worth avoiding
+         outright, so it still falls back to something drawable. */
+      post({ type: 'missing', name: key || '' });
+      if (names.length === 0) return;
+      key = names[0];
+      preset = presetMap[key];
+    }
+
     try {
-      visualizer.loadPreset(presetMap[key], Math.max(0, Number(blend) || 0));
+      visualizer.loadPreset(preset, Math.max(0, Number(blend) || 0));
       currentName = key;
       post({ type: 'loaded', name: key });
     } catch (err) {
@@ -153,7 +189,7 @@
     if (!msg || typeof msg.type !== 'string') return;
     switch (msg.type) {
       case 'init': init(); break;
-      case 'preset': loadPreset(msg.name, msg.blend); break;
+      case 'preset': loadPreset(msg.name, msg.blend, msg.data); break;
       case 'resize': resize(msg.width, msg.height); break;
       case 'render': render(msg); break;
       default: break;
