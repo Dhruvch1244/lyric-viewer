@@ -3910,6 +3910,7 @@ window.player.onTranscribeProgress((data) => {
   const WORK = {
     download: 'downloading speech model', transcribing: 'transcribing',
     aligning: 'aligning words', aligned: null, 'align-weak': null,
+    correcting: 'checking the words', corrected: null,
     done: null, empty: null, error: null,
   };
   if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
@@ -3930,6 +3931,14 @@ window.player.onTranscribeProgress((data) => {
     case 'aligned':
       // Real lyric text matched onto the transcribed timings — the good case.
       setStatus(`matched real lyrics (${data.coverage}% anchored)`);
+      break;
+    case 'correcting':
+      // Only ever runs when there were no real lyrics to match, so this is the
+      // fallback path doing its best rather than a step in the good one.
+      setStatus(`checking the words… ${data.batch}/${data.batches}`);
+      break;
+    case 'corrected':
+      setStatus(`fixed ${data.changed} misheard line${data.changed === 1 ? '' : 's'}`);
       break;
     case 'done':
       setStatus(

@@ -22,6 +22,7 @@ const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
+const { correctTranscript, isCorrectionAvailable } = require('./correct');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally } = require('./localtranslate');
@@ -1081,6 +1082,37 @@ app.whenReady().then(() => {
         }
       } catch (err) {
         console.warn('[align] plain-lyric alignment skipped:', err.message);
+      }
+
+      /*
+        LLM correction pass — the "brain" half of the ear/brain split.
+
+        Guarded on `usedSource === 'whisper'` deliberately. If the block above
+        anchored LRCLIB's real lyrics onto Whisper's timings, the words are
+        already correct and asking a model to "correct" them can only make them
+        wrong. This runs exactly when we have nothing but what the model heard,
+        which is also when it is worth the most.
+
+        Failure is not fatal at any level: a bad batch keeps that batch's
+        original lines, and a total failure returns the transcript untouched.
+      */
+      if (usedSource === 'whisper' && isCorrectionAvailable()) {
+        try {
+          const fixed = await correctTranscript(result.cues, track, ({ batch, batches }) => {
+            send('transcribe-progress', {
+              track, stage: 'correcting', pct: 92, batch, batches,
+            });
+          });
+          if (fixed.corrected) {
+            result = { ...result, cues: fixed.cues };
+            usedSource = 'whisper+llm';
+            send('transcribe-progress', {
+              track, stage: 'corrected', pct: 96, changed: fixed.changed,
+            });
+          }
+        } catch (err) {
+          console.warn('[correct] pass skipped:', err.message);
+        }
       }
 
       const indic = detectIndic(result.cues).indic;
