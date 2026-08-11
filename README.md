@@ -119,6 +119,7 @@ was a colour conversion per particle, not a canvas call).
 | `Ctrl+Alt+←` / `Ctrl+Alt+→` | Nudge lyric sync 100ms earlier / later |
 | `Ctrl+Alt+0` | Reset sync offset |
 | `Ctrl+Alt+H` | Show / hide the player |
+| `Ctrl+Alt+M` | Cycle size: fullscreen → floating bar → taskbar strip → **desktop wallpaper** |
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
@@ -129,6 +130,23 @@ was a colour conversion per particle, not a canvas call).
 | `♪ Library` chip | Your songs — search, see what is known about each, add files from disk, click to play |
 | `♫` chip | Audio-reactive mode (captures system sound) — also what lets the app *learn* a song |
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
+| `✳` chip | Browse the **1754 MilkDrop presets** by their pictures — like one, hide one, pin one to a song |
+| `▣` chip | Cover art — pick a different one when the search got it wrong |
+| `▭` chip | The same size cycle as `Ctrl+Alt+M` |
+
+**Wallpaper mode.** The fourth size renders *behind* your desktop icons instead
+of over everything, so the app is simply on rather than something you launch.
+It stays interactive: a window parented into the desktop gets no mouse input
+from Windows at all, so the pointer is forwarded and every chip still works.
+
+**MilkDrop presets (`✳` chip).** 1754 of them, from the Butterchurn/MilkDrop
+ecosystem. Names written by strangers in 2003 tell you nothing about what a
+preset looks like, so the browser renders a preview of each one — by the engine
+itself, cached, and only for what you scroll to. Like the ones you want to keep,
+hide the ones you never want to see again (hidden ones leave the dice and the
+beat-synced cycle too), and step through with the arrow keys, watching rather
+than reading. The swirl field stays the default and stays the identity: it times
+itself to lyric density, which no MilkDrop preset does or can.
 
 **Visual presets (`◈` chip).** Each is a deliberate look with a stated cost,
 rather than a random shuffle of layers:

@@ -2,6 +2,97 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.21.0 — 2026-08-11
+
+The release where three things everyone believed turned out to be wrong, and
+finding that out was worth more than the features.
+
+### Fixed
+
+- **Updates never arrived, and would not have said so.** Three defects, one
+  missing surface. The **`.exe.blockmap` was never published** — electron-updater
+  fetches it to transfer only the chunks that changed, so that request has 404'd
+  on every client since auto-update shipped, and every update re-downloaded all
+  114MB. `allowToChangeInstallationDirectory` let the update installer ask for a
+  directory again, which is how an update lands *beside* the app rather than
+  over it and leaves you uninstalling by hand. And it checked exactly once, at
+  startup, on an app people leave running for days that ships most days.
+
+  None of it was ever on screen either: the state lived inside the tray's
+  right-click menu, on an app whose entire surface is a full-screen overlay.
+  There is now a pill while an update downloads and a card with **Restart now /
+  Later** once it is ready. Later is remembered per version, so it asks about
+  each build once.
+
+- **The visual governor was feeding itself.** Profiling a real song put
+  `swirl.js`'s `resize` at 289ms of self time — for a function that reallocates
+  a WebGL drawing buffer and should fire a handful of times a session. Its own
+  comment claimed it never changed faster than once a second; the code only
+  guarded the way *up*. So one long frame dropped a resolution rung, the
+  reallocation cost another long frame, and that dropped the next: each round
+  trip a visible hitch. Rate-limited both ways now.
+
+- **The wrong artist was on the mic.** 0.20.0 listed this as known: every artist
+  had a silhouette, but the dancer singing was picked by line number, so a
+  three-artist track was right one line in three by accident.
+
+### Added
+
+- **1754 presets, up from 395.** The four bundles 0.19.0 shipped were not the
+  catalogue — `butterchurn-presets` also ships the corpus they were compiled
+  from, and **1360 more looks had been sitting in `node_modules` unused**. They
+  ship as files read on demand, so the resident cost is a list of names; three
+  bundles are deleted in the same change. Measured, this costs the installer
+  approximately nothing and removes 2.3MB of startup parsing.
+
+- **A preset browser you choose with your eyes.** Names written by strangers in
+  2003 tell you nothing about what a preset looks like, so the browser renders
+  previews — by the engine itself, cached to disk, and only for cards you
+  actually scroll to. Like the ones you love, hide the ones you never want
+  again (hidden ones leave the dice and the beat-synced cycle too), and once
+  anything is liked the cycle draws only from those. The arrow keys step through
+  and load each one as you reach it, which is the part a list of names could not
+  do at all.
+
+- **Wallpaper mode.** `Ctrl+Alt+M` now cycles to a fourth mode that renders
+  behind the desktop icons rather than over everything — the app becomes
+  something that is simply on. It stays clickable: a window parented into the
+  desktop receives no mouse input at all, so the pointer is forwarded and the
+  chips, library and preset browser all still work.
+
+- **Per-line artist attribution.** One cached pass works out who sings each
+  line, and the named dancer takes the mic. Credited artists and dancers are not
+  the same list — a registry duo is one credit and two dancers — so the mapping
+  matches on names and declines rather than guessing. **Not yet verified end to
+  end:** both configured providers are currently failing here (quota, and a
+  token without the Inference Providers scope). It starts working with no code
+  change once a key does.
+
+- **Kugou as a third synced lyric source.** After LRCLIB and NetEase, keyless.
+  Verified live: 77 correct cues for ALL THE TIME, 45 for Blinding Lights.
+
+### Changed
+
+- **The WASAPI item is dropped, because the problem does not exist.** The
+  roadmap called the screen-share prompt adoption blocker #3 and named a native
+  loopback addon as one of only two places native code earned its keep. That was
+  written before `main.js` grew a display-media handler which auto-approves with
+  no picker. Measured rather than argued about: a real cursor click on `♫`
+  through SendInput, then a full-screen photograph 1.2s later — no dialog
+  anywhere, capture already running.
+
+- **Musixmatch was checked and not adopted.** The API answers, but the free tier
+  returns a 30% excerpt of *plain* lyrics and no synced subtitles at all, which
+  is useless to an app that shows a whole song in time with it.
+
+### Known
+
+- The optional transcription pack is still not split out; the installer keeps
+  the 22.7MB ONNX runtime. It is a module-loading change rather than a packaging
+  one and cannot be verified without installing and transcribing a real song —
+  see NEXT_STEPS.md.
+- Attribution has never made a successful provider call on this machine.
+
 ## 0.20.0 — 2026-08-11
 
 The first release verified against a real song playing in the real app, start to
