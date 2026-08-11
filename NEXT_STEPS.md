@@ -1,6 +1,6 @@
 # Next steps
 
-Current as of **v0.17.0**. Written to be picked up cold — each item says what
+Current as of **v0.18.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
 
 > **Profile before optimising anything in the render loop.** 0.16.0's draw-call
@@ -12,26 +12,32 @@ is missing, why it was left, and what the first move is.
 
 ---
 
-## Where 0.16.0 landed
+## Where 0.18.0 landed
 
-Agreed after the 0.15.0 draw-cost audit, then cut as a release before the whole
-list was worked through. **Shipped in 0.16.0:**
+**Shipped in 0.18.0:**
 
-1. **Draw-cost payback** — see "Per-frame draw cost" below.
-2. **The `♫` prompt** — one-time and dismissible, per install.
+1. **Local playback with instant offline analysis** — open files or a folder and
+   the overlay plays them itself. The decoded samples are already in hand, so the
+   energy arc, the tempo and drop anticipation are all measured offline on play
+   one, with no `♫` capture and no permission prompt. Position comes from the
+   audio element, which is exact where SMTC is a 250ms poll.
+2. **A library panel worth opening** — card grid, search, badges for what is
+   known about each song, click to play.
+3. **Notification tray** — closes the old item 2. Only transcription finishing
+   raises an OS notification.
+4. **Wormhole + `soloLayer`** — a preset that draws its layer and the words and
+   suppresses every always-on extra.
+5. **Sprite draw 49 ms/s → 0.5 ms/s** — this is what closed the nameplate
+   `measureText` item; plates are now cached bitmaps keyed on
+   `label|fontPx|colour` (`sprites.js` `namePlate`).
 
-**Agreed but not built, so these carry into 0.17.0:**
+**Still carried forward:** artwork candidates / side poster (item 1 below).
 
-3. **Notification tray** — item 2 below.
-4. **Artwork candidates / side poster** — item 3 below.
-5. **More visual modes** — the layer system composes cleanly now, so each new
-   look is far cheaper than Vinyl and Stage were.
-
-Verification against real audio (item 0) was offered twice and declined both
-times. It is now **two releases deep**: 0.15.0 and 0.16.0 both rest entirely on
-harness and unit-test evidence, and both are in a published installer. This is
-the item most likely to be the source of an embarrassing bug report, and it
-costs one song.
+Verification against real audio (item 0) has now been offered four times and
+declined each time. It is **four releases deep**: 0.15.0 through 0.18.0 all rest
+entirely on harness and unit-test evidence, and all are in published installers.
+This is the item most likely to be the source of an embarrassing bug report, and
+it costs one song.
 
 ---
 
@@ -68,15 +74,25 @@ profiler self time.
 
 **Still open:**
 
-- **Sprite nameplates call `measureText` per dancer per frame** (~2.4/frame with
-  three dancers). The structure label caches its width; the nameplates do not.
-  Small, and the same fix.
 - **`(program)` dominates every profile** at ~850 ms/s against ~45 ms/s for all
   app JavaScript combined. That is native compositing of a full-screen
   transparent always-on-top window, and it confirms the standing note that
   rewriting the drawing in a native language would optimise something that is
   already not the constraint. Further JS micro-optimisation has little left to
   win.
+
+  **The corollary is the plan:** the only remaining lever big enough to matter is
+  *compositing fewer pixels*. Compact display modes (ROADMAP item 3) are
+  therefore the largest performance change available as well as the largest
+  adoption one — a taskbar strip composites a few percent of the surface a
+  fullscreen overlay does.
+
+- **The lyric loop writes layout-affecting style every frame.** `frame()` sets
+  `els.progressFill.style.width` on every vsync, for a bar a few hundred pixels
+  wide where sub-pixel changes are invisible. Throttling it to ~10 Hz and
+  quantising to 0.1% removes ~50 style invalidations per second on a surface
+  whose compositing is already the constraint. Small, but it is on the expensive
+  side of the ledger.
 
 ---
 
@@ -115,17 +131,7 @@ any UI exists. Roughly: `fetchArtwork` → `fetchArtworkCandidates` returning
 `extractArtPalette()`, so changing the poster recolours the whole app — probably
 desirable, but it should be a deliberate choice rather than a surprise.
 
-### 2. Notification tray
-
-System tray icon plus native notifications for background work.
-
-The data already exists: the renderer's `jobs` map (added in 0.14.0) is exactly
-the set of things worth notifying about. The work is a main-process `Tray`, an
-icon asset, and an IPC channel carrying job changes out of the renderer.
-
-**Decide:** which jobs deserve an OS-level notification versus the in-app chip
-only. Transcription finishing is genuinely useful; "finding lyrics" fires on
-every track and would be noise.
+### 2. Notification tray — **shipped in 0.18.0** (`src/main/tray.js`)
 
 ---
 
@@ -206,11 +212,18 @@ against a known BPM would settle it either way.
 
 ## Suggested order
 
-1. **Release hygiene** — nothing outstanding; v0.15.0 is current.
+1. **Release hygiene** — nothing outstanding; v0.18.0 is current and merged to
+   `main` (PRs #37, #38).
 2. **Play one song through with `♫` on** — settles item 0 and item "verify word
    alignment" in the same sitting, since both need exactly one full play with
-   capture enabled.
-3. **Notification tray** — smaller, and the job data already exists.
-4. **Side poster** — decide the candidates API first, then build the panel.
+   capture enabled. Local playback (0.18.0) makes this cheaper than it was: a
+   file needs no capture permission at all.
+3. **Butterchurn as a second engine + a preset system** — `ROADMAP.md` items 1–2,
+   the visual-variety gap. Guard the second WebGL2 context: `swirl.js` already
+   owns one, and both alive at once doubles GPU cost for no benefit. The engines
+   must be mutually exclusive, with the idle one torn down.
+4. **Compact display modes** — `ROADMAP.md` item 3, and the largest performance
+   change available; see "Still open" above.
+5. **Side poster** — decide the candidates API first, then build the panel.
    Note that Vinyl already puts the cover art on screen at full crispness, so
    part of the motivation for this may already be met.

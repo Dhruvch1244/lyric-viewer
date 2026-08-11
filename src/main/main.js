@@ -266,6 +266,13 @@ function createWindow() {
   window.setAlwaysOnTop(true, 'screen-saver');
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.once('ready-to-show', () => window.show());
+
+  // Hung off the window's own events rather than the toggle, so every path that
+  // hides the overlay — hotkey, tray, or anything added later — parks the render
+  // loop. See sendVisibility for why this is not free.
+  window.on('show', () => sendVisibility(true));
+  window.on('hide', () => sendVisibility(false));
+
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   return window;
 }
@@ -580,13 +587,30 @@ async function ensureDevanagari(key) {
   }
 }
 
-/** Register global hotkeys. */
+/**
+ * Tell the renderer whether it is on screen.
+ *
+ * This matters more than it looks. `backgroundThrottling` is deliberately off
+ * (see createWindow) so the visuals keep running while another app has focus —
+ * which also means Chromium will NOT throttle us when the window is hidden.
+ * Without this signal, Ctrl+Alt+H leaves the swirl, the galaxy, the sprites and
+ * the beat clock drawing at full rate into a window nobody can see, for as long
+ * as the overlay stays hidden.
+ *
+ * @param {boolean} visible Whether the overlay window is now on screen.
+ */
+function sendVisibility(visible) {
+  if (win && !win.isDestroyed()) win.webContents.send('overlay-visibility', { visible });
+}
+
 /** Show or hide the overlay. Shared by the hotkey and the tray. */
 function toggleWindow() {
   if (!win) return;
   if (win.isVisible()) win.hide();
   else win.show();
 }
+
+/** Register global hotkeys. */
 
 function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Alt+Left', () => setOffsetMs(activeOffsetMs() - 100));

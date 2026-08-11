@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('player', {
   onPresyncProgress: (cb) => ipcRenderer.on('presync-progress', (_e, data) => cb(data)),
   onTranscribeProgress: (cb) => ipcRenderer.on('transcribe-progress', (_e, data) => cb(data)),
   onIdle: (cb) => ipcRenderer.on('idle', () => cb()),
+  onVisibility: (cb) => ipcRenderer.on('overlay-visibility', (_e, data) => cb(data)),
   onOffset: (cb) => ipcRenderer.on('offset', (_e, data) => cb(data)),
 
   getOffset: () => ipcRenderer.invoke('get-offset'),

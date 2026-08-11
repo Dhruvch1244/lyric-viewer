@@ -233,6 +233,14 @@ let audioEnv = null;
    The lyric column, wash, glows, stars, and sprites all stay on. */
 let liteMode = false;
 
+/* Whether the overlay window is on screen. False after Ctrl+Alt+H or the tray's
+   hide. Both render loops park on this — see the onVisibility handler. */
+let overlayVisible = true;
+
+/* Last progress width actually written, in tenths of a percent. -1 forces the
+   next frame to write, which is what resets it on a track change. */
+let lastProgressPct = -1;
+
 /* --------------------------------------------------------------- sync core */
 
 function estimatePosition() {
@@ -809,6 +817,11 @@ function updateTranslation(index) {
 
 function frame() {
   try {
+    // Hidden overlay: nothing here has a visible effect, and the DOM writes
+    // below are the expensive kind. Position is derived from a timestamp, not
+    // accumulated, so skipping frames loses nothing.
+    if (!overlayVisible) return;
+
     const positionMs = estimatePosition();
     if (cues.length > 0) {
       setActive(findCueIndex(positionMs));
@@ -825,9 +838,19 @@ function frame() {
       updateHero();
     }
 
+    // Progress bar, quantised to 0.1% rather than written every vsync. The bar
+    // is a few hundred pixels wide, so a full-precision 60Hz write is ~50 style
+    // invalidations a second that resolve to the same pixels — on a surface
+    // whose compositing is already the dominant cost. Quantising is the whole
+    // throttle: 0.1% of a 3-minute track is 180ms, so this settles at ~5
+    // writes/s and scales with the track rather than needing a second timer.
     if (durationMs > 0) {
       const pct = Math.max(0, Math.min(100, (positionMs / durationMs) * 100));
-      els.progressFill.style.width = `${pct}%`;
+      const step = Math.round(pct * 10) / 10;
+      if (step !== lastProgressPct) {
+        lastProgressPct = step;
+        els.progressFill.style.width = `${step}%`;
+      }
     }
 
     // Build-up ramp: while a long instrumental gap approaches its next lyric,
@@ -2422,6 +2445,12 @@ function drawBackdrop(now) {
   // without repeating itself.
   let startedAt = 0;
   try {
+    // Hidden overlay: draw nothing at all. This is the single largest saving
+    // available while hidden — the swirl shader, the galaxy and the sprites all
+    // hang off this function. Placed above the cadence sampler so the parked
+    // frames are not mistaken for a stalling compositor.
+    if (!overlayVisible) return;
+
     // Presented-frame cadence, sampled before the throttle so it measures the
     // compositor rather than our own frame-skipping. Gaps over 100ms are the
     // window being occluded or the machine sleeping, not render load.
@@ -3694,6 +3723,7 @@ window.player.onTrack((track) => {
   flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
   durationMs = track.durationMs || 0;
+  lastProgressPct = -1;           // force the bar to redraw for the new song
   cuesLatin = [];
   cuesDevanagari = null;
   cuesEnglish = null;
@@ -3908,6 +3938,25 @@ window.player.onTranslation((payload) => {
   refreshButtons();
 });
 
+/*
+  Overlay visibility. Main sends this on every show/hide (Ctrl+Alt+H, the tray,
+  or anything added later). Because `backgroundThrottling` is off — required so
+  the visuals keep moving while another app has focus — Chromium will not park
+  us on its own, so hiding the window without this kept the entire visual stack
+  drawing into a surface nobody could see. The loops keep their rAF alive and
+  simply draw nothing, so resuming is instant and no state drifts.
+*/
+window.player.onVisibility(({ visible }) => {
+  overlayVisible = visible !== false;
+  // Resuming: forget the timestamps from before the pause so the first frame
+  // back does not see a multi-minute dt and jump every animation forward.
+  if (overlayVisible) {
+    lastBackNow = 0;
+    lastFrameAt = 0;
+    lastDrawnAt = 0;
+  }
+});
+
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
   flushHeatmap();                 // ...and its energy arc
@@ -3934,6 +3983,7 @@ window.player.onIdle(() => {
   els.artist.textContent = '';
   document.body.classList.remove('is-playing');
   els.progressFill.style.width = '0%';
+  lastProgressPct = -1;
   updateHero();
 });
 
