@@ -23,6 +23,7 @@ app.commandLine.appendSwitch('canvas-oop-rasterization');
 const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { fetchNeteaseSynced } = require('./netease');
+const { fetchKugouSynced } = require('./kugou');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
 const { correctTranscript, isCorrectionAvailable } = require('./correct');
@@ -553,6 +554,19 @@ async function loadLyricsFor(track) {
       result = await fetchNeteaseSynced(track);
     } catch (err) {
       console.warn('[netease]', err.message);
+    }
+    if (token !== lookupToken) return;
+  }
+
+  /* Third synced source, on the same terms. Kugou overlaps NetEase less than
+     two Chinese services might suggest — it carries a lot of Western dance and
+     pop with community timings — and it runs only when both of the others have
+     already missed, so it costs nothing on a song LRCLIB knows. */
+  if (!result) {
+    try {
+      result = await fetchKugouSynced(track);
+    } catch (err) {
+      console.warn('[kugou]', err.message);
     }
     if (token !== lookupToken) return;
   }

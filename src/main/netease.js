@@ -122,7 +122,7 @@ async function lyricFor(id) {
   to six and a fixed skip would either leave some in or eat a real opening line.
 */
 const CREDIT_PREFIX = /^\s*(作词|作曲|编曲|制作人|监制|混音|母带|和声|录音|吉他|贝斯|鼓|键盘|策划|出品|录音室|词|曲)\s*[:：]/;
-const CREDIT_LATIN = /^\s*(lyricist|composer|arranger|produced by|written by|mixing|mastering|recorded by)\s*[:：]/i;
+const CREDIT_LATIN = /^\s*(lyricist|composer|arranger|produced by|written by|mixing|mastering|recorded by|lyrics by|composed by|arranged by|producer|mixed by|mastered by)\s*[:：]/i;
 
 /**
  * Drop leading production-credit lines from a parsed LRC.
@@ -134,9 +134,25 @@ const CREDIT_LATIN = /^\s*(lyricist|composer|arranger|produced by|written by|mix
  * @param {Array<{timeMs: number, text: string}>} cues
  * @returns {Array<{timeMs: number, text: string}>}
  */
-function stripCredits(cues) {
+function stripCredits(cues, titleHint) {
   if (!Array.isArray(cues)) return [];
+
+  /*
+    Kugou (and some NetEase entries) open with a header line rather than a
+    credit: "ALL THE TIME - John Summit/The Chainsmokers/Ilsey". It matches no
+    credit prefix, so it used to survive and become the song's first lyric —
+    the words on screen at the moment the track starts.
+
+    Matched against the title we were looking for rather than by shape, because
+    "<something> - <something>" is a perfectly ordinary lyric line.
+  */
+  const hint = String(titleHint || '').trim().toLowerCase();
   let i = 0;
+  if (hint && cues.length > 0) {
+    const first = String((cues[0] && cues[0].text) || '').trim().toLowerCase();
+    if (first.startsWith(hint) && first.slice(hint.length).trim().startsWith('-')) i = 1;
+  }
+
   while (i < cues.length) {
     const text = (cues[i] && cues[i].text) || '';
     if (!CREDIT_PREFIX.test(text) && !CREDIT_LATIN.test(text)) break;
