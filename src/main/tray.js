@@ -27,10 +27,15 @@ class AppTray {
    * @param {object} opts
    * @param {() => void} opts.onToggleWindow
    * @param {() => void} opts.onQuit
+   * @param {() => void} [opts.onUpdateClick] check for, or install, an update
+   * @param {() => {label: string, enabled: boolean}} [opts.updateItem] current
+   *   update state, rendered as a menu item
    */
   constructor(opts) {
     this.onToggleWindow = opts.onToggleWindow;
     this.onQuit = opts.onQuit;
+    this.onUpdateClick = opts.onUpdateClick || null;
+    this.updateItem = opts.updateItem || null;
     /** @type {Tray|null} */
     this.tray = null;
     this.track = null;
@@ -97,11 +102,21 @@ class AppTray {
     const work = this.jobs.length ? this.jobs.map((j) => j.label).join(' · ') : '';
 
     this.tray.setToolTip(work ? `Lyric Overlay\n${now}\n${work}` : `Lyric Overlay\n${now}`);
+
+    // The update row is the only place auto-update surfaces. It is deliberately
+    // not a dialog: a modal about a failed check, during a song, is noise.
+    const update = this.updateItem ? this.updateItem() : null;
+
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: now, enabled: false },
       ...(work ? [{ label: work, enabled: false }] : []),
       { type: 'separator' },
       { label: 'Show / hide overlay', click: () => this.onToggleWindow() },
+      ...(update ? [{
+        label: update.label,
+        enabled: update.enabled,
+        click: () => this.onUpdateClick && this.onUpdateClick(),
+      }] : []),
       { type: 'separator' },
       { label: 'Quit', click: () => this.onQuit() },
     ]));

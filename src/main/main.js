@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { identify } = require('./tags');
 const { AppTray } = require('./tray');
+const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -81,6 +82,9 @@ let localPlaybackActive = false;
 
 /** @type {import('./tray').AppTray|null} */
 let appTray = null;
+
+/** @type {import('./updater').AppUpdater|null} */
+let appUpdater = null;
 
 /**
  * Identify a local audio file without reading all of it.
@@ -635,8 +639,26 @@ app.whenReady().then(() => {
   /* The overlay has no window chrome and hides on a hotkey, so once it is
      running nothing on screen says it exists. The tray fixes that and gives
      background work somewhere to report that is not inside a hidden HUD. */
-  appTray = new AppTray({ onToggleWindow: toggleWindow, onQuit: () => app.quit() });
+  /* Auto-update. Constructed before the tray so the tray's update row can read
+     its state on the very first render; started after, so the first status
+     change has somewhere to redraw into. */
+  appUpdater = new AppUpdater({ onChange: () => appTray && appTray.refresh() });
+
+  appTray = new AppTray({
+    onToggleWindow: toggleWindow,
+    onQuit: () => app.quit(),
+    /* One row that changes meaning with the state: it checks when idle, shows
+       progress while working, and restarts when something is waiting. */
+    updateItem: () => ({
+      label: describeUpdate(appUpdater.state),
+      enabled: isUpdateActionable(appUpdater.state),
+    }),
+    onUpdateClick: () => {
+      if (!appUpdater.installNow()) appUpdater.checkNow();
+    },
+  });
   appTray.start();
+  appUpdater.start(app.isPackaged);
 
   /* Background work, forwarded from the renderer's job map. Only the jobs in
      tray.js's NOTIFY_ON_DONE raise an OS notification when they finish. */
