@@ -7,6 +7,7 @@ const { identify } = require('./tags');
 const { AppTray } = require('./tray');
 const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
 const { PresetLibrary, ThumbnailStore } = require('./presetlib');
+const wallpaper = require('./wallpaper');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -288,7 +289,7 @@ function setOffsetMs(valueMs) {
  *
  * @returns {BrowserWindow}
  */
-function createWindow() {
+function createWindow(opaque = false) {
   const { bounds } = screen.getPrimaryDisplay();
 
   const window = new BrowserWindow({
@@ -297,11 +298,16 @@ function createWindow() {
     width: bounds.width,
     height: bounds.height,
     frame: false,
-    transparent: true,
+    /* Wallpaper mode needs an OPAQUE window. Transparency exists so the desktop
+       shows through an overlay; behind the desktop icons there is nothing to
+       show through, and a transparent window reparented there renders black.
+       Electron fixes `transparent` at construction, so the mode switch rebuilds
+       the window rather than toggling anything. */
+    transparent: !opaque,
     resizable: false,
     movable: false,
     skipTaskbar: false,
-    backgroundColor: '#00000000',
+    backgroundColor: opaque ? '#05060c' : '#00000000',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -314,8 +320,13 @@ function createWindow() {
     },
   });
 
-  window.setAlwaysOnTop(true, 'screen-saver');
-  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  /* Always-on-top is the opposite of wallpaper: the point there is to be behind
+     everything, and Windows will not keep a topmost window parented under the
+     desktop anyway. */
+  if (!opaque) {
+    window.setAlwaysOnTop(true, 'screen-saver');
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
   window.once('ready-to-show', () => window.show());
 
   // Hung off the window's own events rather than the toggle, so every path that
@@ -779,7 +790,7 @@ async function ensureDevanagari(key) {
 */
 
 /** @type {ReadonlyArray<'full'|'bar'|'strip'>} */
-const DISPLAY_MODES = ['full', 'bar', 'strip'];
+const DISPLAY_MODES = ['full', 'bar', 'strip', 'wallpaper'];
 
 /** Height of the taskbar strip, in CSS pixels. */
 const STRIP_HEIGHT = 54;
@@ -807,6 +818,10 @@ function boundsForMode(mode) {
       height: STRIP_HEIGHT,
     };
   }
+  /* The desktop is the whole display, taskbar included — the icons sit on all
+     of it, and so does what goes behind them. */
+  if (mode === 'wallpaper') return display.bounds;
+
   if (mode === 'bar') {
     const width = Math.min(880, Math.round(workArea.width * 0.62));
     const height = 132;
@@ -825,7 +840,50 @@ function boundsForMode(mode) {
  * @param {'full'|'bar'|'strip'} mode
  */
 function applyDisplayMode(mode) {
-  const next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+  let next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+
+  /*
+    Wallpaper mode is the one switch that cannot be done by resizing. The window
+    has to be opaque and not topmost, and `transparent` is fixed when a
+    BrowserWindow is constructed — so entering or leaving it rebuilds the
+    window. Everything that survives a rebuild already does: the settings, the
+    caches and the learned maps all live in main.
+
+    It can also simply fail. The WorkerW technique is undocumented and depends
+    on Explorer being in a state this can recognise, so a failure falls back to
+    the fullscreen overlay and says why, rather than leaving a window parented
+    nowhere.
+  */
+  const leavingWallpaper = displayMode === 'wallpaper' && next !== 'wallpaper';
+  const enteringWallpaper = next === 'wallpaper' && displayMode !== 'wallpaper';
+
+  if (enteringWallpaper && !wallpaper.isAvailable()) {
+    console.warn('[wallpaper]', wallpaper.unavailableReason());
+    next = 'full';
+  }
+
+  if ((enteringWallpaper || leavingWallpaper) && win && !win.isDestroyed()) {
+    const wantWallpaper = next === 'wallpaper';
+    if (leavingWallpaper) wallpaper.detach(win.getNativeWindowHandle());
+
+    const old = win;
+    win = createWindow(wantWallpaper);
+    old.destroy();
+
+    if (wantWallpaper) {
+      win.once('ready-to-show', () => {
+        const res = wallpaper.attach(win.getNativeWindowHandle());
+        if (!res.ok) {
+          console.warn('[wallpaper]', res.reason);
+          /* Recurse once through 'full', which rebuilds the window transparent
+             and topmost again. Guarded by displayMode already being
+             'wallpaper', so this cannot loop. */
+          applyDisplayMode('full');
+        }
+      });
+    }
+  }
+
   displayMode = next;
   settings.set('displayMode', next);
   if (!win || win.isDestroyed()) return;
@@ -1589,5 +1647,11 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (appUpdater) appUpdater.stop();
+  /* Leave the desktop as we found it. A window still parented into WorkerW
+     while the process dies is Explorer's problem to clean up, and it does not
+     always do so tidily. */
+  if (displayMode === 'wallpaper' && win && !win.isDestroyed()) {
+    wallpaper.detach(win.getNativeWindowHandle());
+  }
 });
 app.on('window-all-closed', () => app.quit());

@@ -1196,9 +1196,16 @@ let milkdropSeededFor = null;
 */
 let displayMode = 'full';
 
-/** Whether the current mode draws any backdrop at all. */
+/**
+ * Whether the current mode is too small to draw a backdrop.
+ *
+ * Named modes, not "anything but full". Wallpaper mode fills the whole display
+ * and wants every layer; a `!== 'full'` test would have classed it as compact
+ * and torn both GPU surfaces out of the page, leaving the desktop showing a
+ * lyric line on a flat colour.
+ */
 function isCompact() {
-  return displayMode !== 'full';
+  return displayMode === 'bar' || displayMode === 'strip';
 }
 
 /**
@@ -4658,10 +4665,15 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
-const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip' };
+const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop' };
 
 if (els.modeBtn) {
   els.modeBtn.addEventListener('click', () => {
+    /* Wallpaper is deliberately NOT in the cycle. It reparents and renders, but
+       on the Windows 11 desktop this was measured against it still draws OVER
+       the icons and the taskbar rather than behind them — and a mode you can
+       reach by clicking the size chip one time too many, which then hides your
+       taskbar, is worse than a mode that is not offered. See NEXT_STEPS.md. */
     const order = ['full', 'bar', 'strip'];
     const next = order[(order.indexOf(displayMode) + 1) % order.length];
     window.player.setDisplayMode(next);
@@ -4682,6 +4694,10 @@ window.player.onDisplayMode(({ mode }) => {
   if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
   document.body.classList.toggle('mode-bar', displayMode === 'bar');
   document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  /* Wallpaper draws the full layout — it IS the desktop, so there is as much
+     room as fullscreen. It is not compact, and must not take the compact path
+     that tears the GPU surfaces out of the page. */
+  document.body.classList.toggle('mode-wallpaper', displayMode === 'wallpaper');
   document.body.classList.toggle('mode-compact', isCompact());
 
   if (isCompact()) {
