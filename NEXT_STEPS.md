@@ -98,6 +98,34 @@ profiler self time.
 
 ## Requested, not built
 
+### The rest of the optional transcription pack
+
+0.19.0 took the safe half: `DirectML.dll` and `dxcompiler.dll` (35MB on disk)
+are no longer packaged, because `transcribe.js` documents from measurement that
+DirectML loads and then fails allocation. Installer 123.3MB → 114.2MB, with
+2.5MB of preset packs added in the same build.
+
+**The remaining 22.7MB is `onnxruntime.dll`, and it was not attempted.** Making
+it downloadable on first use is not a packaging change, it is a module-loading
+change, and every version of it is fragile:
+
+- `onnxruntime-node` loads its binding by a fixed relative path
+  (`../bin/napi-v6/win32/x64/onnxruntime_binding.node`), and the `.node` then
+  finds `onnxruntime.dll` through the Windows DLL search path — i.e. its own
+  directory. So the two must be downloaded together, into one directory, and
+  something has to make `@huggingface/transformers` resolve *that* copy instead
+  of the packaged one (pre-seeding `require.cache`, or patching `module.paths`).
+- Writing into the app directory happens to work today only because
+  `perMachine: false` puts the install under `%LOCALAPPDATA%`. A user who takes
+  `allowToChangeInstallationDirectory` and picks `Program Files` would need
+  elevation, and it would fail after the fact rather than at install time.
+- A downloaded, unsigned native DLL is a routine antivirus false positive.
+
+None of that is unworkable, but none of it can be verified without building an
+installer, installing it, and transcribing a song — and if it is wrong,
+transcription is dead for everyone rather than merely large. It needs one real
+end-to-end run before it ships, not a code review.
+
 ### 0. Verify the new modes against real audio
 
 0.15.0's visuals were built and captured through an Electron screenshot harness
