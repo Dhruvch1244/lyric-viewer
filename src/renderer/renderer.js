@@ -55,6 +55,8 @@ const els = {
   trStop: document.getElementById('tr-stop'),
   trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
+  welcome: document.getElementById('welcome'),
+  welcomeClose: document.getElementById('welcome-close'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -3716,6 +3718,45 @@ async function enableAudio() {
   never raised again.
 */
 
+/* ------------------------------------------------------------- first run */
+/*
+  One card, once per install. A new user otherwise gets a transparent overlay
+  and a row of single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do —
+  and that row is invisible until the cursor moves, so many never find it.
+
+  Shown immediately rather than waiting for a track: the question it answers is
+  "what is this and what do I do now", which is at its most urgent before
+  anything is playing. That is the opposite of the capture nudge below, which
+  waits 20s into a song precisely because it is interrupting something that is
+  already going well.
+*/
+const WELCOME_KEY = 'welcomeSeen';
+
+function closeWelcome() {
+  if (els.welcome) els.welcome.hidden = true;
+  try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ }
+}
+
+function maybeShowWelcome() {
+  if (!els.welcome) return;
+  try {
+    if (localStorage.getItem(WELCOME_KEY) === '1') return;
+  } catch {
+    // Storage unavailable — show it. A card shown twice is a far smaller
+    // failure than a first-time user who never learns what the chips do.
+  }
+  els.welcome.hidden = false;
+}
+
+if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
+
+/* Esc also dismisses it. Scoped to "while the card is up" so this does not
+   become a global key handler competing with the panels' own Esc bindings. */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (els.welcome && !els.welcome.hidden) closeWelcome();
+});
+
 /** Playback needed before asking, so the prompt does not land during startup. */
 const CAPTURE_NUDGE_AFTER_MS = 20000;
 const CAPTURE_NUDGE_KEY = 'captureNudgeAnswered';
@@ -3745,6 +3786,9 @@ function closeCaptureNudge() {
  */
 function maybeShowCaptureNudge(positionMs) {
   if (captureNudgeVisible || audioEnabled || !els.captureNudge) return;
+  // Never stack the two cards. A first-time user who has not dismissed the
+  // welcome yet is not ready for a second thing to read.
+  if (els.welcome && !els.welcome.hidden) return;
   if (!currentTrack || positionMs < CAPTURE_NUDGE_AFTER_MS) return;
   if (captureNudgeAnswered()) return;
   captureNudgeVisible = true;
@@ -4826,3 +4870,7 @@ window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
+
+// Last, so a first-time user sees the card over a running backdrop rather than
+// over a blank window mid-boot.
+maybeShowWelcome();

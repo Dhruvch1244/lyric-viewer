@@ -158,6 +158,33 @@
               title="Don't show this again">✕</button>
     </div>
 
+    <!-- First run. A new user gets a transparent overlay and a row of
+         single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do — and
+         the row itself is invisible until the cursor moves, so many never find
+         it at all. One dismissible card, once per install, naming the chips
+         that are not self-evident and the two hotkeys. Deliberately NOT a
+         tour: anything longer gets dismissed unread. -->
+    <section id="welcome" class="welcome" hidden aria-label="Welcome">
+      <h2 class="welcome__title">Lyric Overlay</h2>
+      <p class="welcome__lede">
+        Play something in any app and the words follow. Move the mouse to bring
+        up the controls along the bottom.
+      </p>
+      <ul class="welcome__keys">
+        <li><b>♫</b> learns the song — its energy, its tempo, a heads-up before the drop</li>
+        <li><b>◈</b> changes the look · <b>◐</b> how much of your desktop shows through</li>
+        <li><b>अ</b> script · <b>EN</b> translation · <b>⚡</b> lite mode for a steadier frame rate</li>
+        <li><b>♪ Library</b> your songs — add files or a folder and play them here</li>
+      </ul>
+      <ul class="welcome__keys welcome__keys--hotkeys">
+        <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>H</kbd> hide or show the overlay</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd> nudge the lyric timing</li>
+      </ul>
+      <div class="welcome__row">
+        <button id="welcome-close" class="chip" type="button">Got it</button>
+      </div>
+    </section>
+
     <script src="presets.js"></script>
     <script src="swirl.js"></script>
     <script src="sprites.js"></script>
