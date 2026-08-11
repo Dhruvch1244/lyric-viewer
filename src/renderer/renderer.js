@@ -55,6 +55,8 @@ const els = {
   trStop: document.getElementById('tr-stop'),
   trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
+  compactLine: document.getElementById('compact-line'),
+  modeBtn: document.getElementById('btn-mode'),
   posterBtn: document.getElementById('btn-poster'),
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
@@ -592,6 +594,13 @@ function setActive(index) {
   }
   activeIndex = index;
 
+  /* The compact modes have no scrolling column, so this one element is the
+     whole lyric display. Written here rather than every frame — the line only
+     changes when the active cue does. */
+  if (els.compactLine) {
+    els.compactLine.textContent = index >= 0 && cues[index] ? (cues[index].text || '') : '';
+  }
+
   // Rotate which dancer is "on the mic". We have no per-line artist attribution
   // from the lyric source, so collaborators simply take turns as the line
   // advances — the active one dances, the rest idle along the bottom. The dancer
@@ -1087,6 +1096,25 @@ let lastMilkdropSwitchAt = 0;
 
 /** Last size sent across the frame boundary, so resizes are not sent per frame. */
 let milkdropSize = '';
+
+/* ------------------------------------------------------------ display mode */
+/*
+  'full' is the overlay this app has always been. 'bar' is a small floating
+  panel and 'strip' is a click-through line along the bottom edge — both exist
+  because taking over the screen is the single biggest reason someone tries the
+  app once and stops.
+
+  Neither compact mode draws a visualiser. That is not a simplification for its
+  own sake: the whole saving is compositing fewer pixels, and a full-screen
+  WebGL context inside a 54px window would compose the same surface it always
+  did while showing almost none of it.
+*/
+let displayMode = 'full';
+
+/** Whether the current mode draws any backdrop at all. */
+function isCompact() {
+  return displayMode !== 'full';
+}
 
 /**
  * Minimum seconds between beat-synced preset changes.
@@ -2737,6 +2765,10 @@ function drawBackdrop(now) {
     // frames are not mistaken for a stalling compositor.
     if (!overlayVisible) return;
 
+    // Compact modes have no backdrop: there is no room for one, and the point
+    // of them is to composite fewer pixels. Everything below this line draws.
+    if (isCompact()) return;
+
     // Presented-frame cadence, sampled before the throttle so it measures the
     // compositor rather than our own frame-skipping. Gaps over 100ms are the
     // window being occluded or the machine sleeping, not render load.
@@ -4331,6 +4363,56 @@ window.player.onTranslation((payload) => {
   drawing into a surface nobody could see. The loops keep their rAF alive and
   simply draw nothing, so resuming is instant and no state drifts.
 */
+/*
+  Display mode. Main owns the window geometry and tells us what it just became;
+  the renderer's job is to look right at that size and to stop paying for what
+  is no longer visible.
+*/
+/** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
+const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip' };
+
+if (els.modeBtn) {
+  els.modeBtn.addEventListener('click', () => {
+    const order = ['full', 'bar', 'strip'];
+    const next = order[(order.indexOf(displayMode) + 1) % order.length];
+    window.player.setDisplayMode(next);
+  });
+}
+
+window.player.onDisplayMode(({ mode }) => {
+  displayMode = mode || 'full';
+  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
+  document.body.classList.toggle('mode-bar', displayMode === 'bar');
+  document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  document.body.classList.toggle('mode-compact', isCompact());
+
+  if (isCompact()) {
+    /*
+      Take both GPU surfaces and the 2D canvas out of the page.
+
+      Hiding them is not enough and never was: an untouched full-screen canvas
+      is still a compositor layer blended into every frame, and the MilkDrop
+      frame keeps its WebGL2 context, render targets and compiled preset
+      resident until it is actually reloaded. In a 54px window that is the
+      entire cost of fullscreen for none of the picture.
+    */
+    if (window.MilkDrop) window.MilkDrop.destroy();
+    if (els.milkdrop) els.milkdrop.hidden = true;
+    activeEngine = 'swirl';
+    els.swirl.style.display = 'none';
+    els.canvas.style.display = 'none';
+    swirlHidden = true;
+    canvasHidden = true;
+  } else {
+    els.swirl.style.display = '';
+    els.canvas.style.display = '';
+    swirlHidden = false;
+    canvasHidden = false;
+    swirlScale = 0;          // re-issue a resize at the new window size
+    resizeCanvas();
+  }
+});
+
 window.player.onVisibility(({ visible }) => {
   overlayVisible = visible !== false;
   // Resuming: forget the timestamps from before the pause so the first frame

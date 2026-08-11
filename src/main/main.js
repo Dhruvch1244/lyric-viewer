@@ -87,6 +87,9 @@ let appTray = null;
 /** @type {import('./updater').AppUpdater|null} */
 let appUpdater = null;
 
+/** Current display size: fullscreen overlay, floating bar, or taskbar strip. */
+let displayMode = 'full';
+
 /**
  * Identify a local audio file without reading all of it.
  *
@@ -618,6 +621,92 @@ async function ensureDevanagari(key) {
   }
 }
 
+/* ------------------------------------------------------------ display modes */
+/*
+  Three sizes of the same app.
+
+  This is the single biggest adoption problem the app has — it takes over the
+  screen or it does nothing, and every competitor offers a small always-on mode,
+  so people try it once and stop. It is also, unexpectedly, the largest
+  performance change available: profiling puts `(program)` at ~850 ms/s against
+  ~45 ms/s for all app JavaScript combined, and that is native compositing of a
+  full-screen transparent always-on-top window. The only lever big enough to
+  matter is compositing fewer pixels, and a taskbar strip composites a few
+  percent of what fullscreen does.
+
+  So the modes are a feature and a fix at the same time. The visualiser stays in
+  `full`; the compact modes are a lyric line, and the renderer drops both WebGL
+  contexts and the 2D canvas when it is in one.
+*/
+
+/** @type {ReadonlyArray<'full'|'bar'|'strip'>} */
+const DISPLAY_MODES = ['full', 'bar', 'strip'];
+
+/** Height of the taskbar strip, in CSS pixels. */
+const STRIP_HEIGHT = 54;
+
+/**
+ * Window geometry for a display mode.
+ *
+ * Uses `workArea`, not `bounds`, for the compact modes: `bounds` includes the
+ * space behind the taskbar, so a strip positioned against the bottom of it
+ * would sit underneath the taskbar and be invisible. Fullscreen deliberately
+ * still uses `bounds`, because covering the taskbar is the point there.
+ *
+ * @param {'full'|'bar'|'strip'} mode
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function boundsForMode(mode) {
+  const display = screen.getPrimaryDisplay();
+  const { workArea } = display;
+
+  if (mode === 'strip') {
+    return {
+      x: workArea.x,
+      y: workArea.y + workArea.height - STRIP_HEIGHT,
+      width: workArea.width,
+      height: STRIP_HEIGHT,
+    };
+  }
+  if (mode === 'bar') {
+    const width = Math.min(880, Math.round(workArea.width * 0.62));
+    const height = 132;
+    return {
+      x: workArea.x + Math.round((workArea.width - width) / 2),
+      y: workArea.y + workArea.height - height - Math.round(workArea.height * 0.06),
+      width,
+      height,
+    };
+  }
+  return display.bounds;
+}
+
+/**
+ * Resize the overlay into a display mode and tell the renderer to match.
+ * @param {'full'|'bar'|'strip'} mode
+ */
+function applyDisplayMode(mode) {
+  const next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+  displayMode = next;
+  settings.set('displayMode', next);
+  if (!win || win.isDestroyed()) return;
+
+  win.setBounds(boundsForMode(next));
+
+  /*
+    The strip is click-through, the others are not.
+
+    A thin bar pinned along the bottom edge sits exactly where taskbar buttons
+    and window edges are, so an opaque one would eat clicks meant for other
+    apps all day — which is the difference between something you leave on and
+    something you close. `forward: true` keeps hover working so the app can
+    still react to the pointer without consuming the click.
+  */
+  win.setIgnoreMouseEvents(next === 'strip', { forward: true });
+
+  send('display-mode', { mode: next });
+}
+
 /**
  * Tell the renderer whether it is on screen.
  *
@@ -648,6 +737,13 @@ function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Alt+Right', () => setOffsetMs(activeOffsetMs() + 100));
   globalShortcut.register('CommandOrControl+Alt+0', () => setOffsetMs(0));
   globalShortcut.register('CommandOrControl+Alt+H', toggleWindow);
+  // Cycle fullscreen → floating bar → taskbar strip. A hotkey as well as a chip
+  // because the strip is click-through and the bar has no room for the HUD, so
+  // in two of the three modes the chip is not reachable.
+  globalShortcut.register('CommandOrControl+Alt+M', () => {
+    const i = DISPLAY_MODES.indexOf(displayMode);
+    applyDisplayMode(DISPLAY_MODES[(i + 1) % DISPLAY_MODES.length]);
+  });
 }
 
 app.whenReady().then(() => {
@@ -686,6 +782,18 @@ app.whenReady().then(() => {
   });
   appTray.start();
   appUpdater.start(app.isPackaged);
+
+  /* Restore the last display mode once the window exists. Applied here rather
+     than in createWindow so the renderer is listening for the event. */
+  win.webContents.once('did-finish-load', () => {
+    applyDisplayMode(settings.get('displayMode') || 'full');
+  });
+
+  ipcMain.handle('set-display-mode', (_e, mode) => {
+    applyDisplayMode(mode);
+    return { status: 'ok', mode: displayMode };
+  });
+  ipcMain.handle('get-display-mode', () => ({ mode: displayMode, modes: DISPLAY_MODES }));
 
   /* Background work, forwarded from the renderer's job map. Only the jobs in
      tray.js's NOTIFY_ON_DONE raise an OS notification when they finish. */

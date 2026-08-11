@@ -705,6 +705,122 @@ body.lang-devanagari .word--active {
   .nudge { animation: none; }
 }
 
+/* ---- Compact display modes ---- */
+/*
+  `bar` is a small floating panel; `strip` is a click-through line along the
+  bottom edge. Both exist because taking over the whole screen is the single
+  biggest reason someone tries this app once and stops.
+
+  Everything that assumes a full screen is removed rather than shrunk. A
+  scrolling lyric column, a hero title and a row of twenty chips do not have a
+  small version — trying to give them one produces something unreadable in a
+  54px window, and the panels (library, cover art, key box) cannot be opened
+  from a click-through strip at all.
+*/
+
+.mode-compact .stage,
+.mode-compact .np-hero,
+.mode-compact .meters,
+.mode-compact .hud,
+.mode-compact .library,
+.mode-compact .poster,
+.mode-compact .welcome,
+.mode-compact .nudge,
+.mode-compact #swirl,
+.mode-compact #milkdrop,
+.mode-compact #backdrop {
+  display: none !important;
+}
+
+/* The whole UI in compact mode: what is playing, and the line being sung. */
+.mode-compact .topbar {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0 1rem;
+  background: color-mix(in srgb, #05060c 82%, transparent);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.mode-bar .topbar {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 1.2rem;
+}
+
+/* A thin reactive accent instead of a visualiser — the one piece of the
+   backdrop that still reads at this size and costs a single element. */
+.mode-compact .topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-live, var(--accent, #e94560)),
+    transparent
+  );
+  opacity: 0.75;
+}
+
+.mode-compact .now-playing {
+  flex: none;
+  max-width: 34%;
+  min-width: 0;
+}
+
+.mode-bar .now-playing { max-width: 100%; }
+
+.mode-compact .np-title,
+.mode-compact .np-artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Only the compact modes use this element; in fullscreen the scrolling column
+   is the lyric and this would be a duplicate of it. */
+.compact-line { display: none; }
+
+.mode-compact .status { display: none; }
+
+.mode-compact .compact-line {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.mode-bar .compact-line {
+  flex: none;
+  width: 100%;
+  text-align: left;
+  font-size: 1.4rem;
+}
+
+.mode-compact .transport {
+  position: static;
+  flex: none;
+  transform: none;
+}
+
 /* ---- First run ---- */
 /* Centred rather than tucked in a corner like .nudge: this one is the first
    thing a new user sees and has to be found, where the capture nudge is an
