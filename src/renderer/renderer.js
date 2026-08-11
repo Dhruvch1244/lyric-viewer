@@ -1913,7 +1913,10 @@ function drawWormhole(w, h, dt, life) {
       long before they leave the viewport.
     */
     const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 3.6);
-    const alpha = (0.07 + z * 0.30) * fade * (0.55 + life * 0.6);
+    // Brighter than the transparent-background version needed. Over a bare
+    // desktop the smoke only had to exist; over the (thinned) field it has to
+    // win, and `lighter` compositing against a lit background costs contrast.
+    const alpha = (0.10 + z * 0.44) * fade * (0.55 + life * 0.6);
     if (alpha < 0.01) continue;
 
     /*
@@ -3127,8 +3130,16 @@ function drawBackdrop(now) {
       so it runs at full strength; here the tunnel is, and at full strength the
       shader simply swallowed it — the rings were technically drawn and
       practically invisible.
+
+      0.42 was not nearly hard enough, which only became visible against real
+      music: at the default "vivid" level that still leaves the field at 0.35,
+      and a screenshot of the wormhole over a real track showed the shader and
+      no tunnel at all. The brief experiment with removing the field entirely
+      (`transparentBg`) fixed the tunnel and lost the depth — smoke needs
+      something to be smoke *in*. 0.14 keeps a background that reads as one
+      without competing with the layer it is supposed to sit behind.
     */
-    const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.42 : 1);
+    const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.14 : 1);
     if (!clearBg) {
       renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
         activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
