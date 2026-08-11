@@ -94,6 +94,7 @@
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
         <button id="btn-mode" class="chip" type="button" title="Size — fullscreen / bar / strip (Ctrl+Alt+M)">▭ Full</button>
+        <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
         <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
@@ -149,6 +150,24 @@
       </header>
       <div id="library-grid" class="library__grid"></div>
       <p id="library-empty" class="library__empty" hidden></p>
+    </section>
+
+    <!-- MilkDrop preset browser. 0.19.0 shipped 395 presets reachable only by
+         waiting for a drop on a 42-second cooldown, which is a catalogue you
+         cannot actually use. Search it, click to switch instantly, and pin one
+         to the song so it comes back next play. -->
+    <section id="milkdrop-panel" class="mdp" hidden aria-label="MilkDrop presets">
+      <header class="mdp__bar">
+        <h2 class="mdp__title">MilkDrop</h2>
+        <input id="mdp-search" class="mdp__search" type="search"
+               placeholder="Search 395 presets…" spellcheck="false" />
+        <button id="mdp-random" class="chip chip--muted" type="button" title="Surprise me">🎲</button>
+        <button id="mdp-pin" class="chip chip--muted" type="button"
+                title="Keep this preset for this song" aria-pressed="false">📌</button>
+        <button id="mdp-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+      </header>
+      <p id="mdp-status" class="mdp__status" role="status"></p>
+      <div id="mdp-list" class="mdp__list"></div>
     </section>
 
     <!-- Cover art picker. The automatic search returns a single winner and is

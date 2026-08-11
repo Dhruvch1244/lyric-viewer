@@ -1226,6 +1226,135 @@ body.keybox-open .hud {
    itself inside a HUD that stays invisible until the cursor moves. Songs are
    the point of this app; they deserve more than a footnote. */
 
+/* ---- MilkDrop preset browser ---- */
+/* A side panel like the cover-art picker, for the same reason: you are judging
+   a candidate against what is currently on screen behind it. */
+
+.mdp {
+  position: fixed;
+  top: 8vh;
+  bottom: 14vh;
+  right: 3vw;
+  z-index: 20;
+  width: min(24rem, 44vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.1rem 1.2rem;
+  background: color-mix(in srgb, #05060c 88%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.mdp[hidden] { display: none; }
+
+/* Two explicit rows rather than wrapping. The panel is narrow, and a title plus
+   a search field plus three chips wrapped unpredictably — leaving the close
+   button stranded alone on a second line. */
+.mdp__bar {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mdp__bar .mdp__search {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.mdp__title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+.mdp__search {
+  min-width: 0;
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+}
+
+.mdp__search::placeholder { color: var(--ink-dim); }
+
+.mdp__status {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+
+.mdp__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.mdp__item {
+  text-align: left;
+  font: inherit;
+  font-size: 0.76rem;
+  line-height: 1.3;
+  color: var(--ink-mid);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  cursor: pointer;
+  /* Preset names are long and idiosyncratic ("Rovastar + Geiss - Hurricane
+     Nightmare (Posterize Mix)"); wrapping beats truncating, because the
+     distinguishing part is usually at the end. */
+  overflow-wrap: anywhere;
+}
+
+.mdp__item:hover,
+.mdp__item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--ink);
+  outline: none;
+}
+
+.mdp__item[aria-current="true"] {
+  color: var(--ink);
+  border-color: var(--accent-live, var(--accent, #e94560));
+  background: color-mix(in srgb, var(--accent, #e94560) 14%, transparent);
+}
+
+/*
+  Legibility scrim for the lyric column, only while the MilkDrop engine is
+  drawing. The swirl field is soft and low-contrast by design; MilkDrop presets
+  are neither, and white text over a bright fractal is unreadable in a way the
+  app's own visuals never were.
+*/
+body.engine-milkdrop .stage::before {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 28%;
+  height: 44%;
+  pointer-events: none;
+  z-index: -1;
+  background: radial-gradient(
+    ellipse 70% 60% at 50% 50%,
+    rgba(0, 0, 0, 0.62),
+    rgba(0, 0, 0, 0.28) 55%,
+    transparent 78%
+  );
+}
+
 /* ---- Cover art picker ---- */
 /* A side panel, not a full-screen takeover like the library: the whole point is
    comparing a candidate against the cover currently on screen behind it. */

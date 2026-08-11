@@ -55,6 +55,14 @@ const els = {
   trStop: document.getElementById('tr-stop'),
   trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
+  mdBtn: document.getElementById('btn-milkdrop'),
+  mdPanel: document.getElementById('milkdrop-panel'),
+  mdSearch: document.getElementById('mdp-search'),
+  mdList: document.getElementById('mdp-list'),
+  mdStatus: document.getElementById('mdp-status'),
+  mdPin: document.getElementById('mdp-pin'),
+  mdRandom: document.getElementById('mdp-random'),
+  mdClose: document.getElementById('mdp-close'),
   compactLine: document.getElementById('compact-line'),
   modeBtn: document.getElementById('btn-mode'),
   posterBtn: document.getElementById('btn-poster'),
@@ -1097,6 +1105,15 @@ let lastMilkdropSwitchAt = 0;
 /** Last size sent across the frame boundary, so resizes are not sent per frame. */
 let milkdropSize = '';
 
+/* Which preset SHOULD be showing, and why. See the precedence note in
+   applyEngine — one place owns this, or the engine fights itself every frame.
+   `milkdropChosen` is a session choice (a click or the dice) and is not
+   persisted; a pin is. */
+let milkdropWanted = null;
+let milkdropChosen = null;
+/** The visual preset id `milkdropWanted` was seeded from. */
+let milkdropSeededFor = null;
+
 /* ------------------------------------------------------------ display mode */
 /*
   'full' is the overlay this app has always been. 'bar' is a small floating
@@ -2103,18 +2120,26 @@ function applyEngine(preset, now, dt, w, h) {
 
   if (wanted !== activeEngine) {
     activeEngine = wanted;
+    document.body.classList.toggle('engine-milkdrop', wanted === 'milkdrop');
+    if (els.mdBtn) els.mdBtn.hidden = wanted !== 'milkdrop';
     if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
       window.MilkDrop.resize(w, h);
       milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
+      // A preset pinned to this song outranks the preset's own starting point —
+      // that is the whole reason for pinning one.
       // Cut rather than blend on the way in: there is nothing to blend FROM,
       // and a fade from black reads as the app being slow to start.
-      milkdropName = window.MilkDrop.loadPreset(preset.milkdrop, 0);
+      milkdropSeededFor = preset.id;
+      milkdropChosen = null;
+      milkdropWanted = preset.milkdrop;
+      milkdropName = window.MilkDrop.loadPreset(pinnedMilkdrop() || milkdropWanted, 0);
       lastMilkdropSwitchAt = now;
     } else {
       window.MilkDrop.destroy();
       els.milkdrop.hidden = true;
+      closeMilkdropPanel();
     }
   }
 
@@ -2129,9 +2154,31 @@ function applyEngine(preset, now, dt, w, h) {
   */
   if (!window.MilkDrop.isSupported()) return;
 
-  // A preset change within the same engine (Milkdrop → Milkdrop Soft).
-  if (preset.milkdrop && preset.milkdrop !== milkdropName && now - lastMilkdropSwitchAt > 500) {
-    milkdropName = window.MilkDrop.loadPreset(preset.milkdrop);
+  /*
+    ONE place decides which preset should be showing, and it is `milkdropWanted`.
+
+    Getting this wrong is easy and was: the first version compared the live
+    preset against `preset.milkdrop` every frame, so anything that changed the
+    preset by another route — a click in the browser, the dice, the beat-synced
+    cycle — was reverted on the very next frame. Browsing the catalogue was
+    impossible unless you pinned first, which rather defeats browsing.
+
+    Precedence: a pin (this song, persisted) beats a session choice (a click or
+    the dice) beats the visual preset's own starting point.
+  */
+  const pinned = pinnedMilkdrop();
+  if (preset.id !== milkdropSeededFor) {
+    // The visual preset itself changed (MilkDrop → MilkDrop II), so its
+    // starting point is the new intent and any session choice is stale.
+    milkdropSeededFor = preset.id;
+    milkdropChosen = null;
+    milkdropWanted = preset.milkdrop;
+  }
+  const want = pinned || milkdropChosen || milkdropWanted;
+
+  if (want && want !== milkdropName && now - lastMilkdropSwitchAt > 500) {
+    // An explicit choice cuts; an automatic one blends.
+    milkdropName = window.MilkDrop.loadPreset(want, (pinned || milkdropChosen) ? 0 : 2.7);
     lastMilkdropSwitchAt = now;
   }
 
@@ -2144,11 +2191,15 @@ function applyEngine(preset, now, dt, w, h) {
     develop, so cutting on every drop in a four-on-the-floor track would be a
     strobe rather than a sequence.
   */
-  if (dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
+  if (!pinned && !milkdropChosen
+      && dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
     const all = window.MilkDrop.names();
     if (all.length > 1) {
       const i = all.indexOf(milkdropName);
-      milkdropName = window.MilkDrop.loadPreset(all[(i + 1) % all.length]);
+      // Recorded as the new intent, not just loaded — otherwise the block above
+      // reverts it on the next frame.
+      milkdropWanted = all[(i + 1) % all.length];
+      milkdropName = window.MilkDrop.loadPreset(milkdropWanted);
       lastMilkdropSwitchAt = now;
       setStatus(`MilkDrop — ${milkdropName}`);
     }
@@ -3950,6 +4001,7 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (els.welcome && !els.welcome.hidden) closeWelcome();
+  else if (els.mdPanel && !els.mdPanel.hidden) closeMilkdropPanel();
   else if (els.poster && !els.poster.hidden) closePoster();
 });
 
@@ -4170,6 +4222,12 @@ window.player.onTrack((track) => {
   artworkChosen = false;
   artworkChosenUrl = null;
   closePoster();
+  // The browser lists the same catalogue, but its "pinned" state and current
+  // row belong to the song that just ended. A session choice ends with it too;
+  // a pin is per song and is re-read for the new one.
+  closeMilkdropPanel();
+  milkdropChosen = null;
+  milkdropSeededFor = null;
   cuesLatin = [];
   cuesDevanagari = null;
   cuesEnglish = null;
@@ -5077,6 +5135,134 @@ if (els.posterAuto) {
     artworkChosenUrl = null;
     for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
     els.posterStatus.textContent = 'back to the automatic pick';
+  });
+}
+
+/* -------------------------------------------------- MilkDrop preset browser */
+/*
+  0.19.0 shipped 395 presets and no way to reach them: two named entry points,
+  and everything else only by waiting for a drop on a 42-second cooldown. A
+  catalogue you cannot open is not a catalogue.
+
+  Pinning uses the same per-track shape as the visual-look override, so a
+  preset you liked on a song comes back next play. It is stored separately from
+  `visualLooks` because it answers a different question — that one picks the
+  LOOK (which may not even be a MilkDrop look), this one picks the preset
+  within it.
+*/
+
+/** How many rows to render at once. The catalogue is ~395 and search narrows it. */
+const MDP_PAGE = 120;
+
+/** Per-track MilkDrop preset pins, keyed like every other per-track override. */
+function readMilkdropPins() {
+  try { return JSON.parse(localStorage.getItem('milkdropPins') || '{}') || {}; }
+  catch { return {}; }
+}
+
+function writeMilkdropPin(name) {
+  if (!currentTrack) return;
+  const pins = readMilkdropPins();
+  const key = trackLookKey(currentTrack);
+  if (name) pins[key] = name;
+  else delete pins[key];
+  try { localStorage.setItem('milkdropPins', JSON.stringify(pins)); } catch { /* ignore */ }
+}
+
+/** The pinned preset for the current track, if any. */
+function pinnedMilkdrop() {
+  if (!currentTrack) return null;
+  return readMilkdropPins()[trackLookKey(currentTrack)] || null;
+}
+
+function closeMilkdropPanel() {
+  if (els.mdPanel) els.mdPanel.hidden = true;
+  if (els.mdBtn) els.mdBtn.setAttribute('aria-pressed', 'false');
+}
+
+function openMilkdropPanel() {
+  if (!els.mdPanel || !window.MilkDrop) return;
+  els.mdPanel.hidden = false;
+  document.body.classList.add('show-cursor');
+  els.mdBtn.setAttribute('aria-pressed', 'true');
+  renderMilkdropList();
+  if (els.mdSearch) els.mdSearch.focus();
+}
+
+/** Redraw the list against the current search text. */
+function renderMilkdropList() {
+  if (!els.mdList) return;
+  const all = window.MilkDrop.names();
+  const q = (els.mdSearch && els.mdSearch.value || '').trim().toLowerCase();
+  const matches = q ? all.filter((n) => n.toLowerCase().includes(q)) : all;
+  const shown = matches.slice(0, MDP_PAGE);
+  const current = window.MilkDrop.current();
+
+  els.mdStatus.textContent = matches.length > shown.length
+    ? `${matches.length} presets · showing ${shown.length}, keep typing to narrow`
+    : `${matches.length} preset${matches.length === 1 ? '' : 's'}`;
+
+  els.mdList.replaceChildren(...shown.map((name) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'mdp__item';
+    row.textContent = name;
+    row.title = name;
+    if (name === current) row.setAttribute('aria-current', 'true');
+    row.addEventListener('click', () => {
+      // Recorded as the session choice, not merely loaded — applyEngine owns
+      // what should be showing and would otherwise revert this next frame.
+      // Cut rather than blend: when someone is browsing they want to see the
+      // preset they clicked, not a three-second cross-fade into it.
+      milkdropChosen = name;
+      milkdropName = window.MilkDrop.loadPreset(name, 0);
+      lastMilkdropSwitchAt = performance.now();
+      for (const el of els.mdList.children) el.removeAttribute('aria-current');
+      row.setAttribute('aria-current', 'true');
+      updateMilkdropPinChip();
+    });
+    return row;
+  }));
+}
+
+/** The pin chip reflects whether the preset on screen is the pinned one. */
+function updateMilkdropPinChip() {
+  if (!els.mdPin) return;
+  const pinned = pinnedMilkdrop();
+  const on = Boolean(pinned && pinned === window.MilkDrop.current());
+  els.mdPin.setAttribute('aria-pressed', String(on));
+  els.mdPin.title = on
+    ? 'Pinned to this song — click to unpin'
+    : 'Keep this preset for this song';
+}
+
+if (els.mdBtn) {
+  els.mdBtn.addEventListener('click', () => {
+    if (els.mdPanel && els.mdPanel.hidden) openMilkdropPanel();
+    else closeMilkdropPanel();
+  });
+}
+if (els.mdClose) els.mdClose.addEventListener('click', closeMilkdropPanel);
+if (els.mdSearch) els.mdSearch.addEventListener('input', renderMilkdropList);
+if (els.mdRandom) {
+  els.mdRandom.addEventListener('click', () => {
+    const all = window.MilkDrop.names();
+    if (all.length === 0) return;
+    milkdropChosen = all[Math.floor(Math.random() * all.length)];
+    milkdropName = window.MilkDrop.loadPreset(milkdropChosen, 0);
+    lastMilkdropSwitchAt = performance.now();
+    renderMilkdropList();
+    updateMilkdropPinChip();
+  });
+}
+if (els.mdPin) {
+  els.mdPin.addEventListener('click', () => {
+    if (!currentTrack) return;
+    const showing = window.MilkDrop.current();
+    const already = pinnedMilkdrop() === showing;
+    writeMilkdropPin(already ? null : showing);
+    updateMilkdropPinChip();
+    els.mdStatus.textContent = already ? 'unpinned' : `pinned to ${currentTrack.title || 'this song'}`;
   });
 }
 
