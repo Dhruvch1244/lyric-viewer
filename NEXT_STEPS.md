@@ -98,6 +98,40 @@ profiler self time.
 
 ## Requested, not built
 
+### Per-line artist attribution
+
+0.20.0 gave every artist a distinct silhouette, which fixes *identity*. It does
+not fix *meaning*, which was the other half of the complaint: the dancers still
+rotate who is "on the mic" by line index modulo member count, so on a
+three-artist collab the wrong person is always singing.
+
+The fix is a cached LLM pass — the provider stack, the cache and the batching
+all exist already (see `correct.js`, which is the same shape). Feed the lyric
+lines plus the artist list, ask which artist sings each line, cache the answer
+per track in `llmCache` beside the cues, and have `setActive` raise the named
+dancer instead of `index % actors.length`.
+
+**Why it was not done in 0.20.0:** it is the one remaining item that needs a
+provider key to test end to end, and every other item in the release could be
+verified against a real track without one. It is a clean, well-scoped next job
+rather than a blocked one.
+
+Cheap and worth doing alongside it: the dancers know about `sections()` now, so
+a build-up could crouch them and a drop could launch them, instead of the beat
+clock being the only thing they read.
+
+### The frame-rate dips
+
+Measured during the real-audio runs: fullscreen MilkDrop holds 87–120fps but
+drops to **30–44fps** several times per song, recovering on its own. The
+governor only substitutes a cheaper preset below 24fps, so it never intervened.
+
+Not diagnosed. The suspects, in order: a preset cross-fade (Butterchurn runs two
+presets at once during a blend), the per-frame `postMessage` of a 1024-byte
+audio array across the frame boundary, and GC from something allocating in the
+draw path. Profile before changing anything — this file's own history is a
+sequence of confident wrong guesses about where time goes.
+
 ### Genius as a lyric source — deliberately not done
 
 NetEase shipped as a second **synced** source. Genius did not, and it should not

@@ -2,6 +2,82 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.20.0 — 2026-08-11
+
+The first release verified against a real song playing in the real app, start to
+finish. That immediately found a bug five releases of harness testing had not.
+
+### Fixed
+
+- **The tempo was drifting badly, and the visuals ran on it.** The offline
+  analysis measures a track in ~100ms and gets it right; the live estimator then
+  re-derived a tempo from a rolling 12-second window every second and overwrote
+  it. On a 138 BPM track it reported 60, 64, 86, 147, 172 and 179 across one
+  play — confident and wrong — dragging the beat clock and the BPM chip from
+  138 to 174. The platter and the dancers run on that number.
+
+  `Tempo` now takes the whole-song measurement as a prior, and once the tempo is
+  known the renderer tracks only the *phase*, which is the part that genuinely
+  has to follow the music. The chip now reads 138 for the entire song. The raw
+  live estimate still bounces between 62 and 177 in the same run, which is the
+  point — the noise is real and the clock is now insulated from it.
+
+- **Auto-update was doing nothing.** 0.19.0 shipped it and published the release
+  with only the installer attached; electron-updater reads `latest.yml`, so
+  every check found nothing, silently. The manifest is now published, and
+  `npm run release:assets` uploads both together so it cannot recur.
+
+### Added
+
+- **A browser for the 395 MilkDrop presets.** 0.19.0 shipped the catalogue and
+  no way into it — two named entry points and everything else reachable only by
+  waiting for a drop. Search it, click to switch, roll the dice, and pin one to
+  a song so it comes back next play. A pin outranks both the preset's own
+  starting point and the beat-synced cycle: a pin overridden by a drop four bars
+  later would be worse than not offering pinning.
+
+- **A legibility scrim in MilkDrop mode.** The swirl field is soft and
+  low-contrast by design. MilkDrop presets are neither, and white text over a
+  bright fractal was unreadable in a way this app's own visuals never were.
+
+- **NetEase as a second synced lyric source.** Coverage was the weakest axis:
+  one and a half sources against Sonar's three. A second *synced* source is
+  worth more than a second plain one — a plain source still has to be aligned by
+  Whisper, minutes of CPU and only from the next play, where this scrolls
+  immediately and offline. Strongest exactly where LRCLIB is weakest: Mandarin,
+  Cantonese, K-pop and the Asian long tail. Runs only after LRCLIB misses.
+
+- **Every artist has a silhouette now, not just a colour.** The registry has six
+  hand-authored entries; a real library has far more, and everyone else got the
+  same figure recoloured — which at 40 pixels tall reads as one dancer in a
+  dozen shirts. Seven head styles, glasses and hair tone, all derived from the
+  artist's name, so nothing is stored and an artist looks the same everywhere.
+
+- **Eight bands, a spectral centroid and spectral flux.** The centroid steers
+  the global hue: it is the one measure that separates a filtered breakdown from
+  a full-range drop when both are equally loud.
+
+- **Compact modes are usable.** The bar carries the translation under the line
+  plus sync and translation chips. The strip deliberately gets neither — 54px of
+  click-through surface has no room and nothing there could be clicked.
+
+### Changed
+
+- **The wormhole has its background back.** The transparent background shipped
+  in 0.19.0 and was reverted on sight: a tunnel floating on the bare desktop
+  reads as a widget sitting on the screen, where with the field behind it the
+  smoke has something to be smoke *in*. The field is thinned much harder for
+  solo looks — 0.42 still left it at 0.35 and swallowed the tunnel whole.
+
+- **Installer stays at 114 MB.** The DirectML provider remains unpackaged.
+
+### Known
+
+- Fullscreen MilkDrop dips to 30–44fps several times per song before recovering.
+  The governor only steps in below 24. Not diagnosed; see NEXT_STEPS.md.
+- Per-line artist attribution is not done, so on a multi-artist track the dancer
+  on the mic is still chosen by line number rather than by who is singing.
+
 ## 0.19.0 — 2026-08-11
 
 ### Added
