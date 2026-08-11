@@ -134,10 +134,12 @@
       name: 'Wormhole',
       cost: 1,
       /*
-        A tunnel flying toward you, twisting as it comes. Rings travel from a
-        vanishing point out past the corners with a z² perspective, so they
-        bunch at the throat and accelerate away — that acceleration is what
-        reads as travel rather than as circles getting bigger.
+        A smoky tunnel flying toward you, twisting as it comes. Bands of vapour
+        travel from a vanishing point out past the corners with a z²
+        perspective, so they bunch at the throat and accelerate away — that
+        acceleration is what reads as travel rather than as circles getting
+        bigger — and loose wisps drift between them so the tunnel has an inside
+        rather than just walls.
 
         The one look where anticipation is the headline: the tunnel constricts
         and winds up in the seconds BEFORE a drop the stored heat map already
@@ -154,6 +156,19 @@
         and the words, nothing else.
       */
       soloLayer: true,
+      /*
+        Smoke needs something to be smoke *against*, and `soloLayer` alone does
+        not provide it: it suppresses the wash and the cover photo, but the GPU
+        field is not a layer flag and rendered underneath regardless, laying a
+        translucent colour film over the desktop. `transparentBg` removes it —
+        the desktop is the background, always, whatever the backdrop-level chip
+        is set to. It is also why this look can afford to be dense: nothing is
+        competing with it.
+
+        The `swirl` biases below are kept for when the flag is lifted; they cost
+        nothing while the field is off.
+      */
+      transparentBg: true,
       layers: { wormhole: true },
       swirl: { bandBias: 0.7, vortexBias: 1.35, glowBias: 1.1, kick: 2.6 },
     },
@@ -217,6 +232,7 @@
       layers,
       bare: Boolean(preset.bare),
       soloLayer: Boolean(preset.soloLayer),
+      transparentBg: Boolean(preset.transparentBg),
     };
   }
 

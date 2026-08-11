@@ -1052,6 +1052,12 @@ let lastSwirlScaleAt = 0;
 /** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
 let canvasHidden = false;
 
+/* Whether the GPU field's canvas is currently out of the page. Presets that ask
+   for a transparent background take it out entirely rather than rendering it at
+   alpha 0 — an untouched full-screen WebGL canvas is still a compositor layer,
+   and on this app compositing is the dominant cost. */
+let swirlHidden = false;
+
 /*
   Resolution ladder for the 2D backdrop, mirroring the swirl's.
 
@@ -1655,8 +1661,13 @@ function drawGalaxy(now, w, h, life) {
    leads the music instead of reacting to it. */
 const WORMHOLE_RINGS = 26;
 
-/** @type {Array<{z: number, twist: number, squash: number}>} */
+/** Vapour blobs drifting inside the tunnel — what gives it volume. */
+const WORMHOLE_WISPS = 22;
+
+/** @type {Array<{z: number, twist: number, squash: number, band: number}>} */
 let wormholeRings = [];
+/** @type {Array<{z: number, angle: number, spin: number, radial: number, scale: number}>} */
+let wormholeWisps = [];
 /** Accumulated tunnel roll (radians), kept across frames so it never jumps. */
 let wormholeSpin = 0;
 
@@ -1667,7 +1678,117 @@ function seedWormhole() {
     twist: (i / WORMHOLE_RINGS) * Math.PI * 2,
     // A little per-ring variation, so it reads as a rough tunnel not a machine.
     squash: 0.78 + Math.random() * 0.10,
+    // Which of the pre-rendered vapour bands this ring wears. Three distinct
+    // shapes recycling through the tunnel is enough to stop the eye finding the
+    // repeat, and costs three bitmaps instead of twenty-six.
+    band: i % SMOKE_BANDS,
   }));
+  wormholeWisps = Array.from({ length: WORMHOLE_WISPS }, () => ({
+    z: Math.random(),
+    angle: Math.random() * Math.PI * 2,
+    // Own slow roll, so the smoke inside the tunnel does not turn as one rigid
+    // body with the walls.
+    spin: (Math.random() - 0.5) * 0.00022,
+    // How far out toward the wall it sits. Kept off both the centre and the
+    // rim: on the axis it would just thicken the throat glow, and on the rim it
+    // would read as a lumpy ring rather than as something floating inside.
+    radial: 0.34 + Math.random() * 0.5,
+    scale: 0.5 + Math.random() * 0.85,
+  }));
+}
+
+/* -------------------------------------------------------- smoke ring sprites */
+/*
+  The tunnel used to be drawn as ellipse strokes, which is why it read as a
+  stack of neon hoops rather than as something you are flying through. Smoke
+  cannot be stroked: it has no edge, and softening a stroke by widening and
+  dimming it (what the previous version did) only fades the line — it does not
+  make it volumetric.
+
+  So each band is pre-rendered once into a bitmap, with real Gaussian blur, and
+  blitted per ring. Three wins at once:
+
+    - it is genuinely soft, because `filter: blur()` is affordable when it runs
+      three times per colour instead of twenty-six times per frame;
+    - scaling a 256px bitmap up to a near ring is *itself* a blur, so the rings
+      that fill the screen are the softest ones — which is exactly how depth of
+      field behaves and the opposite of what a stroke does;
+    - it is one `drawImage` per ring against one large ellipse path + stroke,
+      so the layer got cheaper while getting denser.
+
+  Irregular arc segments rather than a closed ring are what keep it from
+  reading as a donut: gaps let the band behind show through the one in front.
+*/
+const SMOKE_BANDS = 3;
+const SMOKE_SIZE = 256;
+
+/** @type {{key: string, bands: HTMLCanvasElement[]}|null} */
+let smokeCache = null;
+
+/**
+ * Pre-render the vapour bands for one colour pair.
+ *
+ * Keyed on the *quantised* colours, never on `accentLive`/`tintLive` — those
+ * are `shiftHex(...)` of a hue that moves every frame, so keying on them would
+ * rebuild the cache continuously and save nothing. This trap has been hit
+ * before in this file; see `quantisedColours()`.
+ *
+ * @param {string} accent hex
+ * @param {string} tint hex
+ * @returns {HTMLCanvasElement[]} one canvas per band
+ */
+function smokeBands(accent, tint) {
+  const key = `${accent}|${tint}`;
+  if (smokeCache && smokeCache.key === key) return smokeCache.bands;
+
+  const mid = SMOKE_SIZE / 2;
+  const bands = [];
+  for (let b = 0; b < SMOKE_BANDS; b += 1) {
+    const c = document.createElement('canvas');
+    c.width = c.height = SMOKE_SIZE;
+    const g = c.getContext('2d');
+    const colour = b % 2 === 0 ? accent : tint;
+
+    // Heavy blur on the wide, faint underlayer and a lighter one on the wisps
+    // that ride on top. The two-pass split is what stops it looking like a
+    // uniformly fogged circle: there is still structure inside the softness.
+    for (let pass = 0; pass < 2; pass += 1) {
+      g.filter = pass === 0 ? 'blur(9px)' : 'blur(4px)';
+      // The detail pass carries most of the *shape*; the wide pass is only the
+      // haze it sits in. Weighting them the other way round reads as fog with a
+      // circle in it rather than as smoke with structure.
+      g.strokeStyle = hexA(colour, pass === 0 ? 0.19 : 0.17);
+      g.lineCap = 'round';
+
+      const arcs = pass === 0 ? 5 : 9;
+      for (let i = 0; i < arcs; i += 1) {
+        // Deterministic per band so a rebuild after a colour change does not
+        // reshuffle the tunnel's shape in front of the user.
+        const seed = (b * 37 + i * 61 + pass * 13) % 100 / 100;
+        const start = seed * Math.PI * 2;
+        const extent = (0.5 + seed * 1.6) * (pass === 0 ? 1.5 : 0.8);
+        /*
+          Vapour sits well out toward the sprite's rim, and the band is narrow.
+          The first version put it at 0.62 with a 30px band and 13px of blur:
+          once a near ring is scaled to ~1300px across, that inward spill covers
+          the middle of the screen, and with `lighter` compositing a dozen rings
+          doing it at once saturated the whole viewport into a flat wall of
+          colour. The tunnel needs its hole to stay open — that hole IS the
+          tunnel.
+        */
+        const radius = mid * (0.76 + seed * 0.12);
+        g.lineWidth = (pass === 0 ? 19 : 8) * (0.7 + seed * 0.7);
+        g.beginPath();
+        g.arc(mid, mid, radius, start, start + extent);
+        g.stroke();
+      }
+    }
+    g.filter = 'none';
+    bands.push(c);
+  }
+
+  smokeCache = { key, bands };
+  return bands;
 }
 
 /**
@@ -1696,6 +1817,7 @@ function drawWormhole(w, h, dt, life) {
   const squeeze = 1 - anticipation * 0.22;
 
   const q = quantisedColours();
+  const bands = smokeBands(q.accent, q.tint);
   ctx.globalCompositeOperation = 'lighter';
 
   for (let i = 0; i < wormholeRings.length; i += 1) {
@@ -1716,25 +1838,69 @@ function drawWormhole(w, h, dt, life) {
       leaves the viewport at about z = 0.9, so fading only over the last tenth
       removes the recycle pop without ever dimming a ring you can still see.
     */
-    const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 10);
     /*
-      Softer than a neon tunnel: lower opacity and wider, lighter strokes so the
-      rings read as vapour lit from within rather than as drawn lines. Widening
-      while dimming is the trick — a thick faint stroke on `lighter` blends into
-      its neighbours and loses its edge, which is what "ghostly" means here.
+      Fading starts much earlier than the stroke version needed (z ≈ 0.72 rather
+      than 0.9). A stroke that big is a thin line mostly off screen and costs
+      nothing to leave at full brightness; a vapour band that big is a
+      screen-filling cloud, and a stack of them on `lighter` reaches saturation
+      long before they leave the viewport.
     */
-    const alpha = (0.09 + z * 0.58) * fade * (0.55 + life * 0.6);
+    const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 3.6);
+    const alpha = (0.07 + z * 0.30) * fade * (0.55 + life * 0.6);
     if (alpha < 0.01) continue;
 
+    /*
+      One blit per band, scaled to the ring's radius and rotated with depth —
+      the rotation growing with z is what makes the tunnel look twisted rather
+      than like a stack of hoops.
+
+      The sprite is drawn at 1.55× the ring radius on purpose. The vapour in it
+      sits at ~0.62 of the sprite's half-width, so this puts the *dense part* of
+      the band on the ring's radius and lets the soft falloff spill inside and
+      outside it, which is where the sense of depth in the fog comes from.
+    */
+    const draw = r * 1.55;
     ctx.globalAlpha = Math.min(1, alpha);
-    ctx.strokeStyle = i % 2 === 0 ? q.accent : q.tint;
-    ctx.lineWidth = 1.5 + z * z * 11 + beatFlash * 1.6;
-    ctx.beginPath();
-    // Rotation grows with depth, which is what makes the tunnel look twisted
-    // rather than like a stack of rings.
-    ctx.ellipse(cx, cy, r, r * ring.squash, ring.twist + wormholeSpin + z * 2.6,
-      0, Math.PI * 2);
-    ctx.stroke();
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(ring.twist + wormholeSpin + z * 2.6);
+    ctx.scale(1, ring.squash);
+    ctx.drawImage(bands[ring.band], -draw, -draw, draw * 2, draw * 2);
+    ctx.restore();
+  }
+
+  /*
+    Vapour inside the tunnel.
+
+    Rings alone — however soft — still describe a *surface*. The wisps are what
+    make the space between the walls look occupied, and they are what separates
+    "a smoky tunnel" from "a soft tunnel". They travel on the same z² curve as
+    the rings so they share the perspective, and they use the glow sprite that
+    is already cached for the throat, so the whole effect adds one blit each.
+  */
+  const glowSprite = accentGlow(q.accent);
+  for (let i = 0; i < wormholeWisps.length; i += 1) {
+    const wisp = wormholeWisps[i];
+    wisp.z += dt * speed * 0.86;   // slightly slower than the walls: parallax
+    if (wisp.z >= 1) wisp.z -= 1;
+    wisp.angle += dt * wisp.spin * (1 + dropFlash * 2);
+
+    const z = wisp.z;
+    const r = maxR * z * z * squeeze;
+    const fade = Math.min(1, z * 5) * Math.min(1, (1 - z) * 3.2);
+    const alpha = (0.04 + z * 0.14) * fade * (0.5 + life * 0.7);
+    if (alpha < 0.01) continue;
+
+    const a = wisp.angle + wormholeSpin + z * 2.6;
+    const px = cx + Math.cos(a) * r * wisp.radial;
+    const py = cy + Math.sin(a) * r * wisp.radial * 0.82;
+    // Capped against the viewport, not just scaled with r: a near wisp sized off
+    // an off-screen radius becomes a 350px blob and stops reading as something
+    // floating inside the tunnel.
+    const size = Math.min(Math.max(6, r * 0.20 * wisp.scale), Math.min(w, h) * 0.16);
+
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.drawImage(glowSprite, px - size, py - size, size * 2, size * 2);
   }
 
   // The throat: a bright core so the vanishing point reads as somewhere the
@@ -2741,6 +2907,30 @@ function drawBackdrop(now) {
       if (!bare) resizeCanvas(); // the backing store is stale after being hidden
     }
 
+    /*
+      Transparent background.
+
+      `soloLayer` already suppresses the wash and the cover photo, but the GPU
+      field is not a layer flag — it renders underneath every preset — so a solo
+      look still laid a translucent colour film over the desktop. A preset that
+      asks for `transparentBg` gets nothing behind its layer at all: the desktop
+      is the background.
+
+      Taken out of the page rather than rendered at alpha 0, for the same reason
+      `bare` does it: an untouched full-screen canvas is still composited every
+      frame, and compositing is this app's dominant cost.
+    */
+    const clearBg = Boolean(activePreset.transparentBg);
+    if (clearBg !== swirlHidden) {
+      swirlHidden = clearBg;
+      els.swirl.style.display = clearBg ? 'none' : '';
+      // Coming back: clear the remembered rung so the ladder re-issues a resize
+      // with the current window size on the next rendered frame. Without this it
+      // early-returns on `next === swirlScale` and the buffer keeps whatever
+      // dimensions it had when the look changed.
+      if (!clearBg) swirlScale = 0;
+    }
+
     if (bare) {
       // No cover photo is painted in this mode, so the field is never thinned.
       renderSwirl(now, dt, life, Math.min(1, level.alpha), activePreset.swirl,
@@ -2784,8 +2974,10 @@ function drawBackdrop(now) {
       practically invisible.
     */
     const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.42 : 1);
-    renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
-      activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+    if (!clearBg) {
+      renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
+        activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+    }
 
     // Wash opacity follows the level and swells with build-up/drop so colour
     // change reads even through a transparent overlay. When a cover photo is

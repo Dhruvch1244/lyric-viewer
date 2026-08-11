@@ -69,6 +69,29 @@ test('a solo preset names exactly the layer it draws', () => {
   }
 });
 
+test('transparentBg is declared by every preset, and only claimed by wormhole', () => {
+  // Same invariant as `bare` and `soloLayer`: an omitted flag must read as
+  // false, so a preset written today cannot inherit a background policy added
+  // tomorrow. The flag suppresses the GPU field, which is NOT a layer flag and
+  // therefore renders under every look that does not opt out.
+  for (const preset of VisualPresets.all) {
+    assert.equal(typeof preset.transparentBg, 'boolean',
+      `${preset.id} lacks transparentBg`);
+  }
+  const clear = VisualPresets.all.filter((p) => p.transparentBg).map((p) => p.id);
+  assert.deepEqual(clear, ['wormhole']);
+});
+
+test('a transparent-background preset still draws something', () => {
+  // Combining `transparentBg` with `bare` would remove the 2D canvas AND the
+  // field, leaving a look with no picture at all — Ghost with extra steps.
+  for (const preset of VisualPresets.all.filter((p) => p.transparentBg)) {
+    assert.ok(!preset.bare, `${preset.id} claims both transparentBg and bare`);
+    const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
+    assert.ok(on.length > 0, `${preset.id} has a transparent background and no layers`);
+  }
+});
+
 test('the learned-song layers reach the presets that need them', () => {
   // Vinyl shows the record; the timeline underneath says where in the song it
   // sits, so Vinyl carries the heatmap layer too.
