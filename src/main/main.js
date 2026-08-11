@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { identify } = require('./tags');
 const { AppTray } = require('./tray');
+const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -21,13 +22,14 @@ const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
+const { correctTranscript, isCorrectionAvailable } = require('./correct');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally } = require('./localtranslate');
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
-const { fetchArtwork } = require('./artwork');
+const { fetchArtwork, fetchArtworkCandidates, downloadImage } = require('./artwork');
 const { activeProvider } = require('./llm');
 const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
@@ -81,6 +83,12 @@ let localPlaybackActive = false;
 
 /** @type {import('./tray').AppTray|null} */
 let appTray = null;
+
+/** @type {import('./updater').AppUpdater|null} */
+let appUpdater = null;
+
+/** Current display size: fullscreen overlay, floating bar, or taskbar strip. */
+let displayMode = 'full';
 
 /**
  * Identify a local audio file without reading all of it.
@@ -266,6 +274,13 @@ function createWindow() {
   window.setAlwaysOnTop(true, 'screen-saver');
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.once('ready-to-show', () => window.show());
+
+  // Hung off the window's own events rather than the toggle, so every path that
+  // hides the overlay — hotkey, tray, or anything added later — parks the render
+  // loop. See sendVisibility for why this is not free.
+  window.on('show', () => sendVisibility(true));
+  window.on('hide', () => sendVisibility(false));
+
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   return window;
 }
@@ -288,6 +303,32 @@ function send(channel, payload) {
 async function loadArtworkFor(track) {
   const token = ++artworkToken;
   try {
+    /*
+      A cover the user picked by hand outranks anything the search would find,
+      and it must not cost a network round trip on every replay — the whole
+      point of choosing was that the automatic answer was wrong. Stored as the
+      URL rather than the image: data URIs of 1000px covers would bloat the
+      cache file, which is the same reason pre-sync does not persist artwork.
+    */
+    const key = trackKey(track);
+    const chosen = llmCache.get(key);
+    if (chosen && chosen.artworkUrl) {
+      const artwork = await downloadImage(chosen.artworkUrl);
+      if (token !== artworkToken) return;
+      if (artwork) {
+        send('artwork', {
+          track,
+          artwork,
+          artistName: chosen.artworkArtist || null,
+          trackName: chosen.artworkTitle || null,
+          chosen: true,
+        });
+        return;
+      }
+      // The URL died (a store pulled the release). Fall through to a fresh
+      // search rather than leaving the song with no cover at all.
+    }
+
     const art = await fetchArtwork(track);
     if (token !== artworkToken || !art) return;
     send('artwork', { track, ...art });
@@ -580,7 +621,108 @@ async function ensureDevanagari(key) {
   }
 }
 
-/** Register global hotkeys. */
+/* ------------------------------------------------------------ display modes */
+/*
+  Three sizes of the same app.
+
+  This is the single biggest adoption problem the app has — it takes over the
+  screen or it does nothing, and every competitor offers a small always-on mode,
+  so people try it once and stop. It is also, unexpectedly, the largest
+  performance change available: profiling puts `(program)` at ~850 ms/s against
+  ~45 ms/s for all app JavaScript combined, and that is native compositing of a
+  full-screen transparent always-on-top window. The only lever big enough to
+  matter is compositing fewer pixels, and a taskbar strip composites a few
+  percent of what fullscreen does.
+
+  So the modes are a feature and a fix at the same time. The visualiser stays in
+  `full`; the compact modes are a lyric line, and the renderer drops both WebGL
+  contexts and the 2D canvas when it is in one.
+*/
+
+/** @type {ReadonlyArray<'full'|'bar'|'strip'>} */
+const DISPLAY_MODES = ['full', 'bar', 'strip'];
+
+/** Height of the taskbar strip, in CSS pixels. */
+const STRIP_HEIGHT = 54;
+
+/**
+ * Window geometry for a display mode.
+ *
+ * Uses `workArea`, not `bounds`, for the compact modes: `bounds` includes the
+ * space behind the taskbar, so a strip positioned against the bottom of it
+ * would sit underneath the taskbar and be invisible. Fullscreen deliberately
+ * still uses `bounds`, because covering the taskbar is the point there.
+ *
+ * @param {'full'|'bar'|'strip'} mode
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function boundsForMode(mode) {
+  const display = screen.getPrimaryDisplay();
+  const { workArea } = display;
+
+  if (mode === 'strip') {
+    return {
+      x: workArea.x,
+      y: workArea.y + workArea.height - STRIP_HEIGHT,
+      width: workArea.width,
+      height: STRIP_HEIGHT,
+    };
+  }
+  if (mode === 'bar') {
+    const width = Math.min(880, Math.round(workArea.width * 0.62));
+    const height = 132;
+    return {
+      x: workArea.x + Math.round((workArea.width - width) / 2),
+      y: workArea.y + workArea.height - height - Math.round(workArea.height * 0.06),
+      width,
+      height,
+    };
+  }
+  return display.bounds;
+}
+
+/**
+ * Resize the overlay into a display mode and tell the renderer to match.
+ * @param {'full'|'bar'|'strip'} mode
+ */
+function applyDisplayMode(mode) {
+  const next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+  displayMode = next;
+  settings.set('displayMode', next);
+  if (!win || win.isDestroyed()) return;
+
+  win.setBounds(boundsForMode(next));
+
+  /*
+    The strip is click-through, the others are not.
+
+    A thin bar pinned along the bottom edge sits exactly where taskbar buttons
+    and window edges are, so an opaque one would eat clicks meant for other
+    apps all day — which is the difference between something you leave on and
+    something you close. `forward: true` keeps hover working so the app can
+    still react to the pointer without consuming the click.
+  */
+  win.setIgnoreMouseEvents(next === 'strip', { forward: true });
+
+  send('display-mode', { mode: next });
+}
+
+/**
+ * Tell the renderer whether it is on screen.
+ *
+ * This matters more than it looks. `backgroundThrottling` is deliberately off
+ * (see createWindow) so the visuals keep running while another app has focus —
+ * which also means Chromium will NOT throttle us when the window is hidden.
+ * Without this signal, Ctrl+Alt+H leaves the swirl, the galaxy, the sprites and
+ * the beat clock drawing at full rate into a window nobody can see, for as long
+ * as the overlay stays hidden.
+ *
+ * @param {boolean} visible Whether the overlay window is now on screen.
+ */
+function sendVisibility(visible) {
+  if (win && !win.isDestroyed()) win.webContents.send('overlay-visibility', { visible });
+}
+
 /** Show or hide the overlay. Shared by the hotkey and the tray. */
 function toggleWindow() {
   if (!win) return;
@@ -588,11 +730,20 @@ function toggleWindow() {
   else win.show();
 }
 
+/** Register global hotkeys. */
+
 function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Alt+Left', () => setOffsetMs(activeOffsetMs() - 100));
   globalShortcut.register('CommandOrControl+Alt+Right', () => setOffsetMs(activeOffsetMs() + 100));
   globalShortcut.register('CommandOrControl+Alt+0', () => setOffsetMs(0));
   globalShortcut.register('CommandOrControl+Alt+H', toggleWindow);
+  // Cycle fullscreen → floating bar → taskbar strip. A hotkey as well as a chip
+  // because the strip is click-through and the bar has no room for the HUD, so
+  // in two of the three modes the chip is not reachable.
+  globalShortcut.register('CommandOrControl+Alt+M', () => {
+    const i = DISPLAY_MODES.indexOf(displayMode);
+    applyDisplayMode(DISPLAY_MODES[(i + 1) % DISPLAY_MODES.length]);
+  });
 }
 
 app.whenReady().then(() => {
@@ -611,8 +762,38 @@ app.whenReady().then(() => {
   /* The overlay has no window chrome and hides on a hotkey, so once it is
      running nothing on screen says it exists. The tray fixes that and gives
      background work somewhere to report that is not inside a hidden HUD. */
-  appTray = new AppTray({ onToggleWindow: toggleWindow, onQuit: () => app.quit() });
+  /* Auto-update. Constructed before the tray so the tray's update row can read
+     its state on the very first render; started after, so the first status
+     change has somewhere to redraw into. */
+  appUpdater = new AppUpdater({ onChange: () => appTray && appTray.refresh() });
+
+  appTray = new AppTray({
+    onToggleWindow: toggleWindow,
+    onQuit: () => app.quit(),
+    /* One row that changes meaning with the state: it checks when idle, shows
+       progress while working, and restarts when something is waiting. */
+    updateItem: () => ({
+      label: describeUpdate(appUpdater.state),
+      enabled: isUpdateActionable(appUpdater.state),
+    }),
+    onUpdateClick: () => {
+      if (!appUpdater.installNow()) appUpdater.checkNow();
+    },
+  });
   appTray.start();
+  appUpdater.start(app.isPackaged);
+
+  /* Restore the last display mode once the window exists. Applied here rather
+     than in createWindow so the renderer is listening for the event. */
+  win.webContents.once('did-finish-load', () => {
+    applyDisplayMode(settings.get('displayMode') || 'full');
+  });
+
+  ipcMain.handle('set-display-mode', (_e, mode) => {
+    applyDisplayMode(mode);
+    return { status: 'ok', mode: displayMode };
+  });
+  ipcMain.handle('get-display-mode', () => ({ mode: displayMode, modes: DISPLAY_MODES }));
 
   /* Background work, forwarded from the renderer's job map. Only the jobs in
      tray.js's NOTIFY_ON_DONE raise an OS notification when they finish. */
@@ -1037,6 +1218,37 @@ app.whenReady().then(() => {
         console.warn('[align] plain-lyric alignment skipped:', err.message);
       }
 
+      /*
+        LLM correction pass — the "brain" half of the ear/brain split.
+
+        Guarded on `usedSource === 'whisper'` deliberately. If the block above
+        anchored LRCLIB's real lyrics onto Whisper's timings, the words are
+        already correct and asking a model to "correct" them can only make them
+        wrong. This runs exactly when we have nothing but what the model heard,
+        which is also when it is worth the most.
+
+        Failure is not fatal at any level: a bad batch keeps that batch's
+        original lines, and a total failure returns the transcript untouched.
+      */
+      if (usedSource === 'whisper' && isCorrectionAvailable()) {
+        try {
+          const fixed = await correctTranscript(result.cues, track, ({ batch, batches }) => {
+            send('transcribe-progress', {
+              track, stage: 'correcting', pct: 92, batch, batches,
+            });
+          });
+          if (fixed.corrected) {
+            result = { ...result, cues: fixed.cues };
+            usedSource = 'whisper+llm';
+            send('transcribe-progress', {
+              track, stage: 'corrected', pct: 96, changed: fixed.changed,
+            });
+          }
+        } catch (err) {
+          console.warn('[correct] pass skipped:', err.message);
+        }
+      }
+
       const indic = detectIndic(result.cues).indic;
       const payloadOut = {
         cues: result.cues,
@@ -1076,6 +1288,75 @@ app.whenReady().then(() => {
     } finally {
       transcribeBusy = false;
     }
+  });
+
+  /*
+    Cover-art alternatives for the current track.
+
+    Not cached: the panel is opened rarely and deliberately, and a stale list is
+    exactly what the user is trying to escape when they open it.
+  */
+  ipcMain.handle('artwork-candidates', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    if (!track) return { status: 'no-track', candidates: [] };
+    try {
+      const candidates = await fetchArtworkCandidates(track);
+      return { status: 'ok', candidates };
+    } catch (err) {
+      return { status: 'error', message: err.message, candidates: [] };
+    }
+  });
+
+  /*
+    Adopt a chosen cover. Persisted per track, so it survives a restart and
+    costs one download rather than a search on every later play.
+
+    The chosen cover DOES drive the palette, because that is what the artwork
+    event has always done and the alternative — a poster that disagrees with the
+    colours around it — looks like a bug. Picking a cover recolours the app.
+  */
+  ipcMain.handle('choose-artwork', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    const url = payload && payload.url;
+    if (!track || !url) return { status: 'ignored' };
+
+    const artwork = await downloadImage(url);
+    if (!artwork) return { status: 'error', message: 'that cover could not be downloaded' };
+
+    const key = trackKey(track);
+    llmCache.merge(key, {
+      title: track.title || null,
+      artist: track.artist || null,
+      artworkUrl: url,
+      artworkArtist: (payload && payload.artistName) || null,
+      artworkTitle: (payload && payload.trackName) || null,
+    });
+
+    // Invalidate any in-flight automatic lookup for this track, or it can land
+    // after the choice and overwrite it.
+    artworkToken += 1;
+
+    if (currentTrack && trackKey(currentTrack) === key) {
+      send('artwork', {
+        track,
+        artwork,
+        artistName: (payload && payload.artistName) || null,
+        trackName: (payload && payload.trackName) || null,
+        chosen: true,
+      });
+    }
+    return { status: 'ok' };
+  });
+
+  /** Forget a hand-picked cover and go back to whatever the search finds. */
+  ipcMain.handle('clear-artwork-choice', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    if (!track) return { status: 'ignored' };
+    llmCache.merge(trackKey(track), {
+      artworkUrl: null, artworkArtist: null, artworkTitle: null,
+    });
+    loadArtworkFor(track);
+    return { status: 'ok' };
   });
 
   ipcMain.handle('get-transcribe-config', () => ({

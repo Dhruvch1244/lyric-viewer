@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('player', {
   onPresyncProgress: (cb) => ipcRenderer.on('presync-progress', (_e, data) => cb(data)),
   onTranscribeProgress: (cb) => ipcRenderer.on('transcribe-progress', (_e, data) => cb(data)),
   onIdle: (cb) => ipcRenderer.on('idle', () => cb()),
+  onVisibility: (cb) => ipcRenderer.on('overlay-visibility', (_e, data) => cb(data)),
+  onDisplayMode: (cb) => ipcRenderer.on('display-mode', (_e, data) => cb(data)),
+  setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
+  getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
   onOffset: (cb) => ipcRenderer.on('offset', (_e, data) => cb(data)),
 
   getOffset: () => ipcRenderer.invoke('get-offset'),
@@ -42,6 +46,13 @@ contextBridge.exposeInMainWorld('player', {
   /* Background work, mirrored to the tray tooltip and (for the few worth
      interrupting for) to an OS notification. */
   reportJobs: (payload) => ipcRenderer.invoke('report-jobs', payload),
+  /* Cover art the user can choose from, when the automatic pick got it wrong.
+     Candidates carry a small thumbnail; the full image is fetched only for the
+     one that is chosen. */
+  artworkCandidates: (track) => ipcRenderer.invoke('artwork-candidates', { track }),
+  chooseArtwork: (payload) => ipcRenderer.invoke('choose-artwork', payload),
+  clearArtworkChoice: (track) => ipcRenderer.invoke('clear-artwork-choice', { track }),
+
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
   listSynced: () => ipcRenderer.invoke('list-synced'),
 

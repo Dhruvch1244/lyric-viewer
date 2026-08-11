@@ -13,3 +13,7 @@ src/main/secrets.js
 
 # Promo stills are regenerated, not authored — keep them out of git.
 promo/stills/
+
+# Dead iOS/Expo port — the source lives on claude/lyric-viewer-ios-crossplatform-7fmjh1.
+# What is left in the working tree is an install dir, not authored code.
+packages/

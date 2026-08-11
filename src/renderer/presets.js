@@ -134,10 +134,12 @@
       name: 'Wormhole',
       cost: 1,
       /*
-        A tunnel flying toward you, twisting as it comes. Rings travel from a
-        vanishing point out past the corners with a z² perspective, so they
-        bunch at the throat and accelerate away — that acceleration is what
-        reads as travel rather than as circles getting bigger.
+        A smoky tunnel flying toward you, twisting as it comes. Bands of vapour
+        travel from a vanishing point out past the corners with a z²
+        perspective, so they bunch at the throat and accelerate away — that
+        acceleration is what reads as travel rather than as circles getting
+        bigger — and loose wisps drift between them so the tunnel has an inside
+        rather than just walls.
 
         The one look where anticipation is the headline: the tunnel constricts
         and winds up in the seconds BEFORE a drop the stored heat map already
@@ -154,6 +156,19 @@
         and the words, nothing else.
       */
       soloLayer: true,
+      /*
+        Smoke needs something to be smoke *against*, and `soloLayer` alone does
+        not provide it: it suppresses the wash and the cover photo, but the GPU
+        field is not a layer flag and rendered underneath regardless, laying a
+        translucent colour film over the desktop. `transparentBg` removes it —
+        the desktop is the background, always, whatever the backdrop-level chip
+        is set to. It is also why this look can afford to be dense: nothing is
+        competing with it.
+
+        The `swirl` biases below are kept for when the flag is lifted; they cost
+        nothing while the field is off.
+      */
+      transparentBg: true,
       layers: { wormhole: true },
       swirl: { bandBias: 0.7, vortexBias: 1.35, glowBias: 1.1, kick: 2.6 },
     },
@@ -199,6 +214,51 @@
       layers: { aurora: false, bokeh: false, galaxy: false, eq: false, rays: false, math: false, web: false },
       swirl: { bandBias: 0.9, vortexBias: 0.8, glowBias: 0.75 },
     },
+
+    /*
+      MilkDrop looks. These run the OTHER engine — Butterchurn, not the swirl
+      shader — and are the answer to the one gap that could not be closed by
+      writing more layers by hand: projectM has thousands of presets and Plane9
+      has 250 scenes, against our one aesthetic.
+
+      They are `soloLayer` + `transparentBg` for a reason that is not cosmetic:
+      the MilkDrop canvas IS the picture, it fills the screen, and both the
+      swirl field and the 2D extras would be drawing underneath something
+      opaque. Solo also keeps the lyrics, which is the entire point — no
+      MilkDrop player anywhere shows the words.
+
+      `milkdrop` names a starting preset from the pack. It is a *starting*
+      point: cycleMilkdrop() moves through the catalogue from there, and a name
+      that a pack upgrade removed resolves to the first available preset rather
+      than to a black screen.
+    */
+    {
+      id: 'milkdrop',
+      name: 'MilkDrop',
+      cost: 2,
+      engine: 'milkdrop',
+      soloLayer: true,
+      transparentBg: true,
+      milkdrop: 'martin - mandelbox explorer - high speed demo version',
+      layers: {},
+      swirl: {},
+    },
+    {
+      id: 'milkdrop-ii',
+      name: 'MilkDrop II',
+      cost: 2,
+      engine: 'milkdrop',
+      soloLayer: true,
+      transparentBg: true,
+      /* A second entry point into the same 395-preset catalogue, so the cycle
+         does not always start from the same look. Named by number rather than
+         by character ("Soft", "Calm") on purpose: these are community presets
+         and nobody has classified them, so any adjective here would be a
+         promise the code cannot keep. */
+      milkdrop: 'Flexi - alien fish pond',
+      layers: {},
+      swirl: {},
+    },
   ];
 
   const DEFAULT_ID = 'liquid';
@@ -217,6 +277,11 @@
       layers,
       bare: Boolean(preset.bare),
       soloLayer: Boolean(preset.soloLayer),
+      transparentBg: Boolean(preset.transparentBg),
+      /* Which engine draws this look. Defaulted rather than required so every
+         preset written before there was a second engine keeps working. */
+      engine: preset.engine === 'milkdrop' ? 'milkdrop' : 'swirl',
+      milkdrop: preset.milkdrop || null,
     };
   }
 
@@ -258,7 +323,21 @@
    * missing — an unlearned song draws a faint timeline, a track with no cover
    * art gets a plain record.
    */
-  const RANDOM_POOL = NORMALIZED.filter((p) => !['minimal', 'ghost'].includes(p.id));
+  /**
+   * Looks that need a second engine, and are therefore excluded from the random
+   * pool even though they are perfectly good looks.
+   *
+   * A MilkDrop preset that cannot run — WebGL2 missing, the vendored bundle not
+   * loaded, a preset pack that failed to parse — degrades to a blank screen
+   * with lyrics on it, and being handed that at random for a song you did not
+   * ask it for is far worse than never being handed it at all. They stay fully
+   * available by choice, which is a decision the user can immediately undo.
+   */
+  const SECOND_ENGINE = NORMALIZED.filter((p) => p.engine !== 'swirl').map((p) => p.id);
+
+  const RANDOM_POOL = NORMALIZED.filter(
+    (p) => !['minimal', 'ghost'].includes(p.id) && !SECOND_ENGINE.includes(p.id)
+  );
 
   /**
    * The look for a given track — random across songs, identical every time you
@@ -318,6 +397,7 @@
     next,
     forTrack,
     RANDOM_POOL,
+    SECOND_ENGINE,
     affordable,
     DEFAULT_ID,
     LAYER_KEYS,

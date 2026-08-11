@@ -2,6 +2,87 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.19.0 — 2026-08-11
+
+### Added
+
+- **MilkDrop presets — 395 of them.** On visuals alone this app had one
+  aesthetic. projectM ships thousands of presets and Plane9 ships 250 scenes,
+  and variety is the entire axis a visualiser is judged on; that gap could not
+  be closed by writing more layers by hand. Butterchurn is MilkDrop 2
+  reimplemented in WebGL2 and MIT licensed, so a few MB buys the whole
+  ecosystem — and nobody else occupies the result, because every lyric app is a
+  text renderer and not one visualiser shows the words.
+
+  The swirl field stays the default and stays the identity: it times itself to
+  lyric density, which no MilkDrop preset does or can. Tests enforce that it
+  remains the default and the majority, and MilkDrop looks are never handed out
+  at random.
+
+  The engine runs inside its own frame. MilkDrop presets are equation *sources*
+  that get compiled to JavaScript, so they need `unsafe-eval`; granting that to
+  the overlay page would extend it to every line handling network-sourced
+  lyrics and artwork. `milkdrop.html` relaxes the policy for itself alone, has
+  no network access at all, and never sees a string that came off the network —
+  audio crosses as raw numbers.
+
+- **Compact display modes.** The app took over the screen or it did nothing.
+  `Ctrl+Alt+M` now cycles fullscreen → floating bar → click-through taskbar
+  strip. The strip forwards mouse events rather than eating them, because a bar
+  pinned along the bottom edge sits exactly where taskbar buttons are.
+
+- **Pick your own cover art.** The artwork search returned one winner; when it
+  was wrong there was nothing you could do. The `▣` chip shows what all three
+  sources actually found — including the near-misses the automatic pick rejects
+  on purpose, which are exactly what you need when it got it wrong. Your choice
+  is remembered per song and recolours the app, because the cover drives the
+  palette.
+
+- **An LLM fixes what Whisper misheard.** Whisper is a speech model, and on sung
+  vocals it mishears *phonetically* — the output rhymes with the truth. A model
+  told the song's title and artist can often reconstruct the real line. Runs
+  only when there were no real lyrics to match, since correcting known-correct
+  words can only make them wrong.
+
+- **Auto-update**, against GitHub Releases, surfaced in the tray. Downloads
+  automatically, installs only when you restart.
+
+- **A first-run card**, naming the chips that are not self-evident and the two
+  hotkeys.
+
+### Changed
+
+- **Wormhole is a smoky tunnel now, over a transparent background.** Smoke
+  cannot be stroked — it has no edge — so the bands are pre-rendered bitmaps
+  with real Gaussian blur, and scaling one up to a near ring is itself a blur,
+  which is how depth of field behaves and the opposite of what a stroke does.
+  Wisps drift between the walls so the tunnel has an inside. `soloLayer` was
+  suppressing the wash but not the GPU field, which is not a layer flag and was
+  laying a colour film over the desktop regardless; a new `transparentBg` flag
+  removes it, so the desktop is the background.
+
+### Performance
+
+- **The app no longer renders while hidden.** `backgroundThrottling` is
+  deliberately off so the visuals keep moving while another app has focus — the
+  unnoticed cost being that Chromium will not park us when the window is
+  *hidden* either. `Ctrl+Alt+H` left the swirl shader, the galaxy, the sprites
+  and the beat clock drawing at full rate into a surface nobody could see, for
+  as long as the overlay stayed hidden.
+
+- **Compact modes are the biggest performance change here**, not just a feature.
+  Profiling puts native compositing at ~850 ms/s against ~45 ms/s for all app
+  JavaScript combined, so the only lever left is compositing fewer pixels. Both
+  WebGL contexts and the 2D canvas are removed, not hidden — an untouched
+  full-screen canvas is still composited every frame.
+
+- **The progress bar** is quantised to 0.1% instead of written every vsync,
+  which settles at ~5 style invalidations a second instead of ~50.
+
+- **Installer 123.3MB → 114.2MB**, while adding 2.5MB of preset packs.
+  `DirectML.dll` and its shader compiler are no longer packaged: transcription
+  is CPU-only because DirectML loads and then fails allocation, measured.
+
 ## 0.18.0 — 2026-08-11
 
 ### Added

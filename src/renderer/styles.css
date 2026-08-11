@@ -97,6 +97,23 @@ body.lang-devanagari .ln.is-active {
   pointer-events: none;
 }
 
+/* The second engine sits at the same depth as the swirl field, because it
+   replaces it rather than layering with it. */
+#milkdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  border: 0;
+  /* Never steal a click, and never take focus: this is scenery, and the overlay
+     is click-through scenery in particular. */
+  pointer-events: none;
+  background: transparent;
+}
+
+#milkdrop[hidden] { display: none; }
+
 #backdrop {
   position: fixed;
   inset: 0;
@@ -688,6 +705,207 @@ body.lang-devanagari .word--active {
   .nudge { animation: none; }
 }
 
+/* ---- Compact display modes ---- */
+/*
+  `bar` is a small floating panel; `strip` is a click-through line along the
+  bottom edge. Both exist because taking over the whole screen is the single
+  biggest reason someone tries this app once and stops.
+
+  Everything that assumes a full screen is removed rather than shrunk. A
+  scrolling lyric column, a hero title and a row of twenty chips do not have a
+  small version — trying to give them one produces something unreadable in a
+  54px window, and the panels (library, cover art, key box) cannot be opened
+  from a click-through strip at all.
+*/
+
+.mode-compact .stage,
+.mode-compact .np-hero,
+.mode-compact .meters,
+.mode-compact .hud,
+.mode-compact .library,
+.mode-compact .poster,
+.mode-compact .welcome,
+.mode-compact .nudge,
+.mode-compact #swirl,
+.mode-compact #milkdrop,
+.mode-compact #backdrop {
+  display: none !important;
+}
+
+/* The whole UI in compact mode: what is playing, and the line being sung. */
+.mode-compact .topbar {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0 1rem;
+  background: color-mix(in srgb, #05060c 82%, transparent);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.mode-bar .topbar {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 1.2rem;
+}
+
+/* A thin reactive accent instead of a visualiser — the one piece of the
+   backdrop that still reads at this size and costs a single element. */
+.mode-compact .topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-live, var(--accent, #e94560)),
+    transparent
+  );
+  opacity: 0.75;
+}
+
+.mode-compact .now-playing {
+  flex: none;
+  max-width: 34%;
+  min-width: 0;
+}
+
+.mode-bar .now-playing { max-width: 100%; }
+
+.mode-compact .np-title,
+.mode-compact .np-artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Only the compact modes use this element; in fullscreen the scrolling column
+   is the lyric and this would be a duplicate of it. */
+.compact-line { display: none; }
+
+.mode-compact .status { display: none; }
+
+.mode-compact .compact-line {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.mode-bar .compact-line {
+  flex: none;
+  width: 100%;
+  text-align: left;
+  font-size: 1.4rem;
+}
+
+.mode-compact .transport {
+  position: static;
+  flex: none;
+  transform: none;
+}
+
+/* ---- First run ---- */
+/* Centred rather than tucked in a corner like .nudge: this one is the first
+   thing a new user sees and has to be found, where the capture nudge is an
+   interruption of something already going well and has to be ignorable. */
+
+.welcome {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 8;
+  width: min(30rem, 82vw);
+  padding: 1.5rem 1.6rem 1.2rem;
+  background: color-mix(in srgb, #000 76%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  backdrop-filter: blur(14px);
+  /* Its own keyframes, not .nudge's. `nudge-in` ends at `transform:
+     translateY(0)`, and an animated transform replaces the declared one
+     outright — which silently threw away the translate(-50%, -50%) doing the
+     centring and left the card hanging off the middle of the screen by half its
+     own size. Any centred element sharing that animation would do the same. */
+  animation: welcome-in 320ms ease both;
+}
+
+.welcome[hidden] {
+  display: none;
+}
+
+@keyframes welcome-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 10px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome { animation: none; }
+}
+
+.welcome__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-high, #fff);
+}
+
+.welcome__lede {
+  margin: 0 0 0.9rem;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--ink-mid);
+}
+
+.welcome__keys {
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82rem;
+  line-height: 1.75;
+  color: var(--ink-mid);
+}
+
+.welcome__keys b {
+  color: var(--accent-live, var(--accent, #e94560));
+  font-weight: 700;
+}
+
+.welcome__keys--hotkeys {
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.welcome kbd {
+  padding: 0.05rem 0.34rem;
+  font: inherit;
+  font-size: 0.76rem;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+}
+
+.welcome__row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ---- HUD ---- */
 
 .hud {
@@ -1007,6 +1225,119 @@ body.keybox-open .hud {
    Replaces a `max-height: 30vh` list inside the pre-sync panel, which was
    itself inside a HUD that stays invisible until the cursor moves. Songs are
    the point of this app; they deserve more than a footnote. */
+
+/* ---- Cover art picker ---- */
+/* A side panel, not a full-screen takeover like the library: the whole point is
+   comparing a candidate against the cover currently on screen behind it. */
+
+.poster {
+  position: fixed;
+  top: 8vh;
+  bottom: 14vh;
+  right: 3vw;
+  z-index: 20;
+  width: min(26rem, 46vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.1rem 1.2rem;
+  background: color-mix(in srgb, #05060c 88%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.poster[hidden] { display: none; }
+
+.poster__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.poster__title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  flex: 1;
+}
+
+.poster__status {
+  width: 100%;
+  order: 3;
+  font-size: 0.74rem;
+  color: var(--ink-dim);
+}
+
+.poster__grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  gap: 0.7rem;
+  align-content: start;
+}
+
+.poster__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.poster__card:hover,
+.poster__card:focus-visible {
+  border-color: var(--accent-live, var(--accent, #e94560));
+  transform: translateY(-2px);
+  outline: none;
+}
+
+.poster__card[aria-pressed="true"] {
+  border-color: var(--accent-live, var(--accent, #e94560));
+  box-shadow: 0 0 0 1px var(--accent-live, var(--accent, #e94560));
+}
+
+.poster__img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.poster__meta {
+  padding: 0 0.45rem 0.45rem;
+  text-align: left;
+  min-width: 0;
+}
+
+.poster__song {
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.poster__source {
+  font-size: 0.64rem;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .library {
   position: fixed;

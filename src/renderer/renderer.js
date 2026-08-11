@@ -55,6 +55,16 @@ const els = {
   trStop: document.getElementById('tr-stop'),
   trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
+  compactLine: document.getElementById('compact-line'),
+  modeBtn: document.getElementById('btn-mode'),
+  posterBtn: document.getElementById('btn-poster'),
+  poster: document.getElementById('poster'),
+  posterGrid: document.getElementById('poster-grid'),
+  posterStatus: document.getElementById('poster-status'),
+  posterAuto: document.getElementById('poster-auto'),
+  posterClose: document.getElementById('poster-close'),
+  welcome: document.getElementById('welcome'),
+  welcomeClose: document.getElementById('welcome-close'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -64,6 +74,7 @@ const els = {
   keyStatus: document.getElementById('keybox-status'),
   canvas: document.getElementById('backdrop'),
   swirl: document.getElementById('swirl'),
+  milkdrop: document.getElementById('milkdrop'),
   hero: document.getElementById('np-hero'),
   heroTitle: document.getElementById('np-hero-title'),
   heroArtist: document.getElementById('np-hero-artist'),
@@ -232,6 +243,14 @@ let audioEnv = null;
    resolution for a much higher, steadier frame rate. Persisted in localStorage.
    The lyric column, wash, glows, stars, and sprites all stay on. */
 let liteMode = false;
+
+/* Whether the overlay window is on screen. False after Ctrl+Alt+H or the tray's
+   hide. Both render loops park on this — see the onVisibility handler. */
+let overlayVisible = true;
+
+/* Last progress width actually written, in tenths of a percent. -1 forces the
+   next frame to write, which is what resets it on a track change. */
+let lastProgressPct = -1;
 
 /* --------------------------------------------------------------- sync core */
 
@@ -575,6 +594,13 @@ function setActive(index) {
   }
   activeIndex = index;
 
+  /* The compact modes have no scrolling column, so this one element is the
+     whole lyric display. Written here rather than every frame — the line only
+     changes when the active cue does. */
+  if (els.compactLine) {
+    els.compactLine.textContent = index >= 0 && cues[index] ? (cues[index].text || '') : '';
+  }
+
   // Rotate which dancer is "on the mic". We have no per-line artist attribution
   // from the lyric source, so collaborators simply take turns as the line
   // advances — the active one dances, the rest idle along the bottom. The dancer
@@ -809,6 +835,11 @@ function updateTranslation(index) {
 
 function frame() {
   try {
+    // Hidden overlay: nothing here has a visible effect, and the DOM writes
+    // below are the expensive kind. Position is derived from a timestamp, not
+    // accumulated, so skipping frames loses nothing.
+    if (!overlayVisible) return;
+
     const positionMs = estimatePosition();
     if (cues.length > 0) {
       setActive(findCueIndex(positionMs));
@@ -825,9 +856,19 @@ function frame() {
       updateHero();
     }
 
+    // Progress bar, quantised to 0.1% rather than written every vsync. The bar
+    // is a few hundred pixels wide, so a full-precision 60Hz write is ~50 style
+    // invalidations a second that resolve to the same pixels — on a surface
+    // whose compositing is already the dominant cost. Quantising is the whole
+    // throttle: 0.1% of a 3-minute track is 180ms, so this settles at ~5
+    // writes/s and scales with the track rather than needing a second timer.
     if (durationMs > 0) {
       const pct = Math.max(0, Math.min(100, (positionMs / durationMs) * 100));
-      els.progressFill.style.width = `${pct}%`;
+      const step = Math.round(pct * 10) / 10;
+      if (step !== lastProgressPct) {
+        lastProgressPct = step;
+        els.progressFill.style.width = `${step}%`;
+      }
     }
 
     // Build-up ramp: while a long instrumental gap approaches its next lyric,
@@ -1028,6 +1069,61 @@ const SWIRL_SCALES = [0.30, 0.40, 0.55, 0.70];
 let lastSwirlScaleAt = 0;
 /** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
 let canvasHidden = false;
+
+/* Whether the GPU field's canvas is currently out of the page. Presets that ask
+   for a transparent background take it out entirely rather than rendering it at
+   alpha 0 — an untouched full-screen WebGL canvas is still a compositor layer,
+   and on this app compositing is the dominant cost. */
+let swirlHidden = false;
+
+/* ------------------------------------------------------------ visual engine */
+/*
+  Two engines, never both. The swirl field is the signature look and the
+  default; Butterchurn (MilkDrop presets) is the variety answer — see
+  milkdrop.js for why it exists and what it must not become.
+
+  They are mutually exclusive because each is a full-screen WebGL2 context, and
+  two alive at once doubles GPU cost for no benefit on an app whose dominant
+  cost is already compositing. Switching tears the idle one down.
+*/
+let activeEngine = 'swirl';
+
+/** The MilkDrop preset currently loaded, so a cycle can advance from it. */
+let milkdropName = null;
+
+/** Guards the beat-synced transition against firing repeatedly in one drop. */
+let lastMilkdropSwitchAt = 0;
+
+/** Last size sent across the frame boundary, so resizes are not sent per frame. */
+let milkdropSize = '';
+
+/* ------------------------------------------------------------ display mode */
+/*
+  'full' is the overlay this app has always been. 'bar' is a small floating
+  panel and 'strip' is a click-through line along the bottom edge — both exist
+  because taking over the screen is the single biggest reason someone tries the
+  app once and stops.
+
+  Neither compact mode draws a visualiser. That is not a simplification for its
+  own sake: the whole saving is compositing fewer pixels, and a full-screen
+  WebGL context inside a 54px window would compose the same surface it always
+  did while showing almost none of it.
+*/
+let displayMode = 'full';
+
+/** Whether the current mode draws any backdrop at all. */
+function isCompact() {
+  return displayMode !== 'full';
+}
+
+/**
+ * Minimum seconds between beat-synced preset changes.
+ *
+ * Long, deliberately. Plane9's scene transitions are what make a visualiser
+ * feel designed, but a MilkDrop preset needs time to develop — cutting every
+ * drop in a four-on-the-floor track would be a strobe, not a sequence.
+ */
+const MILKDROP_SWITCH_MS = 42000;
 
 /*
   Resolution ladder for the 2D backdrop, mirroring the swirl's.
@@ -1632,8 +1728,13 @@ function drawGalaxy(now, w, h, life) {
    leads the music instead of reacting to it. */
 const WORMHOLE_RINGS = 26;
 
-/** @type {Array<{z: number, twist: number, squash: number}>} */
+/** Vapour blobs drifting inside the tunnel — what gives it volume. */
+const WORMHOLE_WISPS = 22;
+
+/** @type {Array<{z: number, twist: number, squash: number, band: number}>} */
 let wormholeRings = [];
+/** @type {Array<{z: number, angle: number, spin: number, radial: number, scale: number}>} */
+let wormholeWisps = [];
 /** Accumulated tunnel roll (radians), kept across frames so it never jumps. */
 let wormholeSpin = 0;
 
@@ -1644,7 +1745,117 @@ function seedWormhole() {
     twist: (i / WORMHOLE_RINGS) * Math.PI * 2,
     // A little per-ring variation, so it reads as a rough tunnel not a machine.
     squash: 0.78 + Math.random() * 0.10,
+    // Which of the pre-rendered vapour bands this ring wears. Three distinct
+    // shapes recycling through the tunnel is enough to stop the eye finding the
+    // repeat, and costs three bitmaps instead of twenty-six.
+    band: i % SMOKE_BANDS,
   }));
+  wormholeWisps = Array.from({ length: WORMHOLE_WISPS }, () => ({
+    z: Math.random(),
+    angle: Math.random() * Math.PI * 2,
+    // Own slow roll, so the smoke inside the tunnel does not turn as one rigid
+    // body with the walls.
+    spin: (Math.random() - 0.5) * 0.00022,
+    // How far out toward the wall it sits. Kept off both the centre and the
+    // rim: on the axis it would just thicken the throat glow, and on the rim it
+    // would read as a lumpy ring rather than as something floating inside.
+    radial: 0.34 + Math.random() * 0.5,
+    scale: 0.5 + Math.random() * 0.85,
+  }));
+}
+
+/* -------------------------------------------------------- smoke ring sprites */
+/*
+  The tunnel used to be drawn as ellipse strokes, which is why it read as a
+  stack of neon hoops rather than as something you are flying through. Smoke
+  cannot be stroked: it has no edge, and softening a stroke by widening and
+  dimming it (what the previous version did) only fades the line — it does not
+  make it volumetric.
+
+  So each band is pre-rendered once into a bitmap, with real Gaussian blur, and
+  blitted per ring. Three wins at once:
+
+    - it is genuinely soft, because `filter: blur()` is affordable when it runs
+      three times per colour instead of twenty-six times per frame;
+    - scaling a 256px bitmap up to a near ring is *itself* a blur, so the rings
+      that fill the screen are the softest ones — which is exactly how depth of
+      field behaves and the opposite of what a stroke does;
+    - it is one `drawImage` per ring against one large ellipse path + stroke,
+      so the layer got cheaper while getting denser.
+
+  Irregular arc segments rather than a closed ring are what keep it from
+  reading as a donut: gaps let the band behind show through the one in front.
+*/
+const SMOKE_BANDS = 3;
+const SMOKE_SIZE = 256;
+
+/** @type {{key: string, bands: HTMLCanvasElement[]}|null} */
+let smokeCache = null;
+
+/**
+ * Pre-render the vapour bands for one colour pair.
+ *
+ * Keyed on the *quantised* colours, never on `accentLive`/`tintLive` — those
+ * are `shiftHex(...)` of a hue that moves every frame, so keying on them would
+ * rebuild the cache continuously and save nothing. This trap has been hit
+ * before in this file; see `quantisedColours()`.
+ *
+ * @param {string} accent hex
+ * @param {string} tint hex
+ * @returns {HTMLCanvasElement[]} one canvas per band
+ */
+function smokeBands(accent, tint) {
+  const key = `${accent}|${tint}`;
+  if (smokeCache && smokeCache.key === key) return smokeCache.bands;
+
+  const mid = SMOKE_SIZE / 2;
+  const bands = [];
+  for (let b = 0; b < SMOKE_BANDS; b += 1) {
+    const c = document.createElement('canvas');
+    c.width = c.height = SMOKE_SIZE;
+    const g = c.getContext('2d');
+    const colour = b % 2 === 0 ? accent : tint;
+
+    // Heavy blur on the wide, faint underlayer and a lighter one on the wisps
+    // that ride on top. The two-pass split is what stops it looking like a
+    // uniformly fogged circle: there is still structure inside the softness.
+    for (let pass = 0; pass < 2; pass += 1) {
+      g.filter = pass === 0 ? 'blur(9px)' : 'blur(4px)';
+      // The detail pass carries most of the *shape*; the wide pass is only the
+      // haze it sits in. Weighting them the other way round reads as fog with a
+      // circle in it rather than as smoke with structure.
+      g.strokeStyle = hexA(colour, pass === 0 ? 0.19 : 0.17);
+      g.lineCap = 'round';
+
+      const arcs = pass === 0 ? 5 : 9;
+      for (let i = 0; i < arcs; i += 1) {
+        // Deterministic per band so a rebuild after a colour change does not
+        // reshuffle the tunnel's shape in front of the user.
+        const seed = (b * 37 + i * 61 + pass * 13) % 100 / 100;
+        const start = seed * Math.PI * 2;
+        const extent = (0.5 + seed * 1.6) * (pass === 0 ? 1.5 : 0.8);
+        /*
+          Vapour sits well out toward the sprite's rim, and the band is narrow.
+          The first version put it at 0.62 with a 30px band and 13px of blur:
+          once a near ring is scaled to ~1300px across, that inward spill covers
+          the middle of the screen, and with `lighter` compositing a dozen rings
+          doing it at once saturated the whole viewport into a flat wall of
+          colour. The tunnel needs its hole to stay open — that hole IS the
+          tunnel.
+        */
+        const radius = mid * (0.76 + seed * 0.12);
+        g.lineWidth = (pass === 0 ? 19 : 8) * (0.7 + seed * 0.7);
+        g.beginPath();
+        g.arc(mid, mid, radius, start, start + extent);
+        g.stroke();
+      }
+    }
+    g.filter = 'none';
+    bands.push(c);
+  }
+
+  smokeCache = { key, bands };
+  return bands;
 }
 
 /**
@@ -1673,6 +1884,7 @@ function drawWormhole(w, h, dt, life) {
   const squeeze = 1 - anticipation * 0.22;
 
   const q = quantisedColours();
+  const bands = smokeBands(q.accent, q.tint);
   ctx.globalCompositeOperation = 'lighter';
 
   for (let i = 0; i < wormholeRings.length; i += 1) {
@@ -1693,25 +1905,69 @@ function drawWormhole(w, h, dt, life) {
       leaves the viewport at about z = 0.9, so fading only over the last tenth
       removes the recycle pop without ever dimming a ring you can still see.
     */
-    const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 10);
     /*
-      Softer than a neon tunnel: lower opacity and wider, lighter strokes so the
-      rings read as vapour lit from within rather than as drawn lines. Widening
-      while dimming is the trick — a thick faint stroke on `lighter` blends into
-      its neighbours and loses its edge, which is what "ghostly" means here.
+      Fading starts much earlier than the stroke version needed (z ≈ 0.72 rather
+      than 0.9). A stroke that big is a thin line mostly off screen and costs
+      nothing to leave at full brightness; a vapour band that big is a
+      screen-filling cloud, and a stack of them on `lighter` reaches saturation
+      long before they leave the viewport.
     */
-    const alpha = (0.09 + z * 0.58) * fade * (0.55 + life * 0.6);
+    const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 3.6);
+    const alpha = (0.07 + z * 0.30) * fade * (0.55 + life * 0.6);
     if (alpha < 0.01) continue;
 
+    /*
+      One blit per band, scaled to the ring's radius and rotated with depth —
+      the rotation growing with z is what makes the tunnel look twisted rather
+      than like a stack of hoops.
+
+      The sprite is drawn at 1.55× the ring radius on purpose. The vapour in it
+      sits at ~0.62 of the sprite's half-width, so this puts the *dense part* of
+      the band on the ring's radius and lets the soft falloff spill inside and
+      outside it, which is where the sense of depth in the fog comes from.
+    */
+    const draw = r * 1.55;
     ctx.globalAlpha = Math.min(1, alpha);
-    ctx.strokeStyle = i % 2 === 0 ? q.accent : q.tint;
-    ctx.lineWidth = 1.5 + z * z * 11 + beatFlash * 1.6;
-    ctx.beginPath();
-    // Rotation grows with depth, which is what makes the tunnel look twisted
-    // rather than like a stack of rings.
-    ctx.ellipse(cx, cy, r, r * ring.squash, ring.twist + wormholeSpin + z * 2.6,
-      0, Math.PI * 2);
-    ctx.stroke();
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(ring.twist + wormholeSpin + z * 2.6);
+    ctx.scale(1, ring.squash);
+    ctx.drawImage(bands[ring.band], -draw, -draw, draw * 2, draw * 2);
+    ctx.restore();
+  }
+
+  /*
+    Vapour inside the tunnel.
+
+    Rings alone — however soft — still describe a *surface*. The wisps are what
+    make the space between the walls look occupied, and they are what separates
+    "a smoky tunnel" from "a soft tunnel". They travel on the same z² curve as
+    the rings so they share the perspective, and they use the glow sprite that
+    is already cached for the throat, so the whole effect adds one blit each.
+  */
+  const glowSprite = accentGlow(q.accent);
+  for (let i = 0; i < wormholeWisps.length; i += 1) {
+    const wisp = wormholeWisps[i];
+    wisp.z += dt * speed * 0.86;   // slightly slower than the walls: parallax
+    if (wisp.z >= 1) wisp.z -= 1;
+    wisp.angle += dt * wisp.spin * (1 + dropFlash * 2);
+
+    const z = wisp.z;
+    const r = maxR * z * z * squeeze;
+    const fade = Math.min(1, z * 5) * Math.min(1, (1 - z) * 3.2);
+    const alpha = (0.04 + z * 0.14) * fade * (0.5 + life * 0.7);
+    if (alpha < 0.01) continue;
+
+    const a = wisp.angle + wormholeSpin + z * 2.6;
+    const px = cx + Math.cos(a) * r * wisp.radial;
+    const py = cy + Math.sin(a) * r * wisp.radial * 0.82;
+    // Capped against the viewport, not just scaled with r: a near wisp sized off
+    // an off-screen radius becomes a 350px blob and stops reading as something
+    // floating inside the tunnel.
+    const size = Math.min(Math.max(6, r * 0.20 * wisp.scale), Math.min(w, h) * 0.16);
+
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.drawImage(glowSprite, px - size, py - size, size * 2, size * 2);
   }
 
   // The throat: a bright core so the vanishing point reads as somewhere the
@@ -1825,6 +2081,87 @@ function applySwirlScale(now) {
  * @param {string} tintLive base tint for this frame
  * @param {string} accentLive accent for this frame
  */
+/**
+ * Put the right engine on screen, and draw it if it is the MilkDrop one.
+ *
+ * The swirl field is rendered further down the backdrop loop, where it can be
+ * thinned against a cover photo and a solo look. MilkDrop has nothing to thin
+ * against — it owns the screen — so it is simplest to draw it here, next to the
+ * decision that selects it.
+ *
+ * @param {object} preset the preset actually being rendered
+ * @param {number} now rAF timestamp
+ * @param {number} dt frame delta (ms)
+ * @param {number} w @param {number} h CSS pixels
+ */
+function applyEngine(preset, now, dt, w, h) {
+  if (!window.MilkDrop || !els.milkdrop) return;
+  const wanted = preset.engine === 'milkdrop' ? 'milkdrop' : 'swirl';
+
+  if (wanted !== activeEngine) {
+    activeEngine = wanted;
+    if (wanted === 'milkdrop') {
+      els.milkdrop.hidden = false;
+      window.MilkDrop.init(els.milkdrop);
+      window.MilkDrop.resize(w, h);
+      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
+      // Cut rather than blend on the way in: there is nothing to blend FROM,
+      // and a fade from black reads as the app being slow to start.
+      milkdropName = window.MilkDrop.loadPreset(preset.milkdrop, 0);
+      lastMilkdropSwitchAt = now;
+    } else {
+      window.MilkDrop.destroy();
+      els.milkdrop.hidden = true;
+    }
+  }
+
+  if (activeEngine !== 'milkdrop') return;
+
+  /*
+    The engine reports whether it is actually alive only once its frame has
+    loaded and parsed the preset packs — WebGL2 support, a bundle that failed to
+    load and a pack that would not parse are all invisible from out here. Until
+    then, draw nothing and keep the frame hidden-but-present so it can finish
+    starting. It settles within a second of the first switch.
+  */
+  if (!window.MilkDrop.isSupported()) return;
+
+  // A preset change within the same engine (Milkdrop → Milkdrop Soft).
+  if (preset.milkdrop && preset.milkdrop !== milkdropName && now - lastMilkdropSwitchAt > 500) {
+    milkdropName = window.MilkDrop.loadPreset(preset.milkdrop);
+    lastMilkdropSwitchAt = now;
+  }
+
+  /*
+    Beat-synced transitions, borrowed from Plane9 — cutting on a drop rather
+    than on a timer is most of why a visualiser feels alive rather than like a
+    screensaver on shuffle.
+
+    Gated on a real drop AND a long cooldown. A MilkDrop preset needs time to
+    develop, so cutting on every drop in a four-on-the-floor track would be a
+    strobe rather than a sequence.
+  */
+  if (dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
+    const all = window.MilkDrop.names();
+    if (all.length > 1) {
+      const i = all.indexOf(milkdropName);
+      milkdropName = window.MilkDrop.loadPreset(all[(i + 1) % all.length]);
+      lastMilkdropSwitchAt = now;
+      setStatus(`MilkDrop — ${milkdropName}`);
+    }
+  }
+
+  // Resize crosses a frame boundary, so it is sent only on a real change rather
+  // than every frame — the CSS already stretches the frame itself.
+  const size = `${Math.floor(w)}x${Math.floor(h)}`;
+  if (size !== milkdropSize) {
+    milkdropSize = size;
+    window.MilkDrop.resize(w, h);
+  }
+
+  window.MilkDrop.render(dt / 1000);
+}
+
 function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
   if (!swirlOn) return;
 
@@ -2422,6 +2759,16 @@ function drawBackdrop(now) {
   // without repeating itself.
   let startedAt = 0;
   try {
+    // Hidden overlay: draw nothing at all. This is the single largest saving
+    // available while hidden — the swirl shader, the galaxy and the sprites all
+    // hang off this function. Placed above the cadence sampler so the parked
+    // frames are not mistaken for a stalling compositor.
+    if (!overlayVisible) return;
+
+    // Compact modes have no backdrop: there is no room for one, and the point
+    // of them is to composite fewer pixels. Everything below this line draws.
+    if (isCompact()) return;
+
     // Presented-frame cadence, sampled before the throttle so it measures the
     // compositor rather than our own frame-skipping. Gaps over 100ms are the
     // window being occluded or the machine sleeping, not render load.
@@ -2705,11 +3052,38 @@ function drawBackdrop(now) {
     // whole overlay stays as see-through (faint) or solid as the user picked.
     const level = BACKDROP_LEVELS[backdropLevel] || BACKDROP_LEVELS[2];
 
+    // Engine selection, before anything draws. See `activeEngine`.
+    applyEngine(activePreset, now, dt, w, h);
+
     const bare = Boolean(activePreset.bare);
     if (bare !== canvasHidden) {
       canvasHidden = bare;
       els.canvas.style.display = bare ? 'none' : '';
       if (!bare) resizeCanvas(); // the backing store is stale after being hidden
+    }
+
+    /*
+      Transparent background.
+
+      `soloLayer` already suppresses the wash and the cover photo, but the GPU
+      field is not a layer flag — it renders underneath every preset — so a solo
+      look still laid a translucent colour film over the desktop. A preset that
+      asks for `transparentBg` gets nothing behind its layer at all: the desktop
+      is the background.
+
+      Taken out of the page rather than rendered at alpha 0, for the same reason
+      `bare` does it: an untouched full-screen canvas is still composited every
+      frame, and compositing is this app's dominant cost.
+    */
+    const clearBg = Boolean(activePreset.transparentBg);
+    if (clearBg !== swirlHidden) {
+      swirlHidden = clearBg;
+      els.swirl.style.display = clearBg ? 'none' : '';
+      // Coming back: clear the remembered rung so the ladder re-issues a resize
+      // with the current window size on the next rendered frame. Without this it
+      // early-returns on `next === swirlScale` and the buffer keeps whatever
+      // dimensions it had when the look changed.
+      if (!clearBg) swirlScale = 0;
     }
 
     if (bare) {
@@ -2755,8 +3129,10 @@ function drawBackdrop(now) {
       practically invisible.
     */
     const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.42 : 1);
-    renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
-      activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+    if (!clearBg) {
+      renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
+        activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
+    }
 
     // Wash opacity follows the level and swells with build-up/drop so colour
     // change reads even through a transparent overlay. When a cover photo is
@@ -3475,6 +3851,10 @@ async function enableAudio() {
   // Finding the chip unprompted answers the question as well as the prompt
   // does, so the nudge should never appear afterwards.
   if (ok) closeCaptureNudge();
+  /* Starting capture replaces the whole audio graph. A MilkDrop visualizer
+     built against the old context would keep reading zeros forever — silently,
+     because a preset with no audio still animates. */
+  if (window.MilkDrop) window.MilkDrop.reconnect();
   return ok;
 }
 
@@ -3494,6 +3874,46 @@ async function enableAudio() {
   being asked is not ours to decide. So: asked once, honoured either way, and
   never raised again.
 */
+
+/* ------------------------------------------------------------- first run */
+/*
+  One card, once per install. A new user otherwise gets a transparent overlay
+  and a row of single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do —
+  and that row is invisible until the cursor moves, so many never find it.
+
+  Shown immediately rather than waiting for a track: the question it answers is
+  "what is this and what do I do now", which is at its most urgent before
+  anything is playing. That is the opposite of the capture nudge below, which
+  waits 20s into a song precisely because it is interrupting something that is
+  already going well.
+*/
+const WELCOME_KEY = 'welcomeSeen';
+
+function closeWelcome() {
+  if (els.welcome) els.welcome.hidden = true;
+  try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ }
+}
+
+function maybeShowWelcome() {
+  if (!els.welcome) return;
+  try {
+    if (localStorage.getItem(WELCOME_KEY) === '1') return;
+  } catch {
+    // Storage unavailable — show it. A card shown twice is a far smaller
+    // failure than a first-time user who never learns what the chips do.
+  }
+  els.welcome.hidden = false;
+}
+
+if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
+
+/* Esc also dismisses it. Scoped to "while the card is up" so this does not
+   become a global key handler competing with the panels' own Esc bindings. */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (els.welcome && !els.welcome.hidden) closeWelcome();
+  else if (els.poster && !els.poster.hidden) closePoster();
+});
 
 /** Playback needed before asking, so the prompt does not land during startup. */
 const CAPTURE_NUDGE_AFTER_MS = 20000;
@@ -3524,6 +3944,9 @@ function closeCaptureNudge() {
  */
 function maybeShowCaptureNudge(positionMs) {
   if (captureNudgeVisible || audioEnabled || !els.captureNudge) return;
+  // Never stack the two cards. A first-time user who has not dismissed the
+  // welcome yet is not ready for a second thing to read.
+  if (els.welcome && !els.welcome.hidden) return;
   if (!currentTrack || positionMs < CAPTURE_NUDGE_AFTER_MS) return;
   if (captureNudgeAnswered()) return;
   captureNudgeVisible = true;
@@ -3645,6 +4068,7 @@ window.player.onTranscribeProgress((data) => {
   const WORK = {
     download: 'downloading speech model', transcribing: 'transcribing',
     aligning: 'aligning words', aligned: null, 'align-weak': null,
+    correcting: 'checking the words', corrected: null,
     done: null, empty: null, error: null,
   };
   if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
@@ -3665,6 +4089,14 @@ window.player.onTranscribeProgress((data) => {
     case 'aligned':
       // Real lyric text matched onto the transcribed timings — the good case.
       setStatus(`matched real lyrics (${data.coverage}% anchored)`);
+      break;
+    case 'correcting':
+      // Only ever runs when there were no real lyrics to match, so this is the
+      // fallback path doing its best rather than a step in the good one.
+      setStatus(`checking the words… ${data.batch}/${data.batches}`);
+      break;
+    case 'corrected':
+      setStatus(`fixed ${data.changed} misheard line${data.changed === 1 ? '' : 's'}`);
       break;
     case 'done':
       setStatus(
@@ -3694,6 +4126,12 @@ window.player.onTrack((track) => {
   flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
   durationMs = track.durationMs || 0;
+  lastProgressPct = -1;           // force the bar to redraw for the new song
+  // The previous song's cover choice says nothing about this one, and a stale
+  // selection would mark the wrong tile in the picker.
+  artworkChosen = false;
+  artworkChosenUrl = null;
+  closePoster();
   cuesLatin = [];
   cuesDevanagari = null;
   cuesEnglish = null;
@@ -3793,6 +4231,15 @@ window.player.onArtwork((data) => {
   if (!isForCurrentTrack(data.track)) return;
   if (data.artwork) loadArtImage(data.artwork);
   maybeEnrichArtists(data.artistName);
+  // Whether this cover was hand-picked, so the ▣ chip can say so and the
+  // picker can mark the right tile.
+  artworkChosen = Boolean(data.chosen);
+  if (els.posterBtn) {
+    els.posterBtn.setAttribute('aria-pressed', String(artworkChosen && !els.poster.hidden));
+    els.posterBtn.title = artworkChosen
+      ? 'Cover art — using your pick'
+      : 'Cover art — pick a different one';
+  }
   updateHero();
 });
 
@@ -3908,6 +4355,75 @@ window.player.onTranslation((payload) => {
   refreshButtons();
 });
 
+/*
+  Overlay visibility. Main sends this on every show/hide (Ctrl+Alt+H, the tray,
+  or anything added later). Because `backgroundThrottling` is off — required so
+  the visuals keep moving while another app has focus — Chromium will not park
+  us on its own, so hiding the window without this kept the entire visual stack
+  drawing into a surface nobody could see. The loops keep their rAF alive and
+  simply draw nothing, so resuming is instant and no state drifts.
+*/
+/*
+  Display mode. Main owns the window geometry and tells us what it just became;
+  the renderer's job is to look right at that size and to stop paying for what
+  is no longer visible.
+*/
+/** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
+const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip' };
+
+if (els.modeBtn) {
+  els.modeBtn.addEventListener('click', () => {
+    const order = ['full', 'bar', 'strip'];
+    const next = order[(order.indexOf(displayMode) + 1) % order.length];
+    window.player.setDisplayMode(next);
+  });
+}
+
+window.player.onDisplayMode(({ mode }) => {
+  displayMode = mode || 'full';
+  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
+  document.body.classList.toggle('mode-bar', displayMode === 'bar');
+  document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  document.body.classList.toggle('mode-compact', isCompact());
+
+  if (isCompact()) {
+    /*
+      Take both GPU surfaces and the 2D canvas out of the page.
+
+      Hiding them is not enough and never was: an untouched full-screen canvas
+      is still a compositor layer blended into every frame, and the MilkDrop
+      frame keeps its WebGL2 context, render targets and compiled preset
+      resident until it is actually reloaded. In a 54px window that is the
+      entire cost of fullscreen for none of the picture.
+    */
+    if (window.MilkDrop) window.MilkDrop.destroy();
+    if (els.milkdrop) els.milkdrop.hidden = true;
+    activeEngine = 'swirl';
+    els.swirl.style.display = 'none';
+    els.canvas.style.display = 'none';
+    swirlHidden = true;
+    canvasHidden = true;
+  } else {
+    els.swirl.style.display = '';
+    els.canvas.style.display = '';
+    swirlHidden = false;
+    canvasHidden = false;
+    swirlScale = 0;          // re-issue a resize at the new window size
+    resizeCanvas();
+  }
+});
+
+window.player.onVisibility(({ visible }) => {
+  overlayVisible = visible !== false;
+  // Resuming: forget the timestamps from before the pause so the first frame
+  // back does not see a multi-minute dt and jump every animation forward.
+  if (overlayVisible) {
+    lastBackNow = 0;
+    lastFrameAt = 0;
+    lastDrawnAt = 0;
+  }
+});
+
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
   flushHeatmap();                 // ...and its energy arc
@@ -3934,6 +4450,7 @@ window.player.onIdle(() => {
   els.artist.textContent = '';
   document.body.classList.remove('is-playing');
   els.progressFill.style.width = '0%';
+  lastProgressPct = -1;
   updateHero();
 });
 
@@ -4390,6 +4907,141 @@ function libraryCard(it) {
   return card;
 }
 
+/* ------------------------------------------------------- cover art picker */
+/*
+  The artwork search returns one winner and is right most of the time. When it
+  is wrong — the long-standing "wrong cover" complaint — there was nothing the
+  user could do. This panel shows what the three sources actually found.
+
+  It deliberately includes the near-misses the automatic pick rejects. That
+  threshold exists to stop the app *asserting* a wrong cover; a person looking
+  at a grid can see at a glance which one is their album, and those rejected
+  rows are precisely what they need when the automatic answer failed.
+
+  Choosing recolours the whole app, because the cover has always driven
+  `extractArtPalette()`. That is deliberate: a poster that disagrees with the
+  colours around it looks like a bug.
+*/
+
+/** Whether the cover currently showing was hand-picked rather than found. */
+let artworkChosen = false;
+
+/** The URL of the chosen cover, so its tile can show as selected. */
+let artworkChosenUrl = null;
+
+function closePoster() {
+  if (els.poster) els.poster.hidden = true;
+  if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'false');
+}
+
+async function openPoster() {
+  if (!els.poster) return;
+  els.poster.hidden = false;
+  document.body.classList.add('show-cursor');
+  if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'true');
+
+  if (!currentTrack) {
+    els.posterGrid.replaceChildren();
+    els.posterStatus.textContent = 'nothing playing';
+    return;
+  }
+
+  els.posterGrid.replaceChildren();
+  els.posterStatus.textContent = 'searching…';
+
+  // Captured so a track change while the search is in flight cannot paint one
+  // song's covers over another's.
+  const asked = currentTrack;
+  let res;
+  try {
+    res = await window.player.artworkCandidates(asked);
+  } catch (err) {
+    els.posterStatus.textContent = err.message || 'search failed';
+    return;
+  }
+  if (currentTrack !== asked || els.poster.hidden) return;
+
+  const list = (res && res.candidates) || [];
+  if (list.length === 0) {
+    els.posterStatus.textContent = res && res.message
+      ? res.message
+      : 'no covers found for this track';
+    return;
+  }
+
+  els.posterStatus.textContent = artworkChosen
+    ? `${list.length} found · using your pick`
+    : `${list.length} found · click one to use it`;
+  els.posterGrid.replaceChildren(...list.map((c) => posterCard(c, asked)));
+}
+
+/**
+ * One candidate tile.
+ * @param {{thumb: string, fullUrl: string, source: string, title: string, artist: string}} c
+ * @param {object} track the track this list was fetched for
+ * @returns {HTMLButtonElement}
+ */
+function posterCard(c, track) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'poster__card';
+  card.title = `${c.title || 'Unknown'} — ${c.artist || 'Unknown'} (${c.source})`;
+  card.setAttribute('aria-pressed', String(c.fullUrl === artworkChosenUrl));
+
+  const img = document.createElement('img');
+  img.className = 'poster__img';
+  img.src = c.thumb;
+  img.alt = '';
+
+  const meta = document.createElement('div');
+  meta.className = 'poster__meta';
+  const song = document.createElement('div');
+  song.className = 'poster__song';
+  song.textContent = c.title || 'Unknown';
+  const src = document.createElement('div');
+  src.className = 'poster__source';
+  src.textContent = `${c.artist || 'Unknown'} · ${c.source}`;
+  meta.append(song, src);
+
+  card.append(img, meta);
+  card.addEventListener('click', async () => {
+    els.posterStatus.textContent = 'fetching full size…';
+    const out = await window.player.chooseArtwork({
+      track,
+      url: c.fullUrl,
+      artistName: c.artist,
+      trackName: c.title,
+    });
+    if (out && out.status === 'ok') {
+      artworkChosenUrl = c.fullUrl;
+      for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
+      card.setAttribute('aria-pressed', 'true');
+      els.posterStatus.textContent = 'using your pick';
+    } else {
+      els.posterStatus.textContent = (out && out.message) || 'could not use that cover';
+    }
+  });
+  return card;
+}
+
+if (els.posterBtn) {
+  els.posterBtn.addEventListener('click', () => {
+    if (els.poster && els.poster.hidden) openPoster();
+    else closePoster();
+  });
+}
+if (els.posterClose) els.posterClose.addEventListener('click', closePoster);
+if (els.posterAuto) {
+  els.posterAuto.addEventListener('click', async () => {
+    if (!currentTrack) return;
+    await window.player.clearArtworkChoice(currentTrack);
+    artworkChosen = false;
+    artworkChosenUrl = null;
+    for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
+    els.posterStatus.textContent = 'back to the automatic pick';
+  });
+}
+
 function openLibrary() {
   if (!els.library) return;
   els.library.hidden = false;
@@ -4456,6 +5108,8 @@ if (window.LocalPlayer) {
       els.audioBtn.setAttribute('aria-pressed', String(audioEnabled));
       // Playing our own file answers the capture question for good.
       closeCaptureNudge();
+      // Same reason as enableAudio(): this replaced the audio graph.
+      if (window.MilkDrop) window.MilkDrop.reconnect();
     }
   });
 
@@ -4584,3 +5238,7 @@ window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
+
+// Last, so a first-time user sees the card over a running backdrop rather than
+// over a blank window mid-boot.
+maybeShowWelcome();

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self';" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -11,6 +11,18 @@
     <!-- GPU swirl field (WebGL2). Sits behind #backdrop and renders the fluid
          colour base; #backdrop keeps the discrete particle/curve layers. -->
     <canvas id="swirl" aria-hidden="true"></canvas>
+    <!-- The second engine (Butterchurn / MilkDrop presets).
+
+         An iframe rather than a canvas, because MilkDrop presets are equation
+         sources that Butterchurn compiles to JavaScript and therefore need
+         'unsafe-eval'. milkdrop.html grants that to itself alone, so the page
+         that handles network-sourced lyrics, artwork and translations keeps its
+         strict policy. See milkdrop.js.
+
+         Mutually exclusive with #swirl: both are full-screen WebGL2 contexts,
+         and running two at once doubles GPU cost for nothing. -->
+    <iframe id="milkdrop" title="MilkDrop visualiser" aria-hidden="true" hidden
+            src="milkdrop.html" tabindex="-1" scrolling="no"></iframe>
     <canvas id="backdrop" aria-hidden="true"></canvas>
 
     <header id="topbar" class="topbar">
@@ -23,6 +35,11 @@
         <span id="np-artist" class="np-artist"></span>
       </div>
       <div id="status" class="status" role="status"></div>
+      <!-- The active lyric, for the compact modes only. The scrolling column
+           has no small version, so in a 54px strip this one line IS the app.
+           Its own element rather than reusing #status, which carries app
+           messages that would otherwise overwrite the words mid-song. -->
+      <div id="compact-line" class="compact-line" aria-hidden="true"></div>
     </header>
 
     <!-- Apple Music-style scrolling column. All lines live here; the column
@@ -75,6 +92,8 @@
         <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
+        <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
+        <button id="btn-mode" class="chip" type="button" title="Size — fullscreen / bar / strip (Ctrl+Alt+M)">▭ Full</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
         <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
@@ -132,6 +151,23 @@
       <p id="library-empty" class="library__empty" hidden></p>
     </section>
 
+    <!-- Cover art picker. The automatic search returns a single winner and is
+         right most of the time; when it is wrong there was previously nothing
+         the user could do. This shows what the three sources actually found —
+         including the near-misses the automatic pick rejects on purpose, since
+         those are exactly what is needed when it got it wrong. Choosing one
+         also recolours the app, because the cover drives the palette. -->
+    <section id="poster" class="poster" hidden aria-label="Cover art">
+      <header class="poster__bar">
+        <h2 class="poster__title">Cover art</h2>
+        <span id="poster-status" class="poster__status" role="status"></span>
+        <button id="poster-auto" class="chip chip--muted" type="button"
+                title="Forget the chosen cover and search again">Auto</button>
+        <button id="poster-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+      </header>
+      <div id="poster-grid" class="poster__grid"></div>
+    </section>
+
     <!-- Transport for local playback. Only shown while a local file is loaded;
          SMTC playback is controlled by whatever app owns it. -->
     <div id="transport" class="transport" hidden>
@@ -158,6 +194,37 @@
               title="Don't show this again">✕</button>
     </div>
 
+    <!-- First run. A new user gets a transparent overlay and a row of
+         single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do — and
+         the row itself is invisible until the cursor moves, so many never find
+         it at all. One dismissible card, once per install, naming the chips
+         that are not self-evident and the two hotkeys. Deliberately NOT a
+         tour: anything longer gets dismissed unread. -->
+    <section id="welcome" class="welcome" hidden aria-label="Welcome">
+      <h2 class="welcome__title">Lyric Overlay</h2>
+      <p class="welcome__lede">
+        Play something in any app and the words follow. Move the mouse to bring
+        up the controls along the bottom.
+      </p>
+      <ul class="welcome__keys">
+        <li><b>♫</b> learns the song — its energy, its tempo, a heads-up before the drop</li>
+        <li><b>◈</b> changes the look · <b>◐</b> how much of your desktop shows through</li>
+        <li><b>अ</b> script · <b>EN</b> translation · <b>⚡</b> lite mode for a steadier frame rate</li>
+        <li><b>♪ Library</b> your songs — add files or a folder and play them here</li>
+      </ul>
+      <ul class="welcome__keys welcome__keys--hotkeys">
+        <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>H</kbd> hide or show the overlay</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd> nudge the lyric timing</li>
+      </ul>
+      <div class="welcome__row">
+        <button id="welcome-close" class="chip" type="button">Got it</button>
+      </div>
+    </section>
+
+    <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles
+         themselves are loaded by milkdrop.html, not here — this page must not
+         have them, and must not have eval. -->
+    <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>
     <script src="sprites.js"></script>

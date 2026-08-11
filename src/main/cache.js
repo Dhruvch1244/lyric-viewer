@@ -30,7 +30,17 @@ const MAX_ENTRIES = 600;
 /** Debounce window (ms) so bursts of writes coalesce into one disk flush. */
 const WRITE_DEBOUNCE_MS = 400;
 /** Fields merged/persisted per entry. Only defined keys overwrite on merge. */
-const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap', 'heatmap', 'wordAlignFailed'];
+/*
+  Additive only. A field added here is picked up by existing cache files without
+  a version bump, because `merge` copies whatever is present and leaves the rest
+  alone — which is why CACHE_VERSION has not needed to move since 1.
+
+  `artworkUrl` stores the URL of a hand-picked cover, not the image. A data URI
+  of a 1000px cover is hundreds of KB, and this file holds every song the user
+  has ever played; the same reasoning already keeps pre-sync from persisting
+  artwork at all.
+*/
+const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap', 'heatmap', 'wordAlignFailed', 'artworkUrl', 'artworkArtist', 'artworkTitle'];
 
 /** @typedef {{cues?: Array|null, source?: string|null, indic?: boolean, cuesEnglish?: Array|null, language?: string, cuesDevanagari?: Array|null, mood?: object|null, updatedAt: number}} CacheEntry */
 

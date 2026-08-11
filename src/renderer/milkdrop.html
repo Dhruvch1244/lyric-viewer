@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      This frame, and ONLY this frame, allows 'unsafe-eval'.
+
+      MilkDrop presets are not data: they are per-frame and per-vertex equation
+      sources, which Butterchurn compiles into JavaScript functions at load
+      time. There is no way to run them without eval, and adding 'unsafe-eval'
+      to the main overlay page would extend it to every line of code that
+      touches network-sourced lyrics, artwork and translations.
+
+      So the engine is isolated here instead. This document loads nothing but
+      two vendored MIT bundles and one local driver; it has no network access at
+      all (`connect-src 'none'`), no images, no fonts, and it never sees a
+      string that came from the network — audio arrives as raw numbers over
+      postMessage from the parent, and preset names are chosen from Butterchurn's
+      own catalogue.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:;" />
+    <title>MilkDrop</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="cv"></canvas>
+    <script src="vendor/butterchurn.min.js"></script>
+    <!-- Four packs, ~455 presets. Variety is the entire axis a visualiser is
+         judged on, and the packs are the cheapest variety there is: 2.3MB of
+         equations against writing one more layer by hand. -->
+    <script src="vendor/butterchurnPresets.min.js"></script>
+    <script src="vendor/butterchurnPresetsExtra.min.js"></script>
+    <script src="vendor/butterchurnPresetsExtra2.min.js"></script>
+    <script src="vendor/butterchurnPresetsMD1.min.js"></script>
+    <script src="milkdrop-frame.js"></script>
+  </body>
+</html>
