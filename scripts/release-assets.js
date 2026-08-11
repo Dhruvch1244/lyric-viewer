@@ -2,14 +2,24 @@
 'use strict';
 
 /*
-  Upload the built installer AND its update manifest to the matching GitHub
-  release.
+  Upload the built installer, its update manifest AND its blockmap to the
+  matching GitHub release.
 
   This exists because of a silent failure. v0.19.0 shipped auto-update and was
   published with only the .exe attached; `latest.yml` is what electron-updater
   actually reads, so without it every client's update check finds nothing and
   the feature does nothing at all — with no error anywhere to notice. That is a
   bad failure mode to leave to memory on every release.
+
+  v0.20.0 fixed the manifest and left the same hole one file over. electron-
+  updater downloads an NSIS update *differentially*: it fetches
+  `<installer>.exe.blockmap` for both the installed build and the new one, and
+  transfers only the chunks that differ. Ours was never uploaded, so that fetch
+  404s on every client. It does fall back to a full download, which is why this
+  is a slow bug rather than a dead one — but the fallback re-downloads all
+  114MB for what is usually a few MB of changed chunks, on an app that ships
+  most days. The blockmap is written by the same electron-builder run; there is
+  no reason not to publish it.
 
   Usage:  node scripts/release-assets.js [--tag v0.19.0]
 
@@ -34,8 +44,9 @@ const tag = arg('--tag') || `v${version}`;
 
 const installer = path.join(DIST, `LyricOverlay-Setup-${version}.exe`);
 const manifest = path.join(DIST, 'latest.yml');
+const blockmap = `${installer}.blockmap`;
 
-const missing = [installer, manifest].filter((f) => !fs.existsSync(f));
+const missing = [installer, manifest, blockmap].filter((f) => !fs.existsSync(f));
 if (missing.length) {
   console.error('Missing build output — run `npm run dist:win` first:');
   for (const f of missing) console.error('  ' + f);
@@ -55,13 +66,14 @@ if (!declared || declared[1].trim() !== version) {
   process.exit(1);
 }
 
-console.log(`Uploading to ${tag}:`);
-console.log('  ' + path.basename(installer));
-console.log('  ' + path.basename(manifest));
+const assets = [installer, manifest, blockmap];
 
-execFileSync('gh', ['release', 'upload', tag, installer, manifest, '--clobber'], {
+console.log(`Uploading to ${tag}:`);
+for (const f of assets) console.log('  ' + path.basename(f));
+
+execFileSync('gh', ['release', 'upload', tag, ...assets, '--clobber'], {
   stdio: 'inherit',
   cwd: ROOT,
 });
 
-console.log('Done. Auto-update reads latest.yml, so it is not optional.');
+console.log('Done. Auto-update reads latest.yml and the blockmap; neither is optional.');

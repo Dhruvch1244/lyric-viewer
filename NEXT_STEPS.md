@@ -1,7 +1,16 @@
 # Next steps
 
-Current as of **v0.18.0**. Written to be picked up cold — each item says what
+Current as of **v0.21.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
+
+> **0.21.0's lesson, on top of the one below: ask the system what happened,
+> don't read it off a return value.** `SetParent` reports failure by returning
+> null, and null is also the legitimate previous parent of a top-level window.
+> Every call was failing with ERROR_INVALID_WINDOW_HANDLE — `koffi.as(buffer,
+> 'void*')` passes the address OF the handle buffer, not the HWND inside it —
+> and three z-order theories were built and photographed on top of that before
+> one line (`GetParent`) ended it. `GetLastError`, `GetWindowLongPtr` and
+> `GetWindowRect` had all been sitting there with the answer, unasked.
 
 > **Profile before optimising anything in the render loop.** 0.16.0's draw-call
 > audit ranked Concert by canvas calls and concluded the galaxy was 300 arcs.
@@ -12,7 +21,35 @@ is missing, why it was left, and what the first move is.
 
 ---
 
-## Where 0.18.0 landed
+## Where 0.21.0 landed
+
+**Shipped in 0.21.0:**
+
+1. **Auto-update actually works** — the blockmap is published, the install
+   directory is fixed so an update replaces rather than duplicates, it
+   re-checks every six hours, and there is a card on screen instead of a tray
+   menu nobody opens.
+2. **1754 presets** (was 395) as files read on demand, and a browser with
+   rendered previews, favourites, hiding and arrow-key stepping.
+3. **Wallpaper mode**, clickable via forwarded pointer input.
+4. **Per-line artist attribution** — built and unit-tested, never verified
+   against a live provider.
+5. **Kugou** as a third synced lyric source.
+6. **The swirl resolution governor** no longer feeds itself.
+
+**Three beliefs measured out of existence in 0.21.0:**
+
+- The screen-share prompt (roadmap adoption blocker #3) **does not happen**.
+  `setDisplayMediaRequestHandler` has been auto-approving loopback for
+  releases. The WASAPI item is dropped, not deferred.
+- The 30–44fps dips are **not MilkDrop-specific**. They reproduce on the swirl
+  engine, correlate with startup work, and recover on their own.
+- The progress-bar style write **was already throttled** — this file listed it
+  as open when the code had done it for releases.
+
+---
+
+## Older: where 0.18.0 landed
 
 **Shipped in 0.18.0:**
 
@@ -87,50 +124,51 @@ profiler self time.
   adoption one — a taskbar strip composites a few percent of the surface a
   fullscreen overlay does.
 
-- **The lyric loop writes layout-affecting style every frame.** `frame()` sets
-  `els.progressFill.style.width` on every vsync, for a bar a few hundred pixels
-  wide where sub-pixel changes are invisible. Throttling it to ~10 Hz and
-  quantising to 0.1% removes ~50 style invalidations per second on a surface
-  whose compositing is already the constraint. Small, but it is on the expensive
-  side of the ledger.
+- ~~**The lyric loop writes layout-affecting style every frame.**~~ **Already
+  done** — `renderer.js` quantises the progress bar to 0.1%, which settles at
+  ~5 writes/s. This entry was stale when 0.21.0 went looking for it, which is
+  its own small lesson about trusting this file over the code.
 
 ---
 
 ## Requested, not built
 
-### Per-line artist attribution
+### Per-line artist attribution — **built in 0.21.0, never run**
 
-0.20.0 gave every artist a distinct silhouette, which fixes *identity*. It does
-not fix *meaning*, which was the other half of the complaint: the dancers still
-rotate who is "on the mic" by line index modulo member count, so on a
-three-artist collab the wrong person is always singing.
+`src/main/attribute.js` and `ArtistSprites.mapAttribution` are written, wired
+and covered by 24 tests. **No successful provider call has ever been made**:
+Gemini reports quota exhausted and the HuggingFace token lacks the Inference
+Providers scope, so `isAttributionAvailable()` is the only path that has run in
+anger. Everything downstream of `convert()` is unproven against a real model —
+in particular whether the model returns exactly one index per line often enough
+for `normaliseSingers` to accept the batch rather than reject it.
 
-The fix is a cached LLM pass — the provider stack, the cache and the batching
-all exist already (see `correct.js`, which is the same shape). Feed the lyric
-lines plus the artist list, ask which artist sings each line, cache the answer
-per track in `llmCache` beside the cues, and have `setActive` raise the named
-dancer instead of `index % actors.length`.
+**First move:** get any one provider working and play a multi-artist track. The
+answer is cached per song, so it costs one request to find out.
 
-**Why it was not done in 0.20.0:** it is the one remaining item that needs a
-provider key to test end to end, and every other item in the release could be
-verified against a real track without one. It is a clean, well-scoped next job
-rather than a blocked one.
+Still not done, and cheap: the dancers know about `sections()`, so a build-up
+could crouch them and a drop could launch them, instead of the beat clock being
+the only thing they read.
 
-Cheap and worth doing alongside it: the dancers know about `sections()` now, so
-a build-up could crouch them and a drop could launch them, instead of the beat
-clock being the only thing they read.
+### The frame-rate dips — **partly diagnosed in 0.21.0**
 
-### The frame-rate dips
+0.20.0 blamed fullscreen MilkDrop and suspected the Butterchurn cross-fade.
+Both look wrong. Measured on a real track: the dips reproduce on the **swirl**
+engine (Wormhole), running 116 → 20 → 19 → 29 → 53 → 36 → 87 → 171 → 240 fps
+across the first 73 seconds and recovering completely. They correlate with
+startup work — decode, offline analysis, lyric and artwork fetch — not with the
+visual engine.
 
-Measured during the real-audio runs: fullscreen MilkDrop holds 87–120fps but
-drops to **30–44fps** several times per song, recovering on its own. The
-governor only substitutes a cheaper preset below 24fps, so it never intervened.
+One real cause was found and fixed: the swirl's resolution governor dropped a
+rung with no rate limit, and each rung change reallocates a WebGL drawing
+buffer, which costs a long frame, which dropped the next rung. `resize`
+measured 289ms of self time.
 
-Not diagnosed. The suspects, in order: a preset cross-fade (Butterchurn runs two
-presets at once during a blend), the per-frame `postMessage` of a 1024-byte
-audio array across the frame boundary, and GC from something allocating in the
-draw path. Profile before changing anything — this file's own history is a
-sequence of confident wrong guesses about where time goes.
+**Still open:** the profile is dominated by `(program)` at 29,092ms of 48,409ms
+sampled, against ~3.5s for all app JavaScript combined. That is native
+compositing, and it confirms the standing note — the remaining lever is
+compositing fewer pixels, not faster JS. Whether the startup burst can be
+staggered has not been tried.
 
 ### Genius as a lyric source — deliberately not done
 
@@ -153,13 +191,16 @@ If it is wanted anyway, that is a deliberate reversal of the no-scraping rule
 and should be recorded as one, not slipped in as a fourth source.
 
 **What to do instead**, in rough order of value:
-1. **Musixmatch's community API** — has a documented lyrics endpoint, needs a
-   free key, and returns a 30% excerpt on the free tier. The excerpt limit
-   probably makes it useless for this app; worth ten minutes to confirm.
-2. **QQ Music / Kugou** — same shape as NetEase (public JSON, synced LRC), same
-   strengths and the same caveat about not being formally documented.
+1. ~~**Musixmatch's community API**~~ — **checked in 0.21.0, not adopted.** The
+   API answers (401 on a bad key, so the endpoint is live), but the free tier
+   returns a 30% excerpt of *plain* lyrics and no synced subtitles at all. An
+   app that shows a whole song in time with it cannot use either.
+2. ~~**QQ Music / Kugou**~~ — **Kugou shipped in 0.21.0** (`src/main/kugou.js`),
+   third in the chain after LRCLIB and NetEase. QQ Music is still untried and is
+   the obvious fourth if coverage is still short.
 3. **Deepen what exists** — the aligner already turns a *plain* lyric into a
    synced one, and LRCLIB's plain catalogue is far larger than its synced one.
+   This is now the largest coverage win left.
 
 ### The rest of the optional transcription pack
 
@@ -303,18 +344,17 @@ against a known BPM would settle it either way.
 
 ## Suggested order
 
-1. **Release hygiene** — nothing outstanding; v0.18.0 is current and merged to
-   `main` (PRs #37, #38).
-2. **Play one song through with `♫` on** — settles item 0 and item "verify word
-   alignment" in the same sitting, since both need exactly one full play with
-   capture enabled. Local playback (0.18.0) makes this cheaper than it was: a
-   file needs no capture permission at all.
-3. **Butterchurn as a second engine + a preset system** — `ROADMAP.md` items 1–2,
-   the visual-variety gap. Guard the second WebGL2 context: `swirl.js` already
-   owns one, and both alive at once doubles GPU cost for no benefit. The engines
-   must be mutually exclusive, with the idle one torn down.
-4. **Compact display modes** — `ROADMAP.md` item 3, and the largest performance
-   change available; see "Still open" above.
-5. **Side poster** — decide the candidates API first, then build the panel.
-   Note that Vinyl already puts the cover art on screen at full crispness, so
-   part of the motivation for this may already be met.
+1. **Get one LLM provider working and play a multi-artist track.** Per-line
+   attribution is the only thing 0.21.0 shipped that has never run. One request
+   settles it, and the answer is cached per song.
+2. **Verify an update in the wild.** 0.21.0 fixes the blockmap and the install
+   directory, but the proof is installing it and watching 0.22.0 arrive. Two
+   releases have now claimed a working updater; neither claim was tested by an
+   actual update.
+3. **The optional transcription pack** — the last 22.7MB, and the only
+   remaining item that needs an installer built, installed and a song
+   transcribed before it can ship. See the section above for why every version
+   of it is fragile.
+4. **Stagger the startup burst** — the frame dips are startup work, now
+   measured. Nothing has been tried yet.
+5. **Word-level alignment, end to end** — still never watched run as a whole.

@@ -17,6 +17,12 @@
       string that came from the network — audio arrives as raw numbers over
       postMessage from the parent, and preset names are chosen from Butterchurn's
       own catalogue.
+
+      That last property survives the 0.21.0 catalogue expansion. Presets now
+      also arrive over postMessage as parsed objects, but they are read by main
+      from files inside the installed app — the same trust level as the bundles
+      below, and the same one they had when they were compiled into them. No
+      preset has ever come off the network and none does now.
     -->
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:;" />
@@ -40,13 +46,17 @@
   <body>
     <canvas id="cv"></canvas>
     <script src="vendor/butterchurn.min.js"></script>
-    <!-- Four packs, ~455 presets. Variety is the entire axis a visualiser is
-         judged on, and the packs are the cheapest variety there is: 2.3MB of
-         equations against writing one more layer by hand. -->
+    <!--
+      One pack, 100 presets, resident. The other three bundles are gone: the
+      full 1754-preset corpus now ships as files in vendor/presets and is read
+      on demand, so parsing 2.3MB of equations at frame startup bought nothing
+      but a slower start and a fifth of the catalogue.
+
+      This one stays because it is the floor. If the preset files cannot be
+      read — a broken install, a half-copied update — the engine still has
+      something to draw rather than a black rectangle where the visuals were.
+    -->
     <script src="vendor/butterchurnPresets.min.js"></script>
-    <script src="vendor/butterchurnPresetsExtra.min.js"></script>
-    <script src="vendor/butterchurnPresetsExtra2.min.js"></script>
-    <script src="vendor/butterchurnPresetsMD1.min.js"></script>
     <script src="milkdrop-frame.js"></script>
   </body>
 </html>

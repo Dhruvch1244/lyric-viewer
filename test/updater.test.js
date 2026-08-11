@@ -14,7 +14,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { AppUpdater, describeUpdate, isUpdateActionable } = require('../src/main/updater');
+const {
+  AppUpdater, describeUpdate, isUpdateActionable, shouldPromptRestart,
+} = require('../src/main/updater');
 
 test('every phase produces a non-empty label', () => {
   const phases = ['idle', 'checking', 'available', 'downloading', 'ready', 'none', 'error'];
@@ -110,4 +112,76 @@ test('state changes notify the listener so the tray can redraw', () => {
   updater.set({ phase: 'none' });
   assert.equal(calls, 2);
   assert.equal(updater.state.phase, 'none');
+});
+
+/* --- the on-screen card (0.21.0) --- */
+
+test('only a downloaded update earns a prompt', () => {
+  // 'available' and 'downloading' are shown as a passive pill instead: an
+  // update still arriving has no question for the user to answer.
+  for (const phase of ['idle', 'checking', 'available', 'downloading', 'none', 'error']) {
+    assert.equal(shouldPromptRestart({ phase, version: '0.21.0' }, null), false,
+      `phase ${phase} raised a card`);
+  }
+  assert.equal(shouldPromptRestart({ phase: 'ready', version: '0.21.0' }, null), true);
+  assert.equal(shouldPromptRestart(null, null), false);
+});
+
+test('a dismissed version stays dismissed, but a newer one does not', () => {
+  // Re-prompting for the same build every few hours is how a card trains
+  // someone to dismiss it unread.
+  assert.equal(shouldPromptRestart({ phase: 'ready', version: '0.21.0' }, '0.21.0'), false);
+  assert.equal(shouldPromptRestart({ phase: 'ready', version: '0.22.0' }, '0.21.0'), true);
+  // An unnamed version cannot be matched against a dismissal, so it prompts.
+  assert.equal(shouldPromptRestart({ phase: 'ready' }, '0.21.0'), true);
+});
+
+test('dismiss records the version currently ready', () => {
+  const updater = new AppUpdater();
+  updater.state = { phase: 'ready', version: '0.21.0' };
+  assert.equal(updater.shouldPrompt(), true);
+  updater.dismiss();
+  assert.equal(updater.dismissedVersion, '0.21.0');
+  assert.equal(updater.shouldPrompt(), false);
+});
+
+test('history records phase changes, not progress ticks', () => {
+  // A download emits progress many times a second; recording each one would
+  // push everything else out of the buffer during a single update.
+  let clock = 1000;
+  const updater = new AppUpdater({ now: () => (clock += 1) });
+  updater.set({ phase: 'checking' });
+  updater.set({ phase: 'available', version: '0.21.0' });
+  for (let i = 0; i < 200; i += 1) {
+    updater.set({ phase: 'downloading', percent: i / 2, version: '0.21.0' });
+  }
+  updater.set({ phase: 'ready', version: '0.21.0' });
+
+  assert.deepEqual(updater.history.map((h) => h.phase),
+    ['checking', 'available', 'downloading', 'ready']);
+  assert.equal(updater.history[1].detail, '0.21.0');
+  assert.ok(updater.history[3].at > updater.history[0].at);
+});
+
+test('history is bounded', () => {
+  const updater = new AppUpdater();
+  for (let i = 0; i < 500; i += 1) {
+    updater.set({ phase: i % 2 ? 'checking' : 'none' });
+  }
+  assert.equal(updater.history.length, 50);
+});
+
+test('an error message is what gets recorded, not a version', () => {
+  const updater = new AppUpdater();
+  updater.set({ phase: 'error', message: 'net::ERR_INTERNET_DISCONNECTED' });
+  assert.equal(updater.history[0].detail, 'net::ERR_INTERNET_DISCONNECTED');
+});
+
+test('stop is safe before start and safe twice', () => {
+  // `start` is skipped entirely in development, so `will-quit` calls stop() on
+  // an updater that never had a timer.
+  const updater = new AppUpdater();
+  updater.stop();
+  updater.stop();
+  assert.equal(updater.timer, null);
 });

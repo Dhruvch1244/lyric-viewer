@@ -89,9 +89,14 @@ Honest list of what is actually weak, worst first.
 2. **124 MB installer.** Competitors are a few MB. About 60 MB of ours is the
    ONNX runtime, needed only by transcription — a feature most users will never
    trigger.
-3. **Audio reactivity needs a screen-capture permission prompt.** The loopback
-   path goes through `getDisplayMedia`, so the user sees a scary share dialog to
-   enable what is arguably the app's best feature. Many will decline.
+3. ~~**Audio reactivity needs a screen-capture permission prompt.**~~
+   **Measured false, 0.21.0.** The loopback path does go through
+   `getDisplayMedia`, but `main.js` installs a `setDisplayMediaRequestHandler`
+   that answers it with the primary screen and `audio: 'loopback'`, so Chromium
+   never raises a picker. Verified by clicking the `♫` chip with a real cursor
+   through SendInput and photographing the screen 1.2s later: no dialog
+   anywhere, and capture was already running. This gap was written before that
+   handler existed and has been closed ever since.
 4. **No first-run experience.** New users get a transparent overlay and a row of
    single-glyph chips with no explanation of what `अ`, `◐`, `♫` or `⚡` do.
 5. **No auto-update.** Every fix requires a manual re-download. At scale this
@@ -207,9 +212,11 @@ the leak.
 
 ### Phase 5 — Reach
 
-- **Fix the audio-permission friction.** Investigate a native WASAPI loopback
-  addon to replace `getDisplayMedia`, removing the share prompt entirely. This
-  is the one place a native module genuinely earns its keep.
+- ~~**Fix the audio-permission friction.**~~ **Dropped, 0.21.0.** There is no
+  prompt to remove — see gap 3 above, which was measured rather than reasoned
+  about. A WASAPI addon would have replaced a working path with a native one to
+  solve a problem that stopped existing when the display-media handler was
+  added.
 - **Vocal isolation (Demucs)** before transcription — the real accuracy ceiling.
   Large model, large download; only worth it as an optional pack once Phase 1's
   optional-pack machinery exists.
@@ -232,7 +239,7 @@ the leak.
 | 9 | First-run card | Medium | Low |
 | 10 | Wallpaper / screensaver mode | High | Medium-High |
 | 11 | More 2D layers moved onto the GPU | Medium | Medium |
-| 12 | WASAPI native loopback (kills the permission prompt) | Medium | High |
+| ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — |
 | 13 | Vocal isolation (Demucs) | High (quality) | Very high |
 
 Items 5, 8 and 9 are small and high-leverage — do them opportunistically
@@ -244,9 +251,10 @@ between the larger pieces.
 
 - **Chasing catalogue.** Musixmatch and Spotify win; more free sources is the
   answer, not a licensing deal.
-- **Rewriting in C++/Rust.** The bottleneck is GPU/Skia. Native code earns its
-  place in exactly two spots, both named above: WASAPI loopback and ML
-  inference.
+- **Rewriting in C++/Rust.** The bottleneck is GPU/Skia. That left exactly two
+  places native code earned its keep, and one of them turned out not to be a
+  problem at all: WASAPI loopback was dropped in 0.21.0 after measurement, so
+  ML inference is the only one left.
 - **macOS/Linux ports.** SMTC is the entire detection layer. Revisit only if the
   Windows app has an audience worth extending.
 - **Uncapping the frame rate.** The cap is vsync, not our code.

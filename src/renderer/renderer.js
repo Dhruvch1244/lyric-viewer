@@ -80,6 +80,11 @@ const els = {
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
+  updatePill: document.getElementById('update-pill'),
+  updateCard: document.getElementById('update-card'),
+  updateVersion: document.getElementById('update-version'),
+  updateInstall: document.getElementById('update-install'),
+  updateLater: document.getElementById('update-later'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -228,6 +233,39 @@ let backdropLevel = 2; // default "vivid" — clearly visible, still lets video 
 /* ------------------------------------------------------------ artist sprites */
 /** Dancing pixel actors for the current artist. */
 let spriteActors = [];
+
+/**
+ * Per-line artist index for the current song, or null when nobody worked it out.
+ * @type {number[]|null}
+ */
+let lineSingers = null;
+
+/** Who is on the mic now, so a shared line keeps them there rather than jumping. */
+let activeMicActor = -1;
+
+/** The attribution as received, kept so it can be re-mapped when actors change. */
+let attributionPayload = null;
+
+/**
+ * Bind the current cast to an attribution. The mapping itself lives in
+ * sprites.js, next to the code that builds the cast and knows why the two
+ * index spaces differ — and where it can be unit-tested.
+ *
+ * @param {{artists: string[], singers: number[]}|null} attribution
+ * @returns {number[]|null} one actor index per line, or null to keep rotating
+ */
+function mapAttributionToActors(attribution) {
+  if (!attribution) return null;
+  return window.ArtistSprites.mapAttribution(
+    spriteActors, attribution.artists, attribution.singers,
+  );
+}
+
+/** Apply an attribution (or clear it) and refresh the mapping. */
+function setAttribution(attribution) {
+  attributionPayload = attribution || null;
+  lineSingers = mapAttributionToActors(attributionPayload);
+}
 /** Transient dancers cloned from the troupe on a drop; fade out via their ttl. */
 let spriteClones = [];
 let spritesEnabled = true;
@@ -619,12 +657,28 @@ function setActive(index) {
     els.compactLine.textContent = index >= 0 && cues[index] ? (cues[index].text || '') : '';
   }
 
-  // Rotate which dancer is "on the mic". We have no per-line artist attribution
-  // from the lyric source, so collaborators simply take turns as the line
-  // advances — the active one dances, the rest idle along the bottom. The dancer
-  // taking over teleports in with a flash.
+  /*
+    Which dancer is "on the mic".
+
+    Until 0.21.0 this was `index % spriteActors.length` — collaborators took
+    turns as the line advanced, because no lyric source carries per-line
+    attribution and none can be bought. On a three-artist track that is right
+    one line in three by accident.
+
+    When an attribution has been worked out for the song (see attribute.js) it
+    names the artist per line instead, and the rotation stays as the fallback
+    for everything else: no provider, a solo artist, a line the model marked
+    shared. -1 means shared or unknown, and keeps whoever was already up rather
+    than picking someone arbitrary for a chorus.
+  */
   if (spriteActors.length > 0) {
-    const on = index >= 0 ? index % spriteActors.length : 0;
+    let on = index >= 0 ? index % spriteActors.length : 0;
+    if (lineSingers && index >= 0 && index < lineSingers.length) {
+      const named = lineSingers[index];
+      if (named >= 0 && named < spriteActors.length) on = named;
+      else if (activeMicActor >= 0) on = activeMicActor;
+    }
+    activeMicActor = on;
     const now = performance.now();
     for (let i = 0; i < spriteActors.length; i += 1) {
       const actor = spriteActors[i];
@@ -1142,9 +1196,16 @@ let milkdropSeededFor = null;
 */
 let displayMode = 'full';
 
-/** Whether the current mode draws any backdrop at all. */
+/**
+ * Whether the current mode is too small to draw a backdrop.
+ *
+ * Named modes, not "anything but full". Wallpaper mode fills the whole display
+ * and wants every layer; a `!== 'full'` test would have classed it as compact
+ * and torn both GPU surfaces out of the page, leaving the desktop showing a
+ * lyric line on a flat colour.
+ */
 function isCompact() {
-  return displayMode !== 'full';
+  return displayMode === 'bar' || displayMode === 'strip';
 }
 
 /**
@@ -2088,7 +2149,18 @@ function applySwirlScale(now) {
     22ms is ~45fps (shed pixels), 13ms is ~77fps (enough headroom to earn one
     back). The asymmetry plus the one-second floor stops it hunting.
   */
-  if (frameIntervalMs > 22 && rung > 0) {
+  /*
+    0.21.0: the drop is rate-limited too, which the comment above always
+    claimed and the code never did. Profiling a real song put `resize` at
+    289ms of self time — for a function that reallocates a WebGL drawing
+    buffer and should fire a handful of times a session. Unguarded, one long
+    frame dropped a rung, the reallocation cost another long frame, and that
+    dropped the next rung: the governor was feeding itself, and each round
+    trip was a visible hitch. 300ms still sheds pixels within a few frames of
+    a genuine sag, while one bad frame now costs one reallocation instead of
+    three.
+  */
+  if (frameIntervalMs > 22 && rung > 0 && now - lastSwirlScaleAt > 300) {
     rung -= 1;
     lastSwirlScaleAt = now;
   } else if (frameIntervalMs < 13 && rung < ceiling && now - lastSwirlScaleAt > 1000) {
@@ -2207,7 +2279,17 @@ function applyEngine(preset, now, dt, w, h) {
   */
   if (!pinned && !milkdropChosen
       && dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
-    const all = window.MilkDrop.names();
+    /* Hidden presets are excluded here, not only from the browser. This is
+       where an unwanted preset actually turns up, so a veto that did not reach
+       it would be a bookmark rather than a veto.
+
+       Liked presets, when there are any, are the only ones the cycle draws
+       from — the fastest way to make 1754 looks feel curated is to let someone
+       curate them. */
+    const liked = mdpFavourites.size
+      ? milkdropAllowed().filter((n) => mdpFavourites.has(n))
+      : [];
+    const all = liked.length > 1 ? liked : milkdropAllowed();
     if (all.length > 1) {
       const i = all.indexOf(milkdropName);
       // Recorded as the new intent, not just loaded — otherwise the block above
@@ -2215,6 +2297,7 @@ function applyEngine(preset, now, dt, w, h) {
       milkdropWanted = all[(i + 1) % all.length];
       milkdropName = window.MilkDrop.loadPreset(milkdropWanted);
       lastMilkdropSwitchAt = now;
+      markMilkdropSeen(milkdropWanted);
       setStatus(`MilkDrop — ${milkdropName}`);
     }
   }
@@ -3783,6 +3866,9 @@ function maybeEnrichArtists(artistName) {
     spriteActors = resolved.actors;
     artistLabel = resolved.label;
     applyArtPalette(); // theme the freshly-added dancers to the current cover too
+    /* The cast changed, so every actor index in the mapping is stale. Re-derive
+       it from the names, which is why the raw payload is kept around. */
+    lineSingers = mapAttributionToActors(attributionPayload);
   }
 }
 
@@ -4094,6 +4180,65 @@ if (els.nudgeDismiss) {
   els.nudgeDismiss.addEventListener('click', closeCaptureNudge);
 }
 
+/* ------------------------------------------------------------------ updating */
+/*
+  Auto-update, made visible.
+
+  0.19.0 shipped auto-update, 0.20.0 made it actually reach GitHub, and both
+  reported it into the tray menu alone. On an app whose whole surface is a
+  full-screen overlay, a state that only exists inside a right-click menu is a
+  state nobody sees: the update downloaded, waited, and the only way to learn
+  that was to go looking for it.
+
+  Main decides whether to prompt (see `updateStateForRenderer`), because the
+  dismissal has to outlive this renderer — changing display mode reloads it.
+*/
+
+/** @param {{phase: string, version?: string, percent?: number, prompt: boolean}} s */
+function applyUpdateState(state) {
+  if (!state) return;
+
+  if (els.updateCard) {
+    els.updateCard.hidden = !state.prompt;
+    if (state.prompt && els.updateVersion) {
+      els.updateVersion.textContent = state.version ? `Version ${state.version}` : 'A new version';
+    }
+  }
+
+  if (els.updatePill) {
+    // Only while it is arriving. Once ready the card says it better, and two
+    // things saying the same thing at once reads as a bug.
+    const busy = state.phase === 'downloading' || state.phase === 'available';
+    els.updatePill.hidden = !busy;
+    if (busy) {
+      const pct = Math.max(0, Math.min(99, Math.floor(state.percent || 0)));
+      els.updatePill.textContent = state.phase === 'available'
+        ? `Downloading ${state.version || 'update'}…`
+        : `Downloading ${state.version || 'update'}… ${pct}%`;
+    }
+  }
+}
+
+if (els.updateInstall) {
+  els.updateInstall.addEventListener('click', () => {
+    // The app quits from under us if this succeeds, so nothing follows it.
+    window.player.updateAction('install');
+  });
+}
+if (els.updateLater) {
+  els.updateLater.addEventListener('click', async () => {
+    if (els.updateCard) els.updateCard.hidden = true;
+    await window.player.updateAction('dismiss');
+  });
+}
+if (window.player.onUpdateState) window.player.onUpdateState(applyUpdateState);
+
+/* Ask once at startup: a cold start can settle on 'ready' before this file has
+   run, and the push-only path would then never fire. */
+if (window.player.getUpdateState) {
+  window.player.getUpdateState().then(applyUpdateState).catch(() => { /* not packaged */ });
+}
+
 /* ------------------------------------------------------------------- wiring */
 
 /**
@@ -4272,6 +4417,10 @@ window.player.onTrack((track) => {
   cuesDevanagari = null;
   cuesEnglish = null;
   cues = [];
+  /* Belongs to the song that just ended. Carrying it into the next one would
+     name that song's artists against these lyrics. */
+  setAttribution(null);
+  activeMicActor = -1;
   clearColumn();
   els.title.textContent = track.title || '';
   els.artist.textContent = track.artist || '';
@@ -4394,6 +4543,13 @@ window.player.onTick((state) => {
 });
 
 /* Sentiment-driven graphics: recolour + re-pace the visuals to the song's mood. */
+/* Arrives after the lyrics, because it is an LLM pass and the words must not
+   wait for it. The dancers rotate until it lands, then stop rotating. */
+window.player.onAttribution((payload) => {
+  if (!isForCurrentTrack(payload.track)) return;
+  setAttribution({ artists: payload.artists, singers: payload.singers });
+});
+
 window.player.onMood((data) => {
   if (!isForCurrentTrack(data.track)) return;
   if (Array.isArray(data.palette) && data.palette.length >= 4) {
@@ -4417,6 +4573,10 @@ window.player.onLyrics((payload) => {
   // LRCLIB often reports the full artist credit even when SMTC gave just the
   // primary — fold any extra collaborators in so each gets a dancer.
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
+
+  /* Applied after the enrichment above, which can add dancers: the mapping is
+     from credited names to actors, so it has to see the final cast. */
+  setAttribution(payload.attribution || null);
 
   switch (payload.status) {
     case 'searching': setJob('lyrics', 'finding lyrics'); setStatus('finding lyrics…'); break;
@@ -4505,11 +4665,11 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
-const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip' };
+const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop' };
 
 if (els.modeBtn) {
   els.modeBtn.addEventListener('click', () => {
-    const order = ['full', 'bar', 'strip'];
+    const order = ['full', 'bar', 'strip', 'wallpaper'];
     const next = order[(order.indexOf(displayMode) + 1) % order.length];
     window.player.setDisplayMode(next);
   });
@@ -4524,11 +4684,83 @@ if (els.ccEarlier) els.ccEarlier.addEventListener('click', () => els.syncEarlier
 if (els.ccLater) els.ccLater.addEventListener('click', () => els.syncLaterBtn.click());
 if (els.ccTranslate) els.ccTranslate.addEventListener('click', () => els.translateBtn.click());
 
-window.player.onDisplayMode(({ mode }) => {
+/* --------------------------------------------- wallpaper pointer forwarding */
+/*
+  In wallpaper mode this window is a child of the desktop, and Windows sends
+  clicks in that region to Progman's icon view rather than to us. Without this,
+  wallpaper mode would be visuals and nothing else: no chips, no library, no
+  preset browser.
+
+  Main polls the cursor and the button (see startPointerForwarding) and sends
+  coordinates; here they become real events on whatever element is under them.
+  `elementFromPoint` is what makes this honest — the same element the user is
+  pointing at gets the same event it would have got, so nothing downstream
+  needs to know the input arrived by a different road.
+*/
+let wallpaperHover = null;
+
+if (window.player.onWallpaperPointer) {
+  window.player.onWallpaperPointer(({ x, y, clicked }) => {
+    if (displayMode !== 'wallpaper') return;
+
+    /* The HUD hides itself until the mouse moves, and that listener is on
+       document — so this has to be a real event, not a flag. */
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      clientX: x, clientY: y, bubbles: true,
+    }));
+
+    const el = document.elementFromPoint(x, y);
+    if (el !== wallpaperHover) {
+      // Hover state drives the preset cards' mark buttons and every chip's
+      // highlight; without enter/leave they would all stay lit at once.
+      if (wallpaperHover) {
+        wallpaperHover.dispatchEvent(new MouseEvent('mouseleave', { clientX: x, clientY: y }));
+      }
+      if (el) el.dispatchEvent(new MouseEvent('mouseenter', { clientX: x, clientY: y }));
+      wallpaperHover = el;
+    }
+    if (el) {
+      el.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: x, clientY: y, bubbles: true,
+      }));
+    }
+
+    if (clicked && el) {
+      /* Focus first, because several controls read document.activeElement —
+         the preset browser's key handling in particular. */
+      if (typeof el.focus === 'function') el.focus();
+      el.dispatchEvent(new MouseEvent('click', {
+        clientX: x, clientY: y, bubbles: true, cancelable: true,
+      }));
+    }
+  });
+}
+
+window.player.onDisplayMode(({ mode, insets }) => {
   displayMode = mode || 'full';
+
+  /*
+    In wallpaper mode the window fills the whole display so the visuals run edge
+    to edge — which put the HUD, which lives along the bottom, underneath the
+    taskbar. Invisible, and unclickable too: a cursor over the taskbar is not
+    over the desktop, so forwarded input correctly refuses to fire there.
+
+    The window keeps its full-bleed bounds and the CONTROLS move instead.
+  */
+  const inset = (insets && displayMode === 'wallpaper') ? insets : { top: 0, right: 0, bottom: 0, left: 0 };
+  const root = document.documentElement.style;
+  root.setProperty('--shell-bottom', `${inset.bottom || 0}px`);
+  root.setProperty('--shell-top', `${inset.top || 0}px`);
+  root.setProperty('--shell-left', `${inset.left || 0}px`);
+  root.setProperty('--shell-right', `${inset.right || 0}px`);
+
   if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
   document.body.classList.toggle('mode-bar', displayMode === 'bar');
   document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  /* Wallpaper draws the full layout — it IS the desktop, so there is as much
+     room as fullscreen. It is not compact, and must not take the compact path
+     that tears the GPU surfaces out of the page. */
+  document.body.classList.toggle('mode-wallpaper', displayMode === 'wallpaper');
   document.body.classList.toggle('mode-compact', isCompact());
 
   if (isCompact()) {
@@ -5193,6 +5425,29 @@ if (els.posterAuto) {
   and everything else only by waiting for a drop on a 42-second cooldown. A
   catalogue you cannot open is not a catalogue.
 
+  0.20.0 gave it a search box and a list of names. That was better and still
+  wrong, because a preset is a picture and its name is not: these are titles
+  written by strangers in 2003 — `$$$ Royal - Mashup (160)`, `!!!---flexi +
+  amandio c - organic12-3d-2` — and no amount of searching them tells you what
+  any of them looks like. Choosing meant loading one and looking, 1754 times.
+
+  So 0.21.0 shows the pictures. Three things follow from that, and all three are
+  what actually make a catalogue this size usable:
+
+    - **Previews.** Rendered by the engine frame at 192x108 with synthetic
+      audio, cached to disk, and only ever generated for cards you have actually
+      scrolled to. A background pass over all 1754 would cost minutes of GPU
+      time for previews of presets nobody asked to see.
+
+    - **Liking and hiding.** With 100 presets a search box is enough. With 1754
+      you need to keep the handful you love and never see the ones you hate
+      again — and a hidden preset is excluded from the dice and the beat-synced
+      cycle too, or hiding it would mean nothing.
+
+    - **Stepping.** The arrow keys move through the filtered set and load each
+      one instantly, so browsing is watching rather than reading. This is the
+      part the old list could not do at all.
+
   Pinning uses the same per-track shape as the visual-look override, so a
   preset you liked on a song comes back next play. It is stored separately from
   `visualLooks` because it answers a different question — that one picks the
@@ -5200,8 +5455,77 @@ if (els.posterAuto) {
   within it.
 */
 
-/** How many rows to render at once. The catalogue is ~395 and search narrows it. */
-const MDP_PAGE = 120;
+/** How many cards to render at once; more arrive as the grid is scrolled. */
+const MDP_PAGE = 60;
+
+/** Storage keys. Sets rather than maps: membership is the whole question. */
+const MDP_FAV_KEY = 'milkdropFavourites';
+const MDP_HIDDEN_KEY = 'milkdropHidden';
+const MDP_SEEN_KEY = 'milkdropSeen';
+
+/** @param {string} key @returns {Set<string>} */
+function readNameSet(key) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch { return new Set(); }
+}
+
+/** @param {string} key @param {Set<string>} set */
+function writeNameSet(key, set) {
+  try { localStorage.setItem(key, JSON.stringify([...set])); } catch { /* ignore */ }
+}
+
+let mdpFavourites = readNameSet(MDP_FAV_KEY);
+let mdpHidden = readNameSet(MDP_HIDDEN_KEY);
+let mdpSeen = readNameSet(MDP_SEEN_KEY);
+
+/** 'all' | 'fav' | 'unseen' — which slice of the catalogue the grid shows. */
+let mdpFilter = 'all';
+/** How many of the current match set are rendered. */
+let mdpShown = MDP_PAGE;
+/** The filtered names as last rendered; the arrow keys step through this. */
+let mdpMatches = [];
+/** Previews already in hand this session, so re-filtering repaints instantly. */
+const mdpThumbCache = new Map();
+/** Names queued for rendering, oldest first, one at a time. */
+const mdpThumbQueue = [];
+let mdpThumbBusy = false;
+/** @type {IntersectionObserver|null} watches cards and the "more" sentinel */
+let mdpObserver = null;
+
+/**
+ * Record that a preset has actually been watched.
+ *
+ * Drives the "Unseen" filter, which is the only practical way to work through
+ * a catalogue of 1754 over many sessions — a search box cannot tell you where
+ * you got to.
+ *
+ * @param {string} name
+ */
+function markMilkdropSeen(name) {
+  if (!name || mdpSeen.has(name)) return;
+  mdpSeen.add(name);
+  writeNameSet(MDP_SEEN_KEY, mdpSeen);
+}
+
+/**
+ * Names the automatic paths are allowed to choose from.
+ *
+ * Hiding a preset has to mean it stops appearing, or it is a bookmark rather
+ * than a veto — the beat-synced cycle and the dice are where an unwanted preset
+ * actually shows up.
+ *
+ * @returns {string[]}
+ */
+function milkdropAllowed() {
+  const all = window.MilkDrop.names();
+  if (mdpHidden.size === 0) return all;
+  const kept = all.filter((n) => !mdpHidden.has(n));
+  // Never hand back nothing: someone who hides everything gets the catalogue
+  // back rather than a frozen visual.
+  return kept.length > 0 ? kept : all;
+}
 
 /** Per-track MilkDrop preset pins, keyed like every other per-track override. */
 function readMilkdropPins() {
@@ -5227,6 +5551,11 @@ function pinnedMilkdrop() {
 function closeMilkdropPanel() {
   if (els.mdPanel) els.mdPanel.hidden = true;
   if (els.mdBtn) els.mdBtn.setAttribute('aria-pressed', 'false');
+  if (mdpObserver) { mdpObserver.disconnect(); mdpObserver = null; }
+  // Stop the preview pipeline and let its WebGL context go. Nothing queued is
+  // worth holding a second context open for once the panel is shut.
+  mdpThumbQueue.length = 0;
+  if (window.MilkDrop.endThumbnails) window.MilkDrop.endThumbnails();
 }
 
 function openMilkdropPanel() {
@@ -5234,44 +5563,291 @@ function openMilkdropPanel() {
   els.mdPanel.hidden = false;
   document.body.classList.add('show-cursor');
   els.mdBtn.setAttribute('aria-pressed', 'true');
+  mdpShown = MDP_PAGE;
   renderMilkdropList();
   if (els.mdSearch) els.mdSearch.focus();
 }
 
-/** Redraw the list against the current search text. */
+/**
+ * Switch to a preset from the browser.
+ *
+ * Recorded as the session choice, not merely loaded — `applyEngine` owns what
+ * should be showing and would revert a bare load on the next frame. Cut rather
+ * than blend: someone browsing wants the preset they picked, not a three-second
+ * cross-fade into it.
+ *
+ * @param {string} name
+ */
+function chooseMilkdrop(name) {
+  milkdropChosen = name;
+  milkdropName = window.MilkDrop.loadPreset(name, 0);
+  lastMilkdropSwitchAt = performance.now();
+  markMilkdropSeen(name);
+  for (const el of els.mdList.querySelectorAll('[aria-current="true"]')) {
+    el.removeAttribute('aria-current');
+  }
+  const card = els.mdList.querySelector(`[data-preset="${cssEscape(name)}"]`);
+  if (card) card.setAttribute('aria-current', 'true');
+  updateMilkdropPinChip();
+}
+
+/** Preset names contain quotes and brackets; a selector needs them escaped. */
+function cssEscape(value) {
+  return window.CSS && window.CSS.escape ? window.CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
+}
+
+/** The names matching the current search and filter. */
+function milkdropMatches() {
+  const all = window.MilkDrop.names();
+  const q = ((els.mdSearch && els.mdSearch.value) || '').trim().toLowerCase();
+  return all.filter((name) => {
+    if (q && !name.toLowerCase().includes(q)) return false;
+    if (mdpFilter === 'fav') return mdpFavourites.has(name);
+    // Hidden presets stay reachable through search and the ♥ filter — hiding
+    // is "stop showing me this", not "delete it", and un-hiding needs a route.
+    if (mdpHidden.has(name) && !q) return false;
+    if (mdpFilter === 'unseen') return !mdpSeen.has(name);
+    return true;
+  });
+}
+
+/** Redraw the grid against the current search, filter and page size. */
 function renderMilkdropList() {
   if (!els.mdList) return;
-  const all = window.MilkDrop.names();
-  const q = (els.mdSearch && els.mdSearch.value || '').trim().toLowerCase();
-  const matches = q ? all.filter((n) => n.toLowerCase().includes(q)) : all;
-  const shown = matches.slice(0, MDP_PAGE);
+  mdpMatches = milkdropMatches();
+  const shown = mdpMatches.slice(0, mdpShown);
   const current = window.MilkDrop.current();
 
-  els.mdStatus.textContent = matches.length > shown.length
-    ? `${matches.length} presets · showing ${shown.length}, keep typing to narrow`
-    : `${matches.length} preset${matches.length === 1 ? '' : 's'}`;
+  const total = mdpMatches.length;
+  renderMilkdropStatus();
 
-  els.mdList.replaceChildren(...shown.map((name) => {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'mdp__item';
-    row.textContent = name;
-    row.title = name;
-    if (name === current) row.setAttribute('aria-current', 'true');
-    row.addEventListener('click', () => {
-      // Recorded as the session choice, not merely loaded — applyEngine owns
-      // what should be showing and would otherwise revert this next frame.
-      // Cut rather than blend: when someone is browsing they want to see the
-      // preset they clicked, not a three-second cross-fade into it.
-      milkdropChosen = name;
-      milkdropName = window.MilkDrop.loadPreset(name, 0);
-      lastMilkdropSwitchAt = performance.now();
-      for (const el of els.mdList.children) el.removeAttribute('aria-current');
-      row.setAttribute('aria-current', 'true');
-      updateMilkdropPinChip();
-    });
-    return row;
-  }));
+  const cards = shown.map((name) => buildMilkdropCard(name, name === current));
+
+  if (shown.length < total) {
+    const more = document.createElement('p');
+    more.className = 'mdp__more';
+    more.dataset.more = '1';
+    more.textContent = `${total - shown.length} more…`;
+    cards.push(more);
+  }
+  els.mdList.replaceChildren(...cards);
+  observeMilkdropCards();
+}
+
+/**
+ * One card: a picture, a name, and the two marks.
+ * @param {string} name
+ * @param {boolean} isCurrent
+ */
+function buildMilkdropCard(name, isCurrent) {
+  /*
+    A div, not a button. As a <button> the card measured 2px tall around a
+    90px image: Chromium lays a button's children out in a special content box
+    that did not take its height from an aspect-ratio-sized child, so every
+    card collapsed and the grid's pager then ran away filling a viewport that
+    could never be filled. The role and tabindex keep it a button to anything
+    that cares; only the layout changes.
+  */
+  const card = document.createElement('div');
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
+  card.className = 'mdp__card';
+  card.dataset.preset = name;
+  card.title = name;
+  if (mdpFavourites.has(name)) card.classList.add('is-fav');
+  if (isCurrent) card.setAttribute('aria-current', 'true');
+
+  const shot = document.createElement('img');
+  shot.className = 'mdp__shot';
+  shot.alt = '';
+  const cached = mdpThumbCache.get(name);
+  if (cached) shot.src = cached;
+  card.appendChild(shot);
+
+  const label = document.createElement('span');
+  label.className = 'mdp__name';
+  label.textContent = name;
+  card.appendChild(label);
+
+  const marks = document.createElement('span');
+  marks.className = 'mdp__marks';
+
+  const fav = document.createElement('button');
+  fav.type = 'button';
+  fav.className = 'mdp__mark';
+  fav.textContent = '♥';
+  fav.title = 'Like this preset (F)';
+  fav.setAttribute('aria-pressed', String(mdpFavourites.has(name)));
+  fav.addEventListener('click', (e) => { e.stopPropagation(); toggleMilkdropFavourite(name); });
+  marks.appendChild(fav);
+
+  const hide = document.createElement('button');
+  hide.type = 'button';
+  hide.className = 'mdp__mark';
+  hide.textContent = '🚫';
+  hide.title = 'Never show this one again (X)';
+  hide.setAttribute('aria-pressed', String(mdpHidden.has(name)));
+  hide.addEventListener('click', (e) => { e.stopPropagation(); toggleMilkdropHidden(name); });
+  marks.appendChild(hide);
+
+  card.appendChild(marks);
+  card.addEventListener('click', () => chooseMilkdrop(name));
+  // A div with role=button is not activated by the keyboard for free.
+  card.addEventListener('keydown', (e) => {
+    if (e.key === ' ') { e.preventDefault(); chooseMilkdrop(name); }
+  });
+  return card;
+}
+
+/** @param {string} name */
+function toggleMilkdropFavourite(name) {
+  if (mdpFavourites.has(name)) mdpFavourites.delete(name);
+  else {
+    mdpFavourites.add(name);
+    // Liking something you have hidden is a change of mind, not a conflict.
+    mdpHidden.delete(name);
+    writeNameSet(MDP_HIDDEN_KEY, mdpHidden);
+  }
+  writeNameSet(MDP_FAV_KEY, mdpFavourites);
+  renderMilkdropList();
+}
+
+/** @param {string} name */
+function toggleMilkdropHidden(name) {
+  if (mdpHidden.has(name)) mdpHidden.delete(name);
+  else {
+    mdpHidden.add(name);
+    mdpFavourites.delete(name);
+    writeNameSet(MDP_FAV_KEY, mdpFavourites);
+    /* Hiding the preset that is on screen should take it off screen, or the
+       veto does not appear to have worked. */
+    if (window.MilkDrop.current() === name) {
+      const allowed = milkdropAllowed();
+      if (allowed.length) chooseMilkdrop(allowed[Math.floor(Math.random() * allowed.length)]);
+    }
+  }
+  writeNameSet(MDP_HIDDEN_KEY, mdpHidden);
+  renderMilkdropList();
+}
+
+/* ------------------------------------------------------ preview generation */
+
+/**
+ * Watch the cards on screen. Previews are generated for what is visible and
+ * nothing else: a background pass over 1754 presets is minutes of GPU time
+ * spent on images nobody asked to see, and it competes with the visuals.
+ */
+function observeMilkdropCards() {
+  if (mdpObserver) mdpObserver.disconnect();
+  if (!els.mdList) return;
+
+  mdpObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      if (entry.target.dataset.more) {
+        /*
+          Extend only if the grid can actually be scrolled, or if it is not yet
+          full. A collapsed layout leaves this sentinel permanently on screen,
+          and without the guard the pager walks the whole catalogue into the DOM
+          before anyone has touched the scrollbar — which is precisely what
+          happened when the card height measured 2px.
+        */
+        const grid = els.mdList;
+        const scrollable = grid.scrollHeight > grid.clientHeight + 4;
+        if (!scrollable && mdpShown > MDP_PAGE * 3) return;
+        mdpShown += MDP_PAGE;
+        renderMilkdropList();
+        return;
+      }
+      const name = entry.target.dataset.preset;
+      if (name && !mdpThumbCache.has(name)) queueMilkdropThumb(name);
+    }
+  }, { root: els.mdList, rootMargin: '160px' });
+
+  for (const child of els.mdList.children) mdpObserver.observe(child);
+  loadCachedThumbs();
+}
+
+/** Paint whatever previews are already on disk, in one round trip. */
+function loadCachedThumbs() {
+  const wanted = [...els.mdList.querySelectorAll('[data-preset]')]
+    .map((el) => el.dataset.preset)
+    .filter((name) => !mdpThumbCache.has(name));
+  if (wanted.length === 0 || !window.player.milkdropThumbs) return;
+
+  window.player.milkdropThumbs(wanted).then((found) => {
+    let painted = 0;
+    for (const [name, url] of Object.entries(found || {})) {
+      mdpThumbCache.set(name, url);
+      const img = els.mdList.querySelector(`[data-preset="${cssEscape(name)}"] .mdp__shot`);
+      if (img) { img.src = url; painted += 1; }
+    }
+    if (painted) renderMilkdropStatus();
+  }).catch(() => { /* previews are a nicety; the names still work */ });
+}
+
+/**
+ * Just the count line.
+ *
+ * Separate from the grid because previews arrive one at a time: rebuilding
+ * 60 cards to update a number would replace the card under the cursor sixty
+ * times while someone is trying to click it.
+ */
+function renderMilkdropStatus() {
+  if (!els.mdStatus) return;
+  const total = mdpMatches.length;
+  if (total === 0) {
+    els.mdStatus.textContent = mdpFilter === 'fav'
+      ? 'nothing liked yet — press ♥ on one you want to keep'
+      : 'nothing matches';
+    return;
+  }
+  const shown = mdpMatches.slice(0, mdpShown);
+  const pending = shown.filter((n) => !mdpThumbCache.has(n)).length;
+  els.mdStatus.textContent = `${total} preset${total === 1 ? '' : 's'}`
+    + (total > shown.length ? ` · showing ${shown.length}` : '')
+    + (mdpHidden.size ? ` · ${mdpHidden.size} hidden` : '')
+    + (pending ? ` · ${pending} preview${pending === 1 ? '' : 's'} to render` : '');
+}
+
+/** @param {string} name */
+function queueMilkdropThumb(name) {
+  if (mdpThumbQueue.includes(name)) return;
+  mdpThumbQueue.push(name);
+  drainMilkdropThumbs();
+}
+
+/**
+ * Render queued previews one at a time.
+ *
+ * Serialised on purpose. Each one is a preset compile plus 34 frames on the
+ * same GPU that is drawing the live visual, and firing a dozen at once is how
+ * the panel would stutter the thing it is a browser for.
+ */
+function drainMilkdropThumbs() {
+  if (mdpThumbBusy || mdpThumbQueue.length === 0) return;
+  if (!els.mdPanel || els.mdPanel.hidden) { mdpThumbQueue.length = 0; return; }
+
+  const name = mdpThumbQueue.shift();
+  if (mdpThumbCache.has(name)) { drainMilkdropThumbs(); return; }
+
+  mdpThumbBusy = true;
+  window.MilkDrop.thumbnail(name).then((url) => {
+    if (url) {
+      mdpThumbCache.set(name, url);
+      const img = els.mdList.querySelector(`[data-preset="${cssEscape(name)}"] .mdp__shot`);
+      if (img) img.src = url;
+      if (window.player.milkdropThumbSave) {
+        window.player.milkdropThumbSave(name, url).catch(() => { /* cache only */ });
+      }
+      renderMilkdropStatus();
+    }
+  }).finally(() => {
+    mdpThumbBusy = false;
+    /* One frame between previews so the live visual and the panel both get a
+       turn. Without it a long queue holds the main thread for seconds. */
+    requestAnimationFrame(() => drainMilkdropThumbs());
+  });
 }
 
 /** The pin chip reflects whether the preset on screen is the pinned one. */
@@ -5292,16 +5868,84 @@ if (els.mdBtn) {
   });
 }
 if (els.mdClose) els.mdClose.addEventListener('click', closeMilkdropPanel);
-if (els.mdSearch) els.mdSearch.addEventListener('input', renderMilkdropList);
+if (els.mdSearch) {
+  els.mdSearch.addEventListener('input', () => {
+    mdpShown = MDP_PAGE;
+    renderMilkdropList();
+  });
+}
+
+for (const chip of document.querySelectorAll('.mdp__filter')) {
+  chip.addEventListener('click', () => {
+    mdpFilter = chip.dataset.filter;
+    for (const other of document.querySelectorAll('.mdp__filter')) {
+      other.setAttribute('aria-pressed', String(other === chip));
+    }
+    mdpShown = MDP_PAGE;
+    renderMilkdropList();
+  });
+}
+
 if (els.mdRandom) {
   els.mdRandom.addEventListener('click', () => {
-    const all = window.MilkDrop.names();
-    if (all.length === 0) return;
-    milkdropChosen = all[Math.floor(Math.random() * all.length)];
-    milkdropName = window.MilkDrop.loadPreset(milkdropChosen, 0);
-    lastMilkdropSwitchAt = performance.now();
-    renderMilkdropList();
-    updateMilkdropPinChip();
+    const allowed = milkdropAllowed();
+    if (allowed.length === 0) return;
+    chooseMilkdrop(allowed[Math.floor(Math.random() * allowed.length)]);
+  });
+}
+
+/*
+  Step through the filtered set with the arrow keys, loading each one as it is
+  reached. This is the part a list of names could not do: browsing 1754 presets
+  is watching, not reading, and a preview is a still of something that moves.
+
+  Scoped to the panel and skipped while the search box has focus, where the
+  left/right keys belong to the text cursor.
+*/
+if (els.mdPanel) {
+  /* On the document rather than the panel: re-rendering the grid replaces every
+     card, which drops focus to the body — and a key handler bound to the panel
+     would then stop firing exactly when someone is stepping through it. */
+  document.addEventListener('keydown', (e) => {
+    if (els.mdPanel.hidden) return;
+
+    /*
+      The panel focuses its search box on open, which is right — narrowing 1754
+      presets by typing is the first thing anyone does. But it made the arrow
+      keys belong to the text caret, and stepping through previews is the whole
+      point of the rebuild, so it was dead on arrival: measured in the harness,
+      the arrow key moved nothing.
+
+      The rule that keeps both: arrows always step, and the letter keys act only
+      when there is no query being typed. Nobody navigates a caret through a
+      search box they can retype in a second; everybody expects `f` in a focused
+      text field to write an f.
+    */
+    const query = ((els.mdSearch && els.mdSearch.value) || '').length > 0;
+    const typing = document.activeElement === els.mdSearch && query;
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+
+    if (step) {
+      if (mdpMatches.length === 0) return;
+      e.preventDefault();
+      const at = mdpMatches.indexOf(window.MilkDrop.current());
+      const next = (at + step + mdpMatches.length) % mdpMatches.length;
+      const name = mdpMatches[next];
+      // Extend the page if stepping walked past what is rendered, so the
+      // selected card can be scrolled to and marked.
+      if (next >= mdpShown) { mdpShown = next + MDP_PAGE; renderMilkdropList(); }
+      chooseMilkdrop(name);
+      const card = els.mdList.querySelector(`[data-preset="${cssEscape(name)}"]`);
+      if (card) card.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    if (typing) return;
+    const showing = window.MilkDrop.current();
+    if (!showing) return;
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleMilkdropFavourite(showing); }
+    else if (e.key === 'x' || e.key === 'X') { e.preventDefault(); toggleMilkdropHidden(showing); }
+    else if (e.key === 'Enter' && els.mdPin) { e.preventDefault(); els.mdPin.click(); }
   });
 }
 if (els.mdPin) {

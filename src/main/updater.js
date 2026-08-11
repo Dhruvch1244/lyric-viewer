@@ -26,9 +26,29 @@
       `dev-app-update.yml` that is not there and throws; guarding on
       `app.isPackaged` keeps `npm start` clean.
 
-  The status formatting is kept as a pure function so it can be unit-tested
-  without Electron, an updater, or a network. See test/updater.test.js.
+  0.21.0 changed two things, both from the same complaint — that the update
+  never arrived and there was nothing on screen to say so:
+
+    - **It checks more than once.** 0.20.0 checked exactly at startup. An
+      overlay is left running for days; a release published while it is up was
+      never noticed, and this app ships most days. There is now a periodic
+      re-check.
+
+    - **There is a history to read.** Every phase change is timestamped into a
+      ring buffer. When an update silently does not happen, "nothing in the
+      console of a packaged app nobody is running from a terminal" is not a
+      diagnosis, and the next report should not need one either.
+
+  The status formatting and the prompt decision are kept as pure functions so
+  they can be unit-tested without Electron, an updater, or a network. See
+  test/updater.test.js.
 */
+
+/** How often to ask again while the app stays open. */
+const RECHECK_MS = 6 * 60 * 60 * 1000;
+
+/** How many phase changes to keep for diagnosis. */
+const HISTORY_LIMIT = 50;
 
 /**
  * @typedef {object} UpdateState
@@ -77,6 +97,26 @@ function isUpdateActionable(state) {
   return phase !== 'checking' && phase !== 'available' && phase !== 'downloading';
 }
 
+/**
+ * Whether the overlay should put a card on screen offering to restart.
+ *
+ * Only 'ready' qualifies: it is the one phase where there is something for the
+ * user to decide. 'available' and 'downloading' are reported as a passive pill
+ * instead — an update that is still arriving has no answer to give.
+ *
+ * A version the user has already said "later" to stays dismissed. Nagging every
+ * few hours for the same build is how a prompt trains people to dismiss it
+ * without reading, and the tray still carries the state for anyone who wants it.
+ *
+ * @param {UpdateState} state
+ * @param {string|null} dismissedVersion the version 'Later' was clicked for
+ * @returns {boolean}
+ */
+function shouldPromptRestart(state, dismissedVersion) {
+  if (!state || state.phase !== 'ready') return false;
+  return !state.version || state.version !== dismissedVersion;
+}
+
 class AppUpdater {
   /**
    * @param {object} opts
@@ -89,6 +129,13 @@ class AppUpdater {
     this.state = { phase: 'idle' };
     this.updater = null;
     this.enabled = false;
+    /** Version the user answered 'Later' to; suppresses the on-screen card. */
+    this.dismissedVersion = null;
+    /** @type {{at: number, phase: string, detail: string}[]} */
+    this.history = [];
+    this.recheckMs = opts.recheckMs || RECHECK_MS;
+    this.timer = null;
+    this.now = opts.now || (() => Date.now());
   }
 
   /**
@@ -140,6 +187,17 @@ class AppUpdater {
     });
 
     this.checkNow();
+
+    /*
+      Ask again while the app stays open. An overlay is left running for days
+      and this app ships most days, so a startup-only check means a release
+      published at noon is not seen until the machine is rebooted.
+
+      `unref` so a pending timer never holds the process open at quit — the app
+      is closed by the tray, and a 6-hour handle would keep it alive.
+    */
+    this.timer = setInterval(() => this.checkNow(), this.recheckMs);
+    if (this.timer.unref) this.timer.unref();
   }
 
   /** Ask GitHub whether there is anything newer. Safe to call any time. */
@@ -149,6 +207,29 @@ class AppUpdater {
       console.error('[updater] check failed:', err && err.message);
       this.set({ phase: 'error', message: err && err.message });
     });
+  }
+
+  /** Stop re-checking. Called on quit; safe to call twice. */
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  /**
+   * Record that the user chose 'Later' for the version currently ready.
+   *
+   * The download stays on disk and `autoInstallOnAppQuit` still applies it on
+   * the next natural quit — declining the card declines the *interruption*, not
+   * the update.
+   */
+  dismiss() {
+    this.dismissedVersion = this.state.version || null;
+    this.onChange();
+  }
+
+  /** Whether the overlay should show its restart card right now. */
+  shouldPrompt() {
+    return shouldPromptRestart(this.state, this.dismissedVersion);
   }
 
   /**
@@ -165,9 +246,24 @@ class AppUpdater {
 
   /** @param {UpdateState} next */
   set(next) {
+    /*
+      Progress ticks arrive many times a second and would flood the history out
+      of anything useful within one download, so only phase *changes* are
+      recorded. The percent is still live in `state` for the pill to read.
+    */
+    if (!this.state || this.state.phase !== next.phase) {
+      this.history.push({
+        at: this.now(),
+        phase: next.phase,
+        detail: next.message || next.version || '',
+      });
+      if (this.history.length > HISTORY_LIMIT) this.history.shift();
+    }
     this.state = next;
     this.onChange();
   }
 }
 
-module.exports = { AppUpdater, describeUpdate, isUpdateActionable };
+module.exports = {
+  AppUpdater, describeUpdate, isUpdateActionable, shouldPromptRestart, RECHECK_MS,
+};

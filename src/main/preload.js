@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld('player', {
   onLyrics: (cb) => ipcRenderer.on('lyrics', (_e, data) => cb(data)),
   onTranslation: (cb) => ipcRenderer.on('translation', (_e, data) => cb(data)),
   onMood: (cb) => ipcRenderer.on('mood', (_e, data) => cb(data)),
+  /* Which collaborator sings which line, once it has been worked out. Arrives
+     separately from the lyrics because it is an LLM pass: the words must not
+     wait for it. */
+  onAttribution: (cb) => ipcRenderer.on('attribution', (_e, data) => cb(data)),
+  /* Wallpaper mode only: a window parented into the desktop receives no mouse
+     input, so main forwards the cursor and button state and the renderer
+     synthesises the events. */
+  onWallpaperPointer: (cb) => ipcRenderer.on('wallpaper-pointer', (_e, data) => cb(data)),
   onArtwork: (cb) => ipcRenderer.on('artwork', (_e, data) => cb(data)),
   onBeatmap: (cb) => ipcRenderer.on('beatmap', (_e, data) => cb(data)),
   onHeatmap: (cb) => ipcRenderer.on('heatmap', (_e, data) => cb(data)),
@@ -22,6 +30,20 @@ contextBridge.exposeInMainWorld('player', {
   onDisplayMode: (cb) => ipcRenderer.on('display-mode', (_e, data) => cb(data)),
   setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
   getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
+
+  /** Every MilkDrop preset name the installed app holds. */
+  milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),
+  /** One preset, parsed. Read from disk in main; see presetlib.js. */
+  milkdropPreset: (name) => ipcRenderer.invoke('milkdrop-preset', name),
+  /** @param {string[]} names @returns {Promise<Record<string,string>>} name → data URL */
+  milkdropThumbs: (names) => ipcRenderer.invoke('milkdrop-thumb-get', names),
+  milkdropThumbSave: (name, dataUrl) => ipcRenderer.invoke('milkdrop-thumb-put', name, dataUrl),
+  milkdropThumbClear: () => ipcRenderer.invoke('milkdrop-thumb-clear'),
+
+  onUpdateState: (cb) => ipcRenderer.on('update-state', (_e, data) => cb(data)),
+  getUpdateState: () => ipcRenderer.invoke('get-update-state'),
+  /** @param {'install'|'dismiss'|'check'} action */
+  updateAction: (action) => ipcRenderer.invoke('update-action', action),
   onOffset: (cb) => ipcRenderer.on('offset', (_e, data) => cb(data)),
 
   getOffset: () => ipcRenderer.invoke('get-offset'),

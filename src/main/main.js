@@ -6,6 +6,8 @@ const fs = require('fs');
 const { identify } = require('./tags');
 const { AppTray } = require('./tray');
 const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
+const { PresetLibrary, ThumbnailStore } = require('./presetlib');
+const wallpaper = require('./wallpaper');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -21,9 +23,11 @@ app.commandLine.appendSwitch('canvas-oop-rasterization');
 const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
 const { fetchNeteaseSynced } = require('./netease');
+const { fetchKugouSynced } = require('./kugou');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
 const { correctTranscript, isCorrectionAvailable } = require('./correct');
+const { attributeLines, isAttributionAvailable } = require('./attribute');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally } = require('./localtranslate');
@@ -63,7 +67,37 @@ function persistLlm(key, entry) {
     language: entry.language,
     cuesDevanagari: entry.cuesDevanagari,
     mood: entry.mood,
+    attribution: entry.attribution,
   });
+}
+
+/**
+ * Realign a cached attribution onto repaired cues.
+ *
+ * `normaliseCues` drops LRC gap markers, so a `singers` array stored against the
+ * old list is off by one from the first dropped marker onwards. Everything after
+ * that point would name the wrong artist — silently, and for the rest of the
+ * song. Filtered through the same `kept` mask as the English translation, and
+ * dropped outright rather than shown if it still does not line up: no
+ * attribution falls back to 0.20.0's rotation, which is merely uninformed
+ * rather than actively lying.
+ *
+ * @param {{artists: string[], singers: number[]}|null|undefined} attribution
+ * @param {Array<object>} storedCues the cue list it was computed against
+ * @param {{cues: Array<object>, kept: number[]}} normalised
+ * @returns {{artists: string[], singers: number[]}|null}
+ */
+function repairAttribution(attribution, storedCues, normalised) {
+  if (!attribution || !Array.isArray(attribution.singers)) return null;
+  if (!Array.isArray(attribution.artists) || attribution.artists.length < 2) return null;
+
+  let { singers } = attribution;
+  if (singers.length !== normalised.cues.length) {
+    if (singers.length !== (storedCues || []).length) return null;
+    singers = normalised.kept.map((i) => singers[i]);
+  }
+  if (singers.length !== normalised.cues.length) return null;
+  return { artists: attribution.artists, singers };
 }
 
 /** Guards against overlapping lookups when tracks change quickly. */
@@ -87,6 +121,16 @@ let appTray = null;
 
 /** @type {import('./updater').AppUpdater|null} */
 let appUpdater = null;
+
+/* The preset corpus. Constructed eagerly and loaded lazily — the index is only
+   read the first time the MilkDrop engine or its browser asks for anything, so
+   a session that never uses MilkDrop never touches it. */
+const presetLibrary = new PresetLibrary();
+
+/* Rendered previews. Under userData rather than beside the presets: the app
+   directory is not reliably writable, and these are a cache — losing them costs
+   one re-render, not a feature. */
+let thumbnailStore = null;
 
 /** Current display size: fullscreen overlay, floating bar, or taskbar strip. */
 let displayMode = 'full';
@@ -246,7 +290,7 @@ function setOffsetMs(valueMs) {
  *
  * @returns {BrowserWindow}
  */
-function createWindow() {
+function createWindow(opaque = false) {
   const { bounds } = screen.getPrimaryDisplay();
 
   const window = new BrowserWindow({
@@ -255,11 +299,16 @@ function createWindow() {
     width: bounds.width,
     height: bounds.height,
     frame: false,
-    transparent: true,
+    /* Wallpaper mode needs an OPAQUE window. Transparency exists so the desktop
+       shows through an overlay; behind the desktop icons there is nothing to
+       show through, and a transparent window reparented there renders black.
+       Electron fixes `transparent` at construction, so the mode switch rebuilds
+       the window rather than toggling anything. */
+    transparent: !opaque,
     resizable: false,
     movable: false,
     skipTaskbar: false,
-    backgroundColor: '#00000000',
+    backgroundColor: opaque ? '#05060c' : '#00000000',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -272,8 +321,13 @@ function createWindow() {
     },
   });
 
-  window.setAlwaysOnTop(true, 'screen-saver');
-  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  /* Always-on-top is the opposite of wallpaper: the point there is to be behind
+     everything, and Windows will not keep a topmost window parented under the
+     desktop anyway. */
+  if (!opaque) {
+    window.setAlwaysOnTop(true, 'screen-saver');
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
   window.once('ready-to-show', () => window.show());
 
   // Hung off the window's own events rather than the toggle, so every path that
@@ -293,6 +347,22 @@ function createWindow() {
  */
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/**
+ * The updater state as the overlay needs it: the raw phase plus the one
+ * decision the renderer must not make for itself.
+ *
+ * `prompt` is computed here because dismissal lives on the updater — a renderer
+ * that decided for itself would forget every reload, and reloading is exactly
+ * what happens when the display mode changes.
+ *
+ * @returns {{phase: string, version?: string, percent?: number, prompt: boolean}}
+ */
+function updateStateForRenderer() {
+  if (!appUpdater) return { phase: 'idle', prompt: false };
+  const { phase, version, percent } = appUpdater.state;
+  return { phase, version, percent, prompt: appUpdater.shouldPrompt() };
 }
 
 /**
@@ -439,11 +509,17 @@ async function loadLyricsFor(track) {
       indic: Boolean(disk.indic),
       transliterationAvailable: isTransliterationAvailable(),
       translationAvailable: isTranslationAvailable() || canTranslateLocally(normalised.cues),
+      /* Index-aligned to the cues, so it goes through the same repair mask as
+         the English translation above — an attribution that no longer lines up
+         would put the wrong dancer on the mic for the whole song, which is the
+         exact failure it exists to fix. */
+      attribution: repairAttribution(disk.attribution, disk.cues, normalised),
     };
     lyricCache.set(key, payload);
     send('lyrics', { track, ...payload, origin: 'disk' });
     maybeAutoTranslate(key, track, token);
     maybeAnalyzeSentiment(key, track, token);
+    maybeAttributeLines(key, track, token);
     return;
   }
 
@@ -482,6 +558,19 @@ async function loadLyricsFor(track) {
     if (token !== lookupToken) return;
   }
 
+  /* Third synced source, on the same terms. Kugou overlaps NetEase less than
+     two Chinese services might suggest — it carries a lot of Western dance and
+     pop with community timings — and it runs only when both of the others have
+     already missed, so it costs nothing on a song LRCLIB knows. */
+  if (!result) {
+    try {
+      result = await fetchKugouSynced(track);
+    } catch (err) {
+      console.warn('[kugou]', err.message);
+    }
+    if (token !== lookupToken) return;
+  }
+
   if (!result) {
     const payload = {
       cues: [], cuesDevanagari: null, cuesEnglish: null,
@@ -510,6 +599,7 @@ async function loadLyricsFor(track) {
     cuesEnglish: result.cuesEnglish || saved.cuesEnglish || null,
     language: saved.language,
     mood: saved.mood || null,
+    attribution: saved.attribution || null,
     source: result.source,
     status: 'ok',
     indic,
@@ -538,6 +628,47 @@ async function loadLyricsFor(track) {
 
   maybeAutoTranslate(key, track, token);
   maybeAnalyzeSentiment(key, track, token);
+  maybeAttributeLines(key, track, token);
+}
+
+/**
+ * Work out which collaborator sings which line, once per track.
+ *
+ * 0.20.0 gave every artist a silhouette, which fixed identity and left meaning
+ * untouched: the dancer on the mic was still `line index % member count`, so on
+ * a three-artist collaboration the app confidently showed the wrong person for
+ * two lines in three.
+ *
+ * Runs on the same shape as sentiment and translation — cached result first, no
+ * provider means no attempt, failure leaves the app exactly as it was. It is
+ * additive by construction: a null answer means the renderer keeps rotating,
+ * which is what it did before.
+ *
+ * @param {string} key
+ * @param {{title: string, artist: string}} track
+ * @param {number} token
+ */
+async function maybeAttributeLines(key, track, token) {
+  const entry = lyricCache.get(key);
+  if (!entry || entry.cues.length === 0) return;
+
+  if (entry.attribution) {
+    send('attribution', { track, ...entry.attribution });
+    return;
+  }
+  if (!isAttributionAvailable()) return;
+
+  try {
+    const attribution = await attributeLines(entry.cues, track);
+    if (!attribution || token !== lookupToken) return;
+    const updated = { ...entry, attribution };
+    lyricCache.set(key, updated);
+    persistLlm(key, updated);
+    send('attribution', { track, ...attribution });
+  } catch (err) {
+    // The dancers keep taking turns. That is 0.20.0's behaviour, not a break.
+    console.error('[attribute]', err.message);
+  }
 }
 
 /**
@@ -673,7 +804,7 @@ async function ensureDevanagari(key) {
 */
 
 /** @type {ReadonlyArray<'full'|'bar'|'strip'>} */
-const DISPLAY_MODES = ['full', 'bar', 'strip'];
+const DISPLAY_MODES = ['full', 'bar', 'strip', 'wallpaper'];
 
 /** Height of the taskbar strip, in CSS pixels. */
 const STRIP_HEIGHT = 54;
@@ -701,6 +832,11 @@ function boundsForMode(mode) {
       height: STRIP_HEIGHT,
     };
   }
+  /* The desktop is the whole display, taskbar included — the icons sit on all
+     of it, and so does what goes behind them. The controls are inset instead;
+     see `shellInsets`. */
+  if (mode === 'wallpaper') return display.bounds;
+
   if (mode === 'bar') {
     const width = Math.min(880, Math.round(workArea.width * 0.62));
     const height = 132;
@@ -715,11 +851,94 @@ function boundsForMode(mode) {
 }
 
 /**
+ * How much of the display the shell covers, per edge, in CSS pixels.
+ *
+ * Wallpaper mode fills the whole display so the visuals run edge to edge behind
+ * an opaque taskbar — but the HUD lives along the bottom, which put every chip
+ * UNDERNEATH the taskbar: invisible, and unclickable, since a cursor there is
+ * over the taskbar rather than over the desktop. Shrinking the window to the
+ * work area would fix the controls and give up the full-bleed visuals; insetting
+ * only the controls keeps both.
+ *
+ * Derived rather than assumed, because the taskbar can be any height and can be
+ * on any edge.
+ *
+ * @returns {{top: number, right: number, bottom: number, left: number}}
+ */
+function shellInsets() {
+  const { bounds, workArea } = screen.getPrimaryDisplay();
+  return {
+    top: Math.max(0, workArea.y - bounds.y),
+    left: Math.max(0, workArea.x - bounds.x),
+    right: Math.max(0, (bounds.x + bounds.width) - (workArea.x + workArea.width)),
+    bottom: Math.max(0, (bounds.y + bounds.height) - (workArea.y + workArea.height)),
+  };
+}
+
+/**
  * Resize the overlay into a display mode and tell the renderer to match.
  * @param {'full'|'bar'|'strip'} mode
  */
 function applyDisplayMode(mode) {
-  const next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+  let next = DISPLAY_MODES.includes(mode) ? mode : 'full';
+
+  /*
+    Wallpaper mode is the one switch that cannot be done by resizing. The window
+    has to be opaque and not topmost, and `transparent` is fixed when a
+    BrowserWindow is constructed — so entering or leaving it rebuilds the
+    window. Everything that survives a rebuild already does: the settings, the
+    caches and the learned maps all live in main.
+
+    It can also simply fail. The WorkerW technique is undocumented and depends
+    on Explorer being in a state this can recognise, so a failure falls back to
+    the fullscreen overlay and says why, rather than leaving a window parented
+    nowhere.
+  */
+  const leavingWallpaper = displayMode === 'wallpaper' && next !== 'wallpaper';
+  const enteringWallpaper = next === 'wallpaper' && displayMode !== 'wallpaper';
+
+  if (enteringWallpaper && !wallpaper.isAvailable()) {
+    console.warn('[wallpaper]', wallpaper.unavailableReason());
+    next = 'full';
+  }
+
+  if ((enteringWallpaper || leavingWallpaper) && win && !win.isDestroyed()) {
+    const wantWallpaper = next === 'wallpaper';
+    if (leavingWallpaper) wallpaper.detach(win.getNativeWindowHandle());
+
+    const old = win;
+    win = createWindow(wantWallpaper);
+    old.destroy();
+
+    /*
+      Tell the NEW renderer what mode it is in, once it can hear it.
+
+      The `send` at the end of this function goes out before the rebuilt window
+      has loaded, so it lands nowhere — measured: the size chip still read
+      "Full" in wallpaper mode, and because the renderer's own `displayMode`
+      was still 'full' it discarded every forwarded pointer event. Wallpaper
+      mode looked like it had simply failed.
+    */
+    win.webContents.once('did-finish-load', () => send('display-mode', { mode: displayMode, insets: shellInsets() }));
+
+    if (!wantWallpaper) stopPointerForwarding();
+    if (wantWallpaper) {
+      win.once('ready-to-show', () => {
+        const res = wallpaper.attach(win.getNativeWindowHandle());
+        if (!res.ok) {
+          console.warn('[wallpaper]', res.reason);
+          /* Recurse once through 'full', which rebuilds the window transparent
+             and topmost again. Guarded by displayMode already being
+             'wallpaper', so this cannot loop. */
+          applyDisplayMode('full');
+          return;
+        }
+        // Clicks do not reach a child of the desktop; forward them ourselves.
+        startPointerForwarding();
+      });
+    }
+  }
+
   displayMode = next;
   settings.set('displayMode', next);
   if (!win || win.isDestroyed()) return;
@@ -737,7 +956,77 @@ function applyDisplayMode(mode) {
   */
   win.setIgnoreMouseEvents(next === 'strip', { forward: true });
 
-  send('display-mode', { mode: next });
+  send('display-mode', { mode: next, insets: shellInsets() });
+}
+
+/* ------------------------------------------------- wallpaper mouse forwarding */
+/*
+  A window parented into the desktop gets no clicks: Windows routes them to
+  Progman's icon view, which is what the desktop is for. Without forwarding,
+  wallpaper mode has no HUD, no library and no preset browser — the visuals
+  would be all it is.
+
+  30Hz. The cursor position needs no FFI at all (Electron has it) and the
+  button state is one user32 call, so this is cheap; and it runs in this one
+  mode only, stopping the moment the mode is left.
+*/
+const WALLPAPER_POINTER_HZ = 30;
+
+/** @type {NodeJS.Timeout|null} */
+let pointerTimer = null;
+let pointerWasDown = false;
+
+function stopPointerForwarding() {
+  if (pointerTimer) clearInterval(pointerTimer);
+  pointerTimer = null;
+  pointerWasDown = false;
+}
+
+function startPointerForwarding() {
+  stopPointerForwarding();
+  pointerTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || displayMode !== 'wallpaper') return;
+
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = win.getBounds();
+    const x = cursor.x - bounds.x;
+    const y = cursor.y - bounds.y;
+
+    // Outside the window is not ours to report; the taskbar and anything else
+    // on screen is handling that pointer itself.
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) {
+      pointerWasDown = false;
+      return;
+    }
+
+    /*
+      Being inside our bounds is not enough. In wallpaper mode this window
+      covers the entire desktop, so that test is true whenever the cursor is
+      anywhere on screen — including while it is over somebody else's window.
+      Without asking Windows what is actually under the cursor, clicking in a
+      text editor would press whatever chip happened to be beneath it.
+    */
+    const handle = win.getNativeWindowHandle();
+    if (!wallpaper.isCursorOverDesktop(handle, cursor)) {
+      pointerWasDown = false;
+      return;
+    }
+
+    const { down, pressedSince } = wallpaper.mouseState();
+    /*
+      A click is a release, matching what a real click does: a press that began
+      somewhere else and merely finished over us activates nothing.
+
+      `pressedSince` catches the other case — a press and release that both
+      happened between two polls, which at 30Hz is an ordinary quick click and
+      was simply being dropped. Measured: the packaged build ignored the first
+      click of a run and took the second.
+    */
+    const clicked = (pointerWasDown && !down) || (!down && pressedSince);
+    pointerWasDown = down;
+    send('wallpaper-pointer', { x, y, down, clicked });
+  }, Math.round(1000 / WALLPAPER_POINTER_HZ));
+  if (pointerTimer.unref) pointerTimer.unref();
 }
 
 /**
@@ -798,7 +1087,15 @@ app.whenReady().then(() => {
   /* Auto-update. Constructed before the tray so the tray's update row can read
      its state on the very first render; started after, so the first status
      change has somewhere to redraw into. */
-  appUpdater = new AppUpdater({ onChange: () => appTray && appTray.refresh() });
+  appUpdater = new AppUpdater({
+    onChange: () => {
+      if (appTray) appTray.refresh();
+      /* The tray menu was the only place this surfaced, which meant an update
+         could arrive, sit downloaded and ready, and never be mentioned to
+         someone watching a full-screen overlay. Push it to the renderer too. */
+      send('update-state', updateStateForRenderer());
+    },
+  });
 
   appTray = new AppTray({
     onToggleWindow: toggleWindow,
@@ -820,6 +1117,45 @@ app.whenReady().then(() => {
      than in createWindow so the renderer is listening for the event. */
   win.webContents.once('did-finish-load', () => {
     applyDisplayMode(settings.get('displayMode') || 'full');
+  });
+
+  /* The overlay asks on load, because the updater may have settled before the
+     renderer was listening — a cold start that finds an update ready reaches
+     'ready' well before the first frame. */
+  ipcMain.handle('get-update-state', () => updateStateForRenderer());
+
+  /* The MilkDrop corpus. The renderer holds names; the bytes stay here until a
+     preset is actually shown. See presetlib.js for why main owns the files. */
+  ipcMain.handle('milkdrop-catalogue', () => presetLibrary.names());
+  ipcMain.handle('milkdrop-preset', (_e, name) => presetLibrary.get(name));
+
+  /* Previews. Rendering one costs a preset compile and ~34 frames, so they are
+     rendered once by the frame and kept here; a second open of the browser
+     paints from disk. */
+  thumbnailStore = new ThumbnailStore(path.join(app.getPath('userData'), 'preset-thumbs'));
+  ipcMain.handle('milkdrop-thumb-get', (_e, names) => {
+    const wanted = Array.isArray(names) ? names : [names];
+    const out = {};
+    for (const name of wanted) {
+      const url = thumbnailStore.get(name);
+      if (url) out[name] = url;
+    }
+    return out;
+  });
+  ipcMain.handle('milkdrop-thumb-put', (_e, name, dataUrl) => thumbnailStore.put(name, dataUrl));
+  ipcMain.handle('milkdrop-thumb-clear', () => thumbnailStore.clear());
+
+  ipcMain.handle('update-action', (_e, action) => {
+    if (!appUpdater) return { status: 'unavailable' };
+    if (action === 'install') {
+      return { status: appUpdater.installNow() ? 'installing' : 'nothing-ready' };
+    }
+    if (action === 'dismiss') {
+      appUpdater.dismiss();
+      return { status: 'dismissed' };
+    }
+    appUpdater.checkNow();
+    return { status: 'checking' };
   });
 
   ipcMain.handle('set-display-mode', (_e, mode) => {
@@ -1433,5 +1769,15 @@ app.whenReady().then(() => {
   app.on('before-quit', () => watcher.stop());
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (appUpdater) appUpdater.stop();
+  /* Leave the desktop as we found it. A window still parented into WorkerW
+     while the process dies is Explorer's problem to clean up, and it does not
+     always do so tidily. */
+  stopPointerForwarding();
+  if (displayMode === 'wallpaper' && win && !win.isDestroyed()) {
+    wallpaper.detach(win.getNativeWindowHandle());
+  }
+});
 app.on('window-all-closed', () => app.quit());
