@@ -25,6 +25,7 @@
     "files": [
       "src/**/*",
       "package.json",
+      "build/icon.png",
       "!**/*.map",
       "!**/*.md",
       "!src/main/secrets.js",
