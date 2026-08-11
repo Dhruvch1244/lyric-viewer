@@ -55,6 +55,12 @@ const els = {
   trStop: document.getElementById('tr-stop'),
   trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
+  posterBtn: document.getElementById('btn-poster'),
+  poster: document.getElementById('poster'),
+  posterGrid: document.getElementById('poster-grid'),
+  posterStatus: document.getElementById('poster-status'),
+  posterAuto: document.getElementById('poster-auto'),
+  posterClose: document.getElementById('poster-close'),
   welcome: document.getElementById('welcome'),
   welcomeClose: document.getElementById('welcome-close'),
   captureNudge: document.getElementById('capture-nudge'),
@@ -3755,6 +3761,7 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (els.welcome && !els.welcome.hidden) closeWelcome();
+  else if (els.poster && !els.poster.hidden) closePoster();
 });
 
 /** Playback needed before asking, so the prompt does not land during startup. */
@@ -3969,6 +3976,11 @@ window.player.onTrack((track) => {
   currentTrack = track;
   durationMs = track.durationMs || 0;
   lastProgressPct = -1;           // force the bar to redraw for the new song
+  // The previous song's cover choice says nothing about this one, and a stale
+  // selection would mark the wrong tile in the picker.
+  artworkChosen = false;
+  artworkChosenUrl = null;
+  closePoster();
   cuesLatin = [];
   cuesDevanagari = null;
   cuesEnglish = null;
@@ -4068,6 +4080,15 @@ window.player.onArtwork((data) => {
   if (!isForCurrentTrack(data.track)) return;
   if (data.artwork) loadArtImage(data.artwork);
   maybeEnrichArtists(data.artistName);
+  // Whether this cover was hand-picked, so the ▣ chip can say so and the
+  // picker can mark the right tile.
+  artworkChosen = Boolean(data.chosen);
+  if (els.posterBtn) {
+    els.posterBtn.setAttribute('aria-pressed', String(artworkChosen && !els.poster.hidden));
+    els.posterBtn.title = artworkChosen
+      ? 'Cover art — using your pick'
+      : 'Cover art — pick a different one';
+  }
   updateHero();
 });
 
@@ -4683,6 +4704,141 @@ function libraryCard(it) {
   meta.append(song, artist, badges);
   card.append(art, meta);
   return card;
+}
+
+/* ------------------------------------------------------- cover art picker */
+/*
+  The artwork search returns one winner and is right most of the time. When it
+  is wrong — the long-standing "wrong cover" complaint — there was nothing the
+  user could do. This panel shows what the three sources actually found.
+
+  It deliberately includes the near-misses the automatic pick rejects. That
+  threshold exists to stop the app *asserting* a wrong cover; a person looking
+  at a grid can see at a glance which one is their album, and those rejected
+  rows are precisely what they need when the automatic answer failed.
+
+  Choosing recolours the whole app, because the cover has always driven
+  `extractArtPalette()`. That is deliberate: a poster that disagrees with the
+  colours around it looks like a bug.
+*/
+
+/** Whether the cover currently showing was hand-picked rather than found. */
+let artworkChosen = false;
+
+/** The URL of the chosen cover, so its tile can show as selected. */
+let artworkChosenUrl = null;
+
+function closePoster() {
+  if (els.poster) els.poster.hidden = true;
+  if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'false');
+}
+
+async function openPoster() {
+  if (!els.poster) return;
+  els.poster.hidden = false;
+  document.body.classList.add('show-cursor');
+  if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'true');
+
+  if (!currentTrack) {
+    els.posterGrid.replaceChildren();
+    els.posterStatus.textContent = 'nothing playing';
+    return;
+  }
+
+  els.posterGrid.replaceChildren();
+  els.posterStatus.textContent = 'searching…';
+
+  // Captured so a track change while the search is in flight cannot paint one
+  // song's covers over another's.
+  const asked = currentTrack;
+  let res;
+  try {
+    res = await window.player.artworkCandidates(asked);
+  } catch (err) {
+    els.posterStatus.textContent = err.message || 'search failed';
+    return;
+  }
+  if (currentTrack !== asked || els.poster.hidden) return;
+
+  const list = (res && res.candidates) || [];
+  if (list.length === 0) {
+    els.posterStatus.textContent = res && res.message
+      ? res.message
+      : 'no covers found for this track';
+    return;
+  }
+
+  els.posterStatus.textContent = artworkChosen
+    ? `${list.length} found · using your pick`
+    : `${list.length} found · click one to use it`;
+  els.posterGrid.replaceChildren(...list.map((c) => posterCard(c, asked)));
+}
+
+/**
+ * One candidate tile.
+ * @param {{thumb: string, fullUrl: string, source: string, title: string, artist: string}} c
+ * @param {object} track the track this list was fetched for
+ * @returns {HTMLButtonElement}
+ */
+function posterCard(c, track) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'poster__card';
+  card.title = `${c.title || 'Unknown'} — ${c.artist || 'Unknown'} (${c.source})`;
+  card.setAttribute('aria-pressed', String(c.fullUrl === artworkChosenUrl));
+
+  const img = document.createElement('img');
+  img.className = 'poster__img';
+  img.src = c.thumb;
+  img.alt = '';
+
+  const meta = document.createElement('div');
+  meta.className = 'poster__meta';
+  const song = document.createElement('div');
+  song.className = 'poster__song';
+  song.textContent = c.title || 'Unknown';
+  const src = document.createElement('div');
+  src.className = 'poster__source';
+  src.textContent = `${c.artist || 'Unknown'} · ${c.source}`;
+  meta.append(song, src);
+
+  card.append(img, meta);
+  card.addEventListener('click', async () => {
+    els.posterStatus.textContent = 'fetching full size…';
+    const out = await window.player.chooseArtwork({
+      track,
+      url: c.fullUrl,
+      artistName: c.artist,
+      trackName: c.title,
+    });
+    if (out && out.status === 'ok') {
+      artworkChosenUrl = c.fullUrl;
+      for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
+      card.setAttribute('aria-pressed', 'true');
+      els.posterStatus.textContent = 'using your pick';
+    } else {
+      els.posterStatus.textContent = (out && out.message) || 'could not use that cover';
+    }
+  });
+  return card;
+}
+
+if (els.posterBtn) {
+  els.posterBtn.addEventListener('click', () => {
+    if (els.poster && els.poster.hidden) openPoster();
+    else closePoster();
+  });
+}
+if (els.posterClose) els.posterClose.addEventListener('click', closePoster);
+if (els.posterAuto) {
+  els.posterAuto.addEventListener('click', async () => {
+    if (!currentTrack) return;
+    await window.player.clearArtworkChoice(currentTrack);
+    artworkChosen = false;
+    artworkChosenUrl = null;
+    for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
+    els.posterStatus.textContent = 'back to the automatic pick';
+  });
 }
 
 function openLibrary() {

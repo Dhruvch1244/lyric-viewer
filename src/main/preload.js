@@ -43,6 +43,13 @@ contextBridge.exposeInMainWorld('player', {
   /* Background work, mirrored to the tray tooltip and (for the few worth
      interrupting for) to an OS notification. */
   reportJobs: (payload) => ipcRenderer.invoke('report-jobs', payload),
+  /* Cover art the user can choose from, when the automatic pick got it wrong.
+     Candidates carry a small thumbnail; the full image is fetched only for the
+     one that is chosen. */
+  artworkCandidates: (track) => ipcRenderer.invoke('artwork-candidates', { track }),
+  chooseArtwork: (payload) => ipcRenderer.invoke('choose-artwork', payload),
+  clearArtworkChoice: (track) => ipcRenderer.invoke('clear-artwork-choice', { track }),
+
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
   listSynced: () => ipcRenderer.invoke('list-synced'),
 

@@ -75,6 +75,7 @@
         <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
+        <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
         <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
@@ -130,6 +131,23 @@
       </header>
       <div id="library-grid" class="library__grid"></div>
       <p id="library-empty" class="library__empty" hidden></p>
+    </section>
+
+    <!-- Cover art picker. The automatic search returns a single winner and is
+         right most of the time; when it is wrong there was previously nothing
+         the user could do. This shows what the three sources actually found —
+         including the near-misses the automatic pick rejects on purpose, since
+         those are exactly what is needed when it got it wrong. Choosing one
+         also recolours the app, because the cover drives the palette. -->
+    <section id="poster" class="poster" hidden aria-label="Cover art">
+      <header class="poster__bar">
+        <h2 class="poster__title">Cover art</h2>
+        <span id="poster-status" class="poster__status" role="status"></span>
+        <button id="poster-auto" class="chip chip--muted" type="button"
+                title="Forget the chosen cover and search again">Auto</button>
+        <button id="poster-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+      </header>
+      <div id="poster-grid" class="poster__grid"></div>
     </section>
 
     <!-- Transport for local playback. Only shown while a local file is loaded;

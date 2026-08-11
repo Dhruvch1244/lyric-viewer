@@ -29,7 +29,7 @@ const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally
 const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
-const { fetchArtwork } = require('./artwork');
+const { fetchArtwork, fetchArtworkCandidates, downloadImage } = require('./artwork');
 const { activeProvider } = require('./llm');
 const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
@@ -300,6 +300,32 @@ function send(channel, payload) {
 async function loadArtworkFor(track) {
   const token = ++artworkToken;
   try {
+    /*
+      A cover the user picked by hand outranks anything the search would find,
+      and it must not cost a network round trip on every replay — the whole
+      point of choosing was that the automatic answer was wrong. Stored as the
+      URL rather than the image: data URIs of 1000px covers would bloat the
+      cache file, which is the same reason pre-sync does not persist artwork.
+    */
+    const key = trackKey(track);
+    const chosen = llmCache.get(key);
+    if (chosen && chosen.artworkUrl) {
+      const artwork = await downloadImage(chosen.artworkUrl);
+      if (token !== artworkToken) return;
+      if (artwork) {
+        send('artwork', {
+          track,
+          artwork,
+          artistName: chosen.artworkArtist || null,
+          trackName: chosen.artworkTitle || null,
+          chosen: true,
+        });
+        return;
+      }
+      // The URL died (a store pulled the release). Fall through to a fresh
+      // search rather than leaving the song with no cover at all.
+    }
+
     const art = await fetchArtwork(track);
     if (token !== artworkToken || !art) return;
     send('artwork', { track, ...art });
@@ -1154,6 +1180,75 @@ app.whenReady().then(() => {
     } finally {
       transcribeBusy = false;
     }
+  });
+
+  /*
+    Cover-art alternatives for the current track.
+
+    Not cached: the panel is opened rarely and deliberately, and a stale list is
+    exactly what the user is trying to escape when they open it.
+  */
+  ipcMain.handle('artwork-candidates', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    if (!track) return { status: 'no-track', candidates: [] };
+    try {
+      const candidates = await fetchArtworkCandidates(track);
+      return { status: 'ok', candidates };
+    } catch (err) {
+      return { status: 'error', message: err.message, candidates: [] };
+    }
+  });
+
+  /*
+    Adopt a chosen cover. Persisted per track, so it survives a restart and
+    costs one download rather than a search on every later play.
+
+    The chosen cover DOES drive the palette, because that is what the artwork
+    event has always done and the alternative — a poster that disagrees with the
+    colours around it — looks like a bug. Picking a cover recolours the app.
+  */
+  ipcMain.handle('choose-artwork', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    const url = payload && payload.url;
+    if (!track || !url) return { status: 'ignored' };
+
+    const artwork = await downloadImage(url);
+    if (!artwork) return { status: 'error', message: 'that cover could not be downloaded' };
+
+    const key = trackKey(track);
+    llmCache.merge(key, {
+      title: track.title || null,
+      artist: track.artist || null,
+      artworkUrl: url,
+      artworkArtist: (payload && payload.artistName) || null,
+      artworkTitle: (payload && payload.trackName) || null,
+    });
+
+    // Invalidate any in-flight automatic lookup for this track, or it can land
+    // after the choice and overwrite it.
+    artworkToken += 1;
+
+    if (currentTrack && trackKey(currentTrack) === key) {
+      send('artwork', {
+        track,
+        artwork,
+        artistName: (payload && payload.artistName) || null,
+        trackName: (payload && payload.trackName) || null,
+        chosen: true,
+      });
+    }
+    return { status: 'ok' };
+  });
+
+  /** Forget a hand-picked cover and go back to whatever the search finds. */
+  ipcMain.handle('clear-artwork-choice', async (_e, payload) => {
+    const track = (payload && payload.track) || currentTrack;
+    if (!track) return { status: 'ignored' };
+    llmCache.merge(trackKey(track), {
+      artworkUrl: null, artworkArtist: null, artworkTitle: null,
+    });
+    loadArtworkFor(track);
+    return { status: 'ok' };
   });
 
   ipcMain.handle('get-transcribe-config', () => ({
