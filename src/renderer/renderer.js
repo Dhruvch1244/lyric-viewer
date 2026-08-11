@@ -233,6 +233,39 @@ let backdropLevel = 2; // default "vivid" — clearly visible, still lets video 
 /* ------------------------------------------------------------ artist sprites */
 /** Dancing pixel actors for the current artist. */
 let spriteActors = [];
+
+/**
+ * Per-line artist index for the current song, or null when nobody worked it out.
+ * @type {number[]|null}
+ */
+let lineSingers = null;
+
+/** Who is on the mic now, so a shared line keeps them there rather than jumping. */
+let activeMicActor = -1;
+
+/** The attribution as received, kept so it can be re-mapped when actors change. */
+let attributionPayload = null;
+
+/**
+ * Bind the current cast to an attribution. The mapping itself lives in
+ * sprites.js, next to the code that builds the cast and knows why the two
+ * index spaces differ — and where it can be unit-tested.
+ *
+ * @param {{artists: string[], singers: number[]}|null} attribution
+ * @returns {number[]|null} one actor index per line, or null to keep rotating
+ */
+function mapAttributionToActors(attribution) {
+  if (!attribution) return null;
+  return window.ArtistSprites.mapAttribution(
+    spriteActors, attribution.artists, attribution.singers,
+  );
+}
+
+/** Apply an attribution (or clear it) and refresh the mapping. */
+function setAttribution(attribution) {
+  attributionPayload = attribution || null;
+  lineSingers = mapAttributionToActors(attributionPayload);
+}
 /** Transient dancers cloned from the troupe on a drop; fade out via their ttl. */
 let spriteClones = [];
 let spritesEnabled = true;
@@ -624,12 +657,28 @@ function setActive(index) {
     els.compactLine.textContent = index >= 0 && cues[index] ? (cues[index].text || '') : '';
   }
 
-  // Rotate which dancer is "on the mic". We have no per-line artist attribution
-  // from the lyric source, so collaborators simply take turns as the line
-  // advances — the active one dances, the rest idle along the bottom. The dancer
-  // taking over teleports in with a flash.
+  /*
+    Which dancer is "on the mic".
+
+    Until 0.21.0 this was `index % spriteActors.length` — collaborators took
+    turns as the line advanced, because no lyric source carries per-line
+    attribution and none can be bought. On a three-artist track that is right
+    one line in three by accident.
+
+    When an attribution has been worked out for the song (see attribute.js) it
+    names the artist per line instead, and the rotation stays as the fallback
+    for everything else: no provider, a solo artist, a line the model marked
+    shared. -1 means shared or unknown, and keeps whoever was already up rather
+    than picking someone arbitrary for a chorus.
+  */
   if (spriteActors.length > 0) {
-    const on = index >= 0 ? index % spriteActors.length : 0;
+    let on = index >= 0 ? index % spriteActors.length : 0;
+    if (lineSingers && index >= 0 && index < lineSingers.length) {
+      const named = lineSingers[index];
+      if (named >= 0 && named < spriteActors.length) on = named;
+      else if (activeMicActor >= 0) on = activeMicActor;
+    }
+    activeMicActor = on;
     const now = performance.now();
     for (let i = 0; i < spriteActors.length; i += 1) {
       const actor = spriteActors[i];
@@ -2093,7 +2142,18 @@ function applySwirlScale(now) {
     22ms is ~45fps (shed pixels), 13ms is ~77fps (enough headroom to earn one
     back). The asymmetry plus the one-second floor stops it hunting.
   */
-  if (frameIntervalMs > 22 && rung > 0) {
+  /*
+    0.21.0: the drop is rate-limited too, which the comment above always
+    claimed and the code never did. Profiling a real song put `resize` at
+    289ms of self time — for a function that reallocates a WebGL drawing
+    buffer and should fire a handful of times a session. Unguarded, one long
+    frame dropped a rung, the reallocation cost another long frame, and that
+    dropped the next rung: the governor was feeding itself, and each round
+    trip was a visible hitch. 300ms still sheds pixels within a few frames of
+    a genuine sag, while one bad frame now costs one reallocation instead of
+    three.
+  */
+  if (frameIntervalMs > 22 && rung > 0 && now - lastSwirlScaleAt > 300) {
     rung -= 1;
     lastSwirlScaleAt = now;
   } else if (frameIntervalMs < 13 && rung < ceiling && now - lastSwirlScaleAt > 1000) {
@@ -3799,6 +3859,9 @@ function maybeEnrichArtists(artistName) {
     spriteActors = resolved.actors;
     artistLabel = resolved.label;
     applyArtPalette(); // theme the freshly-added dancers to the current cover too
+    /* The cast changed, so every actor index in the mapping is stale. Re-derive
+       it from the names, which is why the raw payload is kept around. */
+    lineSingers = mapAttributionToActors(attributionPayload);
   }
 }
 
@@ -4347,6 +4410,10 @@ window.player.onTrack((track) => {
   cuesDevanagari = null;
   cuesEnglish = null;
   cues = [];
+  /* Belongs to the song that just ended. Carrying it into the next one would
+     name that song's artists against these lyrics. */
+  setAttribution(null);
+  activeMicActor = -1;
   clearColumn();
   els.title.textContent = track.title || '';
   els.artist.textContent = track.artist || '';
@@ -4469,6 +4536,13 @@ window.player.onTick((state) => {
 });
 
 /* Sentiment-driven graphics: recolour + re-pace the visuals to the song's mood. */
+/* Arrives after the lyrics, because it is an LLM pass and the words must not
+   wait for it. The dancers rotate until it lands, then stop rotating. */
+window.player.onAttribution((payload) => {
+  if (!isForCurrentTrack(payload.track)) return;
+  setAttribution({ artists: payload.artists, singers: payload.singers });
+});
+
 window.player.onMood((data) => {
   if (!isForCurrentTrack(data.track)) return;
   if (Array.isArray(data.palette) && data.palette.length >= 4) {
@@ -4492,6 +4566,10 @@ window.player.onLyrics((payload) => {
   // LRCLIB often reports the full artist credit even when SMTC gave just the
   // primary — fold any extra collaborators in so each gets a dancer.
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
+
+  /* Applied after the enrichment above, which can add dancers: the mapping is
+     from credited names to actors, so it has to see the final cast. */
+  setAttribution(payload.attribution || null);
 
   switch (payload.status) {
     case 'searching': setJob('lyrics', 'finding lyrics'); setStatus('finding lyrics…'); break;

@@ -40,7 +40,7 @@ const WRITE_DEBOUNCE_MS = 400;
   has ever played; the same reasoning already keeps pre-sync from persisting
   artwork at all.
 */
-const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap', 'heatmap', 'wordAlignFailed', 'artworkUrl', 'artworkArtist', 'artworkTitle'];
+const PERSISTED_FIELDS = ['title', 'artist', 'cues', 'source', 'indic', 'cuesEnglish', 'language', 'cuesDevanagari', 'mood', 'beatmap', 'heatmap', 'wordAlignFailed', 'artworkUrl', 'artworkArtist', 'artworkTitle', 'attribution'];
 
 /** @typedef {{cues?: Array|null, source?: string|null, indic?: boolean, cuesEnglish?: Array|null, language?: string, cuesDevanagari?: Array|null, mood?: object|null, updatedAt: number}} CacheEntry */
 

@@ -1064,23 +1064,84 @@
       /** @type {object[]} */
       const looks = [];
       const labels = [];
+      /* Which credited name each dancer came from. A registry group expands to
+         several dancers from ONE credit — "Seedhe Maut" is two people — so an
+         actor's position in this list is not its position in the credits, and
+         anything mapping the two by index names the wrong person. Per-line
+         attribution does exactly that mapping; see renderer.js. */
+      const credits = [];
       for (const token of tokens) {
         const known = lookupRegistry(token);
         if (known) {
           labels.push(known.label);
-          for (const m of known.members) looks.push(m);
+          for (const m of known.members) { looks.push(m); credits.push(token); }
         } else {
           labels.push(token);
           looks.push(proceduralLook(token, hashOf(token)));
+          credits.push(token);
         }
         if (looks.length >= MAX_ACTORS) break;
       }
       // Fallback: nothing parsed → a single anonymous dancer so the stage isn't empty.
-      if (looks.length === 0) looks.push(proceduralLook(artistString || 'artist', hashOf(artistString || 'artist')));
+      if (looks.length === 0) {
+        looks.push(proceduralLook(artistString || 'artist', hashOf(artistString || 'artist')));
+        credits.push(artistString || '');
+      }
 
       const total = looks.length;
-      const actors = looks.slice(0, MAX_ACTORS).map((look, i) => new SpriteActor(look, i, total));
+      const actors = looks.slice(0, MAX_ACTORS).map((look, i) => {
+        const actor = new SpriteActor(look, i, total);
+        actor.credit = credits[i] || '';
+        return actor;
+      });
       return { label: labels.join(' · '), actors };
+    },
+
+    /**
+     * Turn a per-line ARTIST index into a per-line ACTOR index.
+     *
+     * These are two different lists and must never be assumed to be one. A
+     * single credited name can expand to several dancers — "Seedhe Maut" is two
+     * people in the registry — so artist 1 of 2 may well be actor 2 of 3. Using
+     * one index as the other puts the wrong dancer on the mic, which is the
+     * precise bug per-line attribution exists to remove; doing it by accident
+     * inside the fix would be worse than not having it.
+     *
+     * Matching is on the credit each actor was built from, falling back to the
+     * actor's own name. When nothing matches, this returns null and the caller
+     * keeps rotating: the sprite layer parsed the credit differently enough
+     * that any mapping would be a guess.
+     *
+     * A credit covering several dancers resolves to the first of them. The
+     * lyrics name the group and nothing in the data says which member sang.
+     *
+     * @param {SpriteActor[]} actors
+     * @param {string[]} artists credited names, in the order the indices use
+     * @param {number[]} singers one artist index per line; -1 = shared/unknown
+     * @returns {number[]|null} one actor index per line, or null
+     */
+    mapAttribution(actors, artists, singers) {
+      if (!Array.isArray(actors) || actors.length === 0) return null;
+      if (!Array.isArray(artists) || artists.length < 2) return null;
+      if (!Array.isArray(singers) || singers.length === 0) return null;
+
+      const actorFor = artists.map((name) => {
+        const wanted = String(name || '').trim().toLowerCase();
+        if (!wanted) return -1;
+        return actors.findIndex((a) => {
+          const credit = String(a.credit || '').trim().toLowerCase();
+          const label = String(a.name || '').trim().toLowerCase();
+          return credit === wanted || label === wanted;
+        });
+      });
+
+      if (actorFor.every((i) => i < 0)) return null;
+
+      return singers.map((artistIndex) => {
+        if (!Number.isInteger(artistIndex)) return -1;
+        if (artistIndex < 0 || artistIndex >= actorFor.length) return -1;
+        return actorFor[artistIndex];
+      });
     },
   };
 })();

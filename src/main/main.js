@@ -25,6 +25,7 @@ const { fetchNeteaseSynced } = require('./netease');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
 const { correctTranscript, isCorrectionAvailable } = require('./correct');
+const { attributeLines, isAttributionAvailable } = require('./attribute');
 const { toDevanagari, isTransliterationAvailable } = require('./transliterate');
 const { toEnglish, isTranslationAvailable } = require('./translate');
 const { toEnglishOffline, canTranslateOffline, canTranslate: canTranslateLocally } = require('./localtranslate');
@@ -64,7 +65,37 @@ function persistLlm(key, entry) {
     language: entry.language,
     cuesDevanagari: entry.cuesDevanagari,
     mood: entry.mood,
+    attribution: entry.attribution,
   });
+}
+
+/**
+ * Realign a cached attribution onto repaired cues.
+ *
+ * `normaliseCues` drops LRC gap markers, so a `singers` array stored against the
+ * old list is off by one from the first dropped marker onwards. Everything after
+ * that point would name the wrong artist — silently, and for the rest of the
+ * song. Filtered through the same `kept` mask as the English translation, and
+ * dropped outright rather than shown if it still does not line up: no
+ * attribution falls back to 0.20.0's rotation, which is merely uninformed
+ * rather than actively lying.
+ *
+ * @param {{artists: string[], singers: number[]}|null|undefined} attribution
+ * @param {Array<object>} storedCues the cue list it was computed against
+ * @param {{cues: Array<object>, kept: number[]}} normalised
+ * @returns {{artists: string[], singers: number[]}|null}
+ */
+function repairAttribution(attribution, storedCues, normalised) {
+  if (!attribution || !Array.isArray(attribution.singers)) return null;
+  if (!Array.isArray(attribution.artists) || attribution.artists.length < 2) return null;
+
+  let { singers } = attribution;
+  if (singers.length !== normalised.cues.length) {
+    if (singers.length !== (storedCues || []).length) return null;
+    singers = normalised.kept.map((i) => singers[i]);
+  }
+  if (singers.length !== normalised.cues.length) return null;
+  return { artists: attribution.artists, singers };
 }
 
 /** Guards against overlapping lookups when tracks change quickly. */
@@ -466,11 +497,17 @@ async function loadLyricsFor(track) {
       indic: Boolean(disk.indic),
       transliterationAvailable: isTransliterationAvailable(),
       translationAvailable: isTranslationAvailable() || canTranslateLocally(normalised.cues),
+      /* Index-aligned to the cues, so it goes through the same repair mask as
+         the English translation above — an attribution that no longer lines up
+         would put the wrong dancer on the mic for the whole song, which is the
+         exact failure it exists to fix. */
+      attribution: repairAttribution(disk.attribution, disk.cues, normalised),
     };
     lyricCache.set(key, payload);
     send('lyrics', { track, ...payload, origin: 'disk' });
     maybeAutoTranslate(key, track, token);
     maybeAnalyzeSentiment(key, track, token);
+    maybeAttributeLines(key, track, token);
     return;
   }
 
@@ -537,6 +574,7 @@ async function loadLyricsFor(track) {
     cuesEnglish: result.cuesEnglish || saved.cuesEnglish || null,
     language: saved.language,
     mood: saved.mood || null,
+    attribution: saved.attribution || null,
     source: result.source,
     status: 'ok',
     indic,
@@ -565,6 +603,47 @@ async function loadLyricsFor(track) {
 
   maybeAutoTranslate(key, track, token);
   maybeAnalyzeSentiment(key, track, token);
+  maybeAttributeLines(key, track, token);
+}
+
+/**
+ * Work out which collaborator sings which line, once per track.
+ *
+ * 0.20.0 gave every artist a silhouette, which fixed identity and left meaning
+ * untouched: the dancer on the mic was still `line index % member count`, so on
+ * a three-artist collaboration the app confidently showed the wrong person for
+ * two lines in three.
+ *
+ * Runs on the same shape as sentiment and translation — cached result first, no
+ * provider means no attempt, failure leaves the app exactly as it was. It is
+ * additive by construction: a null answer means the renderer keeps rotating,
+ * which is what it did before.
+ *
+ * @param {string} key
+ * @param {{title: string, artist: string}} track
+ * @param {number} token
+ */
+async function maybeAttributeLines(key, track, token) {
+  const entry = lyricCache.get(key);
+  if (!entry || entry.cues.length === 0) return;
+
+  if (entry.attribution) {
+    send('attribution', { track, ...entry.attribution });
+    return;
+  }
+  if (!isAttributionAvailable()) return;
+
+  try {
+    const attribution = await attributeLines(entry.cues, track);
+    if (!attribution || token !== lookupToken) return;
+    const updated = { ...entry, attribution };
+    lyricCache.set(key, updated);
+    persistLlm(key, updated);
+    send('attribution', { track, ...attribution });
+  } catch (err) {
+    // The dancers keep taking turns. That is 0.20.0's behaviour, not a break.
+    console.error('[attribute]', err.message);
+  }
 }
 
 /**

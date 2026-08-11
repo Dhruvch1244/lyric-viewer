@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('player', {
   onLyrics: (cb) => ipcRenderer.on('lyrics', (_e, data) => cb(data)),
   onTranslation: (cb) => ipcRenderer.on('translation', (_e, data) => cb(data)),
   onMood: (cb) => ipcRenderer.on('mood', (_e, data) => cb(data)),
+  /* Which collaborator sings which line, once it has been worked out. Arrives
+     separately from the lyrics because it is an LLM pass: the words must not
+     wait for it. */
+  onAttribution: (cb) => ipcRenderer.on('attribution', (_e, data) => cb(data)),
   onArtwork: (cb) => ipcRenderer.on('artwork', (_e, data) => cb(data)),
   onBeatmap: (cb) => ipcRenderer.on('beatmap', (_e, data) => cb(data)),
   onHeatmap: (cb) => ipcRenderer.on('heatmap', (_e, data) => cb(data)),
