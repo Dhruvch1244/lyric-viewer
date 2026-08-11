@@ -43,6 +43,35 @@
   /** Where human tempo perception clusters; used only to break octave ties. */
   const PREFERRED_BPM = 125;
 
+  /*
+    A tempo already measured across the WHOLE song, handed in by the offline
+    analysis on the local-playback path (see analyze.js). When present it is
+    treated as far better evidence than anything this file can derive, and for
+    a simple reason: it saw three minutes, this sees twelve seconds.
+
+    Measured on John Summit — ALL THE TIME (a 138 BPM track): the offline pass
+    got 138 in 91ms, and the live estimator then reported 60, 64, 86, 147, 172
+    and 179 over the course of the song at confidences from 0.31 to 0.87 —
+    confident and wrong — dragging the HUD chip from 138 to 174. Note that 172
+    is 138 × 1.25, not an octave of it, so the octave correction below could
+    never have caught it.
+  */
+  let priorBpm = 0;
+
+  /**
+   * How much better a live estimate must fit than the prior before it is
+   * allowed to win.
+   *
+   * The prior is not unconditional — a DJ set genuinely changes tempo, and a
+   * track whose analysis was wrong should still be recoverable. But the bar is
+   * deliberately high, because every observed disagreement so far has been the
+   * live estimator being wrong.
+   */
+  const PRIOR_OVERRIDE_RATIO = 1.35;
+
+  /** Within this fraction, a live estimate is "the same tempo" as the prior. */
+  const PRIOR_AGREE = 0.04;
+
   /** Candidate step (ms). ~2ms is finer than the ear can resolve at these rates. */
   const PERIOD_STEP_MS = 2;
 
@@ -123,14 +152,45 @@
         candidates.push({ score: alt.score, phaseMs: alt.phaseMs, periodMs: p });
       }
     }
+    /*
+      Tie-break toward the prior when there is one. A full-song measurement is a
+      far better statement about where this track's tempo sits than a global
+      constant about where music in general sits.
+    */
+    const target = (opts.prior || priorBpm) || PREFERRED_BPM;
+
     let chosen = best;
     for (const c of candidates) {
       if (c === best) continue;
       // Accept an octave sibling that is nearly as good but musically likelier.
       const nearlyAsGood = c.score > best.score * 0.85;
-      const closer = Math.abs(60000 / c.periodMs - PREFERRED_BPM)
-        < Math.abs(60000 / chosen.periodMs - PREFERRED_BPM);
+      const closer = Math.abs(60000 / c.periodMs - target)
+        < Math.abs(60000 / chosen.periodMs - target);
       if (nearlyAsGood && closer) chosen = c;
+    }
+
+    /*
+      The prior itself is a candidate, and it wins unless the live window fits
+      something else dramatically better.
+
+      This is the part that fixes the observed failure. Octave correction only
+      considers ×0.5 and ×2, so it cannot rescue a raw winner at ×1.25 of the
+      truth — and that is exactly what happened. Scoring the known period
+      directly, and requiring a challenger to beat it by PRIOR_OVERRIDE_RATIO,
+      turns "confident and wrong" into "confident, wrong, and ignored".
+    */
+    const prior = opts.prior || priorBpm;
+    if (prior) {
+      const priorPeriod = 60000 / prior;
+      if (priorPeriod >= minPeriod && priorPeriod <= maxPeriod) {
+        const disagrees = Math.abs(chosen.periodMs - priorPeriod) / priorPeriod > PRIOR_AGREE;
+        if (disagrees) {
+          const fit = fitPeriod(rel, priorPeriod);
+          if (chosen.score < fit.score * PRIOR_OVERRIDE_RATIO) {
+            chosen = { score: fit.score, phaseMs: fit.phaseMs, periodMs: priorPeriod };
+          }
+        }
+      }
     }
 
     return {
@@ -159,9 +219,50 @@
     return estimate(onsets, opts);
   }
 
+  /**
+   * Adopt a tempo measured elsewhere across the whole song.
+   *
+   * Called by the renderer when local playback's offline analysis finishes.
+   * Pass 0 or null to clear it.
+   *
+   * @param {number} bpm
+   */
+  function setPrior(bpm) {
+    priorBpm = Number.isFinite(bpm) && bpm >= MIN_BPM && bpm <= MAX_BPM ? bpm : 0;
+  }
+
+  /** The prior currently in force, or 0. */
+  function prior() {
+    return priorBpm;
+  }
+
+  /**
+   * Where the beats of a KNOWN period fall, from the onsets seen so far.
+   *
+   * The point of separating this from `estimate` is that a tempo which came
+   * from the full song does not need re-deriving every second — but its phase
+   * does, because the clock has to stay aligned to the music. This answers
+   * "given that the period is P, where is the downbeat" without ever putting
+   * the period itself back up for debate.
+   *
+   * @param {number} periodMs
+   * @returns {{phaseMs: number, confidence: number}|null}
+   */
+  function phaseFor(periodMs) {
+    if (!Number.isFinite(periodMs) || periodMs <= 0) return null;
+    const list = onsets.filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+    if (list.length < MIN_ONSETS) return null;
+    const base = list[0];
+    const { score, phaseMs } = fitPeriod(list.map((t) => t - base), periodMs);
+    return { phaseMs: phaseMs + base, confidence: score };
+  }
+
   /** Forget everything — call on track change. */
   function reset() {
     onsets = [];
+    // The prior belongs to a song, so it goes with the song. The renderer sets
+    // a new one when the next track's analysis lands.
+    priorBpm = 0;
   }
 
   /** How many onsets are currently held (for diagnostics). */
@@ -171,6 +272,8 @@
 
   window.Tempo = {
     estimate, note, current, reset, count, fitPeriod,
+    setPrior, prior, phaseFor,
     MIN_BPM, MAX_BPM, MIN_ONSETS, PREFERRED_BPM,
+    PRIOR_OVERRIDE_RATIO, PRIOR_AGREE,
   };
 })();

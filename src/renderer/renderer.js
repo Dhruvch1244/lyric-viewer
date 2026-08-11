@@ -2878,7 +2878,33 @@ function drawBackdrop(now) {
     */
     if (window.Tempo && now - lastTempoCheckAt > 1000) {
       lastTempoCheckAt = now;
-      const t = window.Tempo.current();
+
+      /*
+        A tempo measured across the whole song is not up for re-litigation.
+
+        The offline analysis on the local-playback path measures the entire
+        track in ~100ms and gets it right; this block then re-derived a tempo
+        from a rolling 12-second window every second and OVERWROTE it. Watched
+        against a real 138 BPM track, that dragged the clock — and the HUD chip
+        — from 138 to 174 over the course of one play, and the platter and the
+        dancers run on that number.
+
+        So when the tempo is known, only the PHASE is tracked live. That is the
+        part which genuinely has to follow the music; the period does not.
+      */
+      const known = window.Tempo.prior();
+      const t = known ? null : window.Tempo.current();
+
+      if (known) {
+        const period = 60000 / known;
+        const ph = window.Tempo.phaseFor(period);
+        tempoLocked = true;
+        tempoBpm = known;
+        beatPeriodMs = period;
+        if (ph && ph.confidence >= TEMPO_LOCK_OUT) {
+          beatClockMs = ((now - ph.phaseMs) % period + period) % period;
+        }
+      } else {
       /*
         Two consecutive confident estimates that AGREE are required before the
         clock is handed over, and the value is refreshed on every such pair
@@ -2915,6 +2941,7 @@ function drawBackdrop(now) {
       } else if (!t || t.confidence < TEMPO_LOCK_OUT) {
         tempoLocked = false;
         tempoBpm = 0;
+      }
       }
     }
 
@@ -5142,6 +5169,16 @@ if (window.LocalPlayer) {
       tempoLocked = true;
       tempoBpm = summary.bpm;
       beatPeriodMs = 60000 / summary.bpm;
+      /*
+        Hand it to the estimator as a prior, not just to the clock.
+
+        Setting the clock alone was the bug: the live estimator carried on
+        re-deriving a tempo from a rolling 12-second window and overwrote this
+        within seconds. The prior makes the measurement stick, and makes the
+        live path track the phase of a known tempo rather than argue about what
+        the tempo is.
+      */
+      window.Tempo.setPrior(summary.bpm);
     }
     updateBpmChip();
   });
