@@ -4684,6 +4684,58 @@ if (els.ccEarlier) els.ccEarlier.addEventListener('click', () => els.syncEarlier
 if (els.ccLater) els.ccLater.addEventListener('click', () => els.syncLaterBtn.click());
 if (els.ccTranslate) els.ccTranslate.addEventListener('click', () => els.translateBtn.click());
 
+/* --------------------------------------------- wallpaper pointer forwarding */
+/*
+  In wallpaper mode this window is a child of the desktop, and Windows sends
+  clicks in that region to Progman's icon view rather than to us. Without this,
+  wallpaper mode would be visuals and nothing else: no chips, no library, no
+  preset browser.
+
+  Main polls the cursor and the button (see startPointerForwarding) and sends
+  coordinates; here they become real events on whatever element is under them.
+  `elementFromPoint` is what makes this honest — the same element the user is
+  pointing at gets the same event it would have got, so nothing downstream
+  needs to know the input arrived by a different road.
+*/
+let wallpaperHover = null;
+
+if (window.player.onWallpaperPointer) {
+  window.player.onWallpaperPointer(({ x, y, clicked }) => {
+    if (displayMode !== 'wallpaper') return;
+
+    /* The HUD hides itself until the mouse moves, and that listener is on
+       document — so this has to be a real event, not a flag. */
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      clientX: x, clientY: y, bubbles: true,
+    }));
+
+    const el = document.elementFromPoint(x, y);
+    if (el !== wallpaperHover) {
+      // Hover state drives the preset cards' mark buttons and every chip's
+      // highlight; without enter/leave they would all stay lit at once.
+      if (wallpaperHover) {
+        wallpaperHover.dispatchEvent(new MouseEvent('mouseleave', { clientX: x, clientY: y }));
+      }
+      if (el) el.dispatchEvent(new MouseEvent('mouseenter', { clientX: x, clientY: y }));
+      wallpaperHover = el;
+    }
+    if (el) {
+      el.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: x, clientY: y, bubbles: true,
+      }));
+    }
+
+    if (clicked && el) {
+      /* Focus first, because several controls read document.activeElement —
+         the preset browser's key handling in particular. */
+      if (typeof el.focus === 'function') el.focus();
+      el.dispatchEvent(new MouseEvent('click', {
+        clientX: x, clientY: y, bubbles: true, cancelable: true,
+      }));
+    }
+  });
+}
+
 window.player.onDisplayMode(({ mode }) => {
   displayMode = mode || 'full';
   if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';

@@ -100,6 +100,7 @@ function bind() {
       GetWindowLongPtrW: lib.func('intptr_t __stdcall GetWindowLongPtrW(void*, int)'),
       SetWindowLongPtrW: lib.func('intptr_t __stdcall SetWindowLongPtrW(void*, int, intptr_t)'),
       SetWindowPos: lib.func('bool __stdcall SetWindowPos(void*, void*, int, int, int, int, unsigned int)'),
+      GetAsyncKeyState: lib.func('short __stdcall GetAsyncKeyState(int)'),
       koffi,
     };
     return true;
@@ -339,7 +340,39 @@ function detach(nativeHandle) {
   }
 }
 
+/*
+  Mouse input, forwarded.
+
+  A window parented into the desktop does not receive clicks. Windows routes
+  them to Progman and its icon view, which is what the desktop is *for* — so
+  the chips, the library and the preset browser are all unreachable in
+  wallpaper mode unless the app forwards input itself. Every wallpaper app on
+  Windows has this problem and solves it the same way.
+
+  This polls rather than hooking. A low-level mouse hook (WH_MOUSE_LL) sees
+  every event in the system and runs our code on the input thread, which is a
+  latency risk for the whole machine and a favourite of security software. The
+  cursor position is available from Electron without any FFI at all, and the
+  button state is one call; at 30Hz that is cheap, it only runs in this one
+  mode, and the worst failure is a chip that does not light up.
+*/
+
+/** Left mouse button. */
+const VK_LBUTTON = 0x01;
+
+/** @returns {boolean} whether the left button is down right now */
+function isMouseDown() {
+  if (!bind()) return false;
+  try {
+    // The high bit means "currently down"; the low bit is "pressed since last
+    // asked", which would fire on presses that happened in another app.
+    return (user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
-  attach, detach, isAvailable, unavailableReason, pickWorkerW,
-  WM_SPAWN_WORKER,
+  attach, detach, isAvailable, unavailableReason, pickWorkerW, isMouseDown,
+  WM_SPAWN_WORKER, VK_LBUTTON,
 };

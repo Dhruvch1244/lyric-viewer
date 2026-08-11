@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('player', {
      separately from the lyrics because it is an LLM pass: the words must not
      wait for it. */
   onAttribution: (cb) => ipcRenderer.on('attribution', (_e, data) => cb(data)),
+  /* Wallpaper mode only: a window parented into the desktop receives no mouse
+     input, so main forwards the cursor and button state and the renderer
+     synthesises the events. */
+  onWallpaperPointer: (cb) => ipcRenderer.on('wallpaper-pointer', (_e, data) => cb(data)),
   onArtwork: (cb) => ipcRenderer.on('artwork', (_e, data) => cb(data)),
   onBeatmap: (cb) => ipcRenderer.on('beatmap', (_e, data) => cb(data)),
   onHeatmap: (cb) => ipcRenderer.on('heatmap', (_e, data) => cb(data)),

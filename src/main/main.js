@@ -870,6 +870,18 @@ function applyDisplayMode(mode) {
     win = createWindow(wantWallpaper);
     old.destroy();
 
+    /*
+      Tell the NEW renderer what mode it is in, once it can hear it.
+
+      The `send` at the end of this function goes out before the rebuilt window
+      has loaded, so it lands nowhere — measured: the size chip still read
+      "Full" in wallpaper mode, and because the renderer's own `displayMode`
+      was still 'full' it discarded every forwarded pointer event. Wallpaper
+      mode looked like it had simply failed.
+    */
+    win.webContents.once('did-finish-load', () => send('display-mode', { mode: displayMode }));
+
+    if (!wantWallpaper) stopPointerForwarding();
     if (wantWallpaper) {
       win.once('ready-to-show', () => {
         const res = wallpaper.attach(win.getNativeWindowHandle());
@@ -879,7 +891,10 @@ function applyDisplayMode(mode) {
              and topmost again. Guarded by displayMode already being
              'wallpaper', so this cannot loop. */
           applyDisplayMode('full');
+          return;
         }
+        // Clicks do not reach a child of the desktop; forward them ourselves.
+        startPointerForwarding();
       });
     }
   }
@@ -902,6 +917,57 @@ function applyDisplayMode(mode) {
   win.setIgnoreMouseEvents(next === 'strip', { forward: true });
 
   send('display-mode', { mode: next });
+}
+
+/* ------------------------------------------------- wallpaper mouse forwarding */
+/*
+  A window parented into the desktop gets no clicks: Windows routes them to
+  Progman's icon view, which is what the desktop is for. Without forwarding,
+  wallpaper mode has no HUD, no library and no preset browser — the visuals
+  would be all it is.
+
+  30Hz. The cursor position needs no FFI at all (Electron has it) and the
+  button state is one user32 call, so this is cheap; and it runs in this one
+  mode only, stopping the moment the mode is left.
+*/
+const WALLPAPER_POINTER_HZ = 30;
+
+/** @type {NodeJS.Timeout|null} */
+let pointerTimer = null;
+let pointerWasDown = false;
+
+function stopPointerForwarding() {
+  if (pointerTimer) clearInterval(pointerTimer);
+  pointerTimer = null;
+  pointerWasDown = false;
+}
+
+function startPointerForwarding() {
+  stopPointerForwarding();
+  pointerTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || displayMode !== 'wallpaper') return;
+
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = win.getBounds();
+    const x = cursor.x - bounds.x;
+    const y = cursor.y - bounds.y;
+
+    // Outside the window is not ours to report; the taskbar and any window on
+    // top of us are handling that pointer themselves.
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) {
+      pointerWasDown = false;
+      return;
+    }
+
+    const down = wallpaper.isMouseDown();
+    /* A click is reported on RELEASE, matching what a real click does — and it
+       means a press that started somewhere else and merely finished over us
+       does not activate anything. */
+    const clicked = pointerWasDown && !down;
+    pointerWasDown = down;
+    send('wallpaper-pointer', { x, y, down, clicked });
+  }, Math.round(1000 / WALLPAPER_POINTER_HZ));
+  if (pointerTimer.unref) pointerTimer.unref();
 }
 
 /**
@@ -1650,6 +1716,7 @@ app.on('will-quit', () => {
   /* Leave the desktop as we found it. A window still parented into WorkerW
      while the process dies is Explorer's problem to clean up, and it does not
      always do so tidily. */
+  stopPointerForwarding();
   if (displayMode === 'wallpaper' && win && !win.isDestroyed()) {
     wallpaper.detach(win.getNativeWindowHandle());
   }
