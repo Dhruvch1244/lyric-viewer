@@ -815,6 +815,39 @@ body.lang-devanagari .word--active {
   font-size: 1.4rem;
 }
 
+/* Translation and controls: `bar` only. The strip is 54px of click-through
+   surface — there is no room, and nothing there could be clicked anyway. */
+.compact-translation,
+.compact-controls { display: none; }
+
+.mode-bar .compact-translation:not(:empty) {
+  display: block;
+  width: 100%;
+  font-size: 0.82rem;
+  color: var(--ink-mid);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-bar .compact-controls {
+  display: flex;
+  gap: 0.35rem;
+  position: absolute;
+  top: 0.5rem;
+  right: 0.7rem;
+}
+
+.mode-bar .compact-controls .chip {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+}
+
+/* The bar needs to be a positioning context for the controls above, and needs
+   room for them beside the title. */
+.mode-bar .topbar { position: fixed; }
+.mode-bar .now-playing { padding-right: 7rem; }
+
 .mode-compact .transport {
   position: static;
   flex: none;

@@ -40,6 +40,18 @@
            Its own element rather than reusing #status, which carries app
            messages that would otherwise overwrite the words mid-song. -->
       <div id="compact-line" class="compact-line" aria-hidden="true"></div>
+      <!-- The translation, under the line, in compact modes only. Previously
+           unreachable there: the HUD is hidden and the full-size translation
+           element lives inside the (hidden) stage. -->
+      <div id="compact-translation" class="compact-translation" aria-hidden="true"></div>
+      <!-- The few controls worth keeping at this size. The strip is
+           click-through, so these are reachable in `bar` only — which is why
+           the sync nudge also stays on Ctrl+Alt+←/→ in every mode. -->
+      <div id="compact-controls" class="compact-controls">
+        <button id="cc-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
+        <button id="cc-translate" class="chip" type="button" title="Toggle translation">EN</button>
+        <button id="cc-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
+      </div>
     </header>
 
     <!-- Apple Music-style scrolling column. All lines live here; the column

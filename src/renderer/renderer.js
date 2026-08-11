@@ -64,6 +64,10 @@ const els = {
   mdRandom: document.getElementById('mdp-random'),
   mdClose: document.getElementById('mdp-close'),
   compactLine: document.getElementById('compact-line'),
+  compactTranslation: document.getElementById('compact-translation'),
+  ccEarlier: document.getElementById('cc-earlier'),
+  ccLater: document.getElementById('cc-later'),
+  ccTranslate: document.getElementById('cc-translate'),
   modeBtn: document.getElementById('btn-mode'),
   posterBtn: document.getElementById('btn-poster'),
   poster: document.getElementById('poster'),
@@ -832,11 +836,15 @@ function updateTranslation(index) {
   if (!showTranslation || !aligned || index < 0 || index >= cuesEnglish.length) {
     els.translation.classList.remove('is-visible');
     els.translation.textContent = '';
+    if (els.compactTranslation) els.compactTranslation.textContent = '';
     return;
   }
   const text = (cuesEnglish[index] && cuesEnglish[index].text) || '';
   els.translation.textContent = text;
   els.translation.classList.toggle('is-visible', Boolean(text.trim()));
+  // The compact modes hide the stage, so the normal translation element goes
+  // with it; this is the same text in the one place still on screen.
+  if (els.compactTranslation) els.compactTranslation.textContent = text;
 }
 
 /* ---------------------------------------------------------------- main loop */
@@ -4474,6 +4482,15 @@ if (els.modeBtn) {
     window.player.setDisplayMode(next);
   });
 }
+
+/*
+  The compact-mode controls. They delegate to the same handlers the HUD chips
+  use rather than duplicating the logic — a second implementation of "nudge the
+  sync" is a second thing to keep in step with the offset store.
+*/
+if (els.ccEarlier) els.ccEarlier.addEventListener('click', () => els.syncEarlierBtn.click());
+if (els.ccLater) els.ccLater.addEventListener('click', () => els.syncLaterBtn.click());
+if (els.ccTranslate) els.ccTranslate.addEventListener('click', () => els.translateBtn.click());
 
 window.player.onDisplayMode(({ mode }) => {
   displayMode = mode || 'full';
