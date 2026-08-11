@@ -157,18 +157,19 @@
       */
       soloLayer: true,
       /*
-        Smoke needs something to be smoke *against*, and `soloLayer` alone does
-        not provide it: it suppresses the wash and the cover photo, but the GPU
-        field is not a layer flag and rendered underneath regardless, laying a
-        translucent colour film over the desktop. `transparentBg` removes it —
-        the desktop is the background, always, whatever the backdrop-level chip
-        is set to. It is also why this look can afford to be dense: nothing is
-        competing with it.
+        NOT `transparentBg`, deliberately, and this was tried both ways.
 
-        The `swirl` biases below are kept for when the flag is lifted; they cost
-        nothing while the field is off.
+        A transparent background was the original request, and it works — the
+        `transparentBg` flag still exists and the MilkDrop looks depend on it.
+        But watched against real music rather than in a screenshot, a tunnel
+        floating on the bare desktop reads as a widget sitting on top of the
+        screen; with the field behind it, the smoke has something to be smoke
+        *in*, and it reads as depth. Reverted on that basis.
+
+        `soloLayer` still suppresses the wash, the cover photo and every 2D
+        extra, and the field is thinned hard for solo looks (see `fieldAlpha` in
+        renderer.js) so it supports the tunnel instead of swallowing it.
       */
-      transparentBg: true,
       layers: { wormhole: true },
       swirl: { bandBias: 0.7, vortexBias: 1.35, glowBias: 1.1, kick: 2.6 },
     },

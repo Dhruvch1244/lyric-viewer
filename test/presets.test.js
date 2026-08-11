@@ -83,15 +83,21 @@ test('transparentBg is declared by every preset', () => {
   }
 });
 
-test('wormhole is the only swirl preset with a transparent background', () => {
-  // Every MilkDrop look also has it — see the engine test — but for the
-  // opposite reason: it suppresses a field that would draw under an opaque
-  // canvas, rather than clearing a background so smoke has something to be
-  // smoke against.
+test('no swirl preset asks for a transparent background', () => {
+  /*
+    `transparentBg` belongs to the MilkDrop looks alone, where it suppresses a
+    field that would otherwise draw underneath an opaque full-screen canvas.
+
+    Wormhole carried it briefly. Watched against real music rather than in a
+    screenshot, a tunnel floating on the bare desktop reads as a widget sitting
+    on the screen; with the field behind it the smoke has something to be smoke
+    *in*. If a swirl preset ever claims this flag again, that judgement is being
+    reversed and it should be a deliberate decision rather than a stray edit.
+  */
   const clear = VisualPresets.all
     .filter((p) => p.transparentBg && p.engine === 'swirl')
     .map((p) => p.id);
-  assert.deepEqual(clear, ['wormhole']);
+  assert.deepEqual(clear, []);
 });
 
 test('a transparent-background preset still draws something', () => {
