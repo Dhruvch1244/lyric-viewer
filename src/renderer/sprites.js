@@ -24,17 +24,99 @@
 
   // Legend: '.' transparent · o outline · k cap · b brim · s skin · e eye
   //         h hoodie · H hoodie-shadow · c chain/accent · p pants · w shoe
-  const BODY = [
-    '................',
-    '.....oooooo.....',
-    '....okkkkkko....',
-    '...okkkkkkkko...',
-    '...okkkkkkkko...',
-    '...obbbbbbbbo...',
+  //         r hair · g glasses
+
+  /*
+    HEADWEAR.
+
+    There used to be exactly one silhouette, so every artist without a
+    hand-authored entry was the same figure in different colours — which is why
+    a library of a dozen artists read as one dancer recoloured rather than as a
+    troupe. Colour alone is a weak identity signal at 40 pixels tall; shape is
+    a strong one.
+
+    Each variant replaces the top five rows and nothing else, so the face, body
+    and legs stay shared and the grid height never changes. All are 16 wide to
+    match the torso.
+  */
+  const HEADS = {
+    // Snapback: flat crown, brim jutting to one side. The asymmetry is what
+    // makes it recognisable in silhouette rather than "a hat".
+    cap: [
+      '....oooooooo....',
+      '...okkkkkkkko...',
+      '...okkkkkkkko...',
+      '...obbbbbbbbo...',
+      '...obbbbbbbbbbo.',
+    ],
+    // Tall and domed, with a turn-up at the bottom.
+    beanie: [
+      '.....oooooo.....',
+      '....okkkkkkoo...',
+      '...okkkkkkkko...',
+      '...okkkkkkkko...',
+      '..okkkkkkkkkko..',
+    ],
+    // Brim wider than the shoulders — the loudest outline in the set.
+    bucket: [
+      '.....oooooo.....',
+      '....okkkkkko....',
+      '...okkkkkkkko...',
+      '.obbbbbbbbbbbbo.',
+      '..obbbbbbbbbbo..',
+    ],
+    // Hood up: the crown carries on down past the ears.
+    hood: [
+      '....oohhhhoo....',
+      '..ohhhhhhhhhho..',
+      '..ohhhhhhhhhho..',
+      '..ohhhhhhhhhho..',
+      '..ohh......hho..',
+    ],
+    // Volume: wider than the head on both sides.
+    afro: [
+      '...oorrrrrroo...',
+      '..orrrrrrrrrro..',
+      '.orrrrrrrrrrrro.',
+      '..orrrrrrrrrro..',
+      '...orrrrrrrro...',
+    ],
+    // Cropped close, so the face sits noticeably higher than every other look.
+    crop: [
+      '................',
+      '................',
+      '.....oooooo.....',
+      '....orrrrrro....',
+      '...orrrrrrrro...',
+    ],
+    // Long hair falling either side of the face.
+    long: [
+      '.....oooooo.....',
+      '....orrrrrro....',
+      '...orrrrrrrro...',
+      '..orrrrrrrrrro..',
+      '..orro......orr.',
+    ],
+  };
+
+  const HEAD_IDS = Object.keys(HEADS);
+
+  /** Face rows. `glasses` swaps the eye row for a visor. */
+  const FACE = [
     '...osssssssso...',
     '...oseesseeso...',
     '...osssssssso...',
     '....ossssso....',
+  ];
+  const FACE_GLASSES = [
+    '...osssssssso...',
+    '...oggggggggo...',
+    '...osssssssso...',
+    '....ossssso....',
+  ];
+
+  /** Everything from the shoulders down; shared by every look. */
+  const TORSO = [
     '...ohhhhhhhho...',
     '..ohhhhhhhhhho..',
     '..ohhcHHHHchho..',
@@ -46,12 +128,35 @@
     '...owwo.owwo....',
   ];
 
+  /**
+   * Pad every row to the widest, and centre rows that are narrower.
+   *
+   * Head variants are deliberately not all the same width — a bucket hat that
+   * is only as wide as a cap is not a bucket hat — so the grid is as wide as
+   * the widest thing in it and everything else is padded to match.
+   */
   function padGrid(rows) {
     const w = rows.reduce((m, r) => Math.max(m, r.length), 0);
     return rows.map((r) => r.padEnd(w, '.'));
   }
 
-  const GRID = padGrid(BODY);
+  /**
+   * Assemble the pixel grid for one look.
+   *
+   * Always the same height regardless of variant — the draw code positions
+   * feet, nameplate and shadow off GRID_H, so a variant that changed it would
+   * silently misplace all three.
+   *
+   * @param {object} look
+   * @returns {string[]}
+   */
+  function gridFor(look) {
+    const head = HEADS[(look && look.head)] || HEADS.cap;
+    const face = look && look.glasses ? FACE_GLASSES : FACE;
+    return padGrid(['................', ...head, ...face, ...TORSO]);
+  }
+
+  const GRID = gridFor({});
   const GRID_W = GRID[0].length;
   const GRID_H = GRID.length;
 
@@ -69,6 +174,10 @@
       case 'c': return look.accent;
       case 'p': return look.pants;
       case 'w': return look.shoe;
+      // Hair falls back to a dark tone so a branded look written before hair
+      // existed cannot render a transparent scalp.
+      case 'r': return look.hair || '#1b1118';
+      case 'g': return '#0b0b12';
       default: return null;
     }
   }
@@ -117,9 +226,18 @@
   const BODY_CACHE_MAX = 48;           // bound memory across a long, many-artist session
   const bodyCache = new Map();
 
-  /** Stable cache key from a look's colour roles. */
+  /**
+   * Stable cache key from a look's colour roles AND its geometry.
+   *
+   * The geometry has to be in here. Two artists can easily share a palette —
+   * the album-art recolouring makes that likely rather than rare — and without
+   * the head style in the key the second one would be served the first one's
+   * bitmap and silently wear the wrong hat.
+   */
   function lookSig(look) {
-    return `${look.skin}|${look.cap}|${look.brim}|${look.hoodie}|${look.hoodieDark}|${look.accent}|${look.pants}|${look.shoe}`;
+    return `${look.skin}|${look.cap}|${look.brim}|${look.hoodie}|${look.hoodieDark}`
+      + `|${look.accent}|${look.pants}|${look.shoe}|${look.hair || ''}`
+      + `|${look.head || 'cap'}|${look.glasses ? 'g' : ''}`;
   }
 
   /**
@@ -136,8 +254,9 @@
     cv.width = GRID_W * BASE_CELL;
     cv.height = GRID_H * BASE_CELL;
     const g = cv.getContext('2d');
+    const grid = gridFor(look);
     for (let r = 0; r < GRID_H; r += 1) {
-      const row = GRID[r];
+      const row = grid[r];
       for (let c = 0; c < GRID_W; c += 1) {
         const col = colorFor(row[c], look);
         if (!col) continue;
@@ -248,7 +367,21 @@
 
   const SKINS = ['#c9895e', '#a56a42', '#e0aa7a', '#8a5a38', '#d79b6b'];
 
-  /** Deterministic distinct look from a name hash. */
+  /** Hair tones, dark enough to read as hair rather than as another hat. */
+  const HAIRS = ['#1b1118', '#2a1a12', '#0f1016', '#241a10', '#3a2418'];
+
+  /**
+   * Deterministic distinct look from a name hash.
+   *
+   * Shape as well as colour. The colours alone were not enough: at 40 pixels
+   * tall a recoloured identical figure reads as the same dancer, so a library
+   * of a dozen artists looked like one person in a dozen shirts. The head style
+   * and the glasses come from different slices of the same hash, so they vary
+   * independently — two artists sharing a hat rarely share the rest.
+   *
+   * Everything here is derived from the name, so an artist looks the same on
+   * every machine and on every replay, with nothing stored.
+   */
   function proceduralLook(name, hash) {
     const h = hash % 360;
     const accentH = (h + 150) % 360;
@@ -256,6 +389,10 @@
       name,
       procedural: true, // eligible for album-art recolouring (branded looks are not)
       skin: SKINS[hash % SKINS.length],
+      hair: HAIRS[(hash >> 3) % HAIRS.length],
+      head: HEAD_IDS[(hash >> 7) % HEAD_IDS.length],
+      // Roughly one in three, from a slice not used by anything else.
+      glasses: ((hash >> 11) % 3) === 0,
       cap: hsl(h, 70, 42),
       brim: hsl(h, 70, 30),
       hoodie: hsl(h, 55, 40),
@@ -272,9 +409,16 @@
     {
       match: 'seedhe maut',
       label: 'Seedhe Maut',
+      /*
+        The two members get different headwear, not just different colours.
+        This is the one registry entry with more than one figure on stage at
+        once, and two identically-shaped dancers side by side read as one
+        dancer duplicated. These are stylised inventions like every colour here
+        — not an attempt at likeness.
+      */
       members: [
-        { name: 'Encore ABJ', skin: '#b9784c', cap: '#1b1b22', brim: '#111117', hoodie: '#2a2a34', hoodieDark: '#1c1c24', accent: '#ffcf3f', pants: '#15151b', shoe: '#f2f2f2' },
-        { name: 'Calm', skin: '#a06238', cap: '#0f2a2e', brim: '#0a1e21', hoodie: '#123b3f', hoodieDark: '#0c2a2d', accent: '#39e6c8', pants: '#101418', shoe: '#e8e8e8' },
+        { name: 'Encore ABJ', head: 'cap', skin: '#b9784c', cap: '#1b1b22', brim: '#111117', hoodie: '#2a2a34', hoodieDark: '#1c1c24', accent: '#ffcf3f', pants: '#15151b', shoe: '#f2f2f2' },
+        { name: 'Calm', head: 'beanie', skin: '#a06238', cap: '#0f2a2e', brim: '#0a1e21', hoodie: '#123b3f', hoodieDark: '#0c2a2d', accent: '#39e6c8', pants: '#101418', shoe: '#e8e8e8' },
       ],
     },
     { match: 'divine', label: 'DIVINE', members: [{ name: 'DIVINE', skin: '#a5673d', cap: '#111117', brim: '#0b0b10', hoodie: '#20242c', hoodieDark: '#15181e', accent: '#ff4d4d', pants: '#14161c', shoe: '#f2f2f2' }] },
@@ -813,8 +957,11 @@
       const reveal = sm.reveal;                   // < 1 during a pixel-materialize
       if (reveal < 1) {
         // Transient spawn reveal: per-cell materialize (slow path, spawn only).
+        // Must use THIS look's grid, not the shared default, or a dancer in a
+        // beanie materialises wearing a cap and then pops into its real shape.
+        const grid = gridFor(this.look);
         for (let r = 0; r < GRID_H; r += 1) {
-          const row = GRID[r];
+          const row = grid[r];
           for (let c = 0; c < GRID_W; c += 1) {
             const col = colorFor(row[c], this.look);
             if (!col) continue;
@@ -875,6 +1022,15 @@
     SpriteActor,
     splitArtists,
     setBand,
+    /* Exposed for tests: the geometry is what makes one artist distinguishable
+       from another, so it needs pinning down. */
+    gridFor,
+    lookSig,
+    proceduralLook,
+    hashOf,
+    HEAD_IDS,
+    GRID_W,
+    GRID_H,
     /**
      * Recolour procedurally-generated dancers from the album-art palette, so an
      * unknown artist auto-themes to the current cover. Branded registry looks

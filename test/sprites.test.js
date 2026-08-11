@@ -149,3 +149,102 @@ test('setBand confines the dancers and rejects an inverted band', () => {
 
   ArtistSprites.setBand(0.60, 0.96);              // restore the default
 });
+
+/* ------------------------------------------------------------ sprite shapes */
+/*
+  Colour alone was not enough to tell artists apart. At ~40 pixels tall a
+  recoloured identical figure reads as the same dancer, so a library of a dozen
+  artists looked like one person in a dozen shirts. Procedural looks now vary
+  their silhouette too, and these pin down the invariants that keeps safe.
+*/
+
+test('every head style produces a grid of the same size', () => {
+  // The draw code positions feet, nameplate and ground shadow off GRID_H, so a
+  // variant that changed the height would silently misplace all three.
+  for (const head of ArtistSprites.HEAD_IDS) {
+    const grid = ArtistSprites.gridFor({ head });
+    assert.equal(grid.length, ArtistSprites.GRID_H, `${head} changed the height`);
+    for (const row of grid) {
+      assert.equal(row.length, ArtistSprites.GRID_W, `${head} changed the width`);
+    }
+  }
+});
+
+test('glasses do not change the grid size either', () => {
+  const grid = ArtistSprites.gridFor({ head: 'cap', glasses: true });
+  assert.equal(grid.length, ArtistSprites.GRID_H);
+  assert.equal(grid[0].length, ArtistSprites.GRID_W);
+});
+
+test('an unknown head style falls back to the cap rather than an empty sprite', () => {
+  // Looks are persisted indirectly (via the registry and album recolouring) and
+  // a typo must not produce an invisible dancer.
+  assert.deepEqual(ArtistSprites.gridFor({ head: 'nonsense' }), ArtistSprites.gridFor({}));
+});
+
+test('head styles actually differ from one another', () => {
+  const seen = new Set();
+  for (const head of ArtistSprites.HEAD_IDS) {
+    seen.add(ArtistSprites.gridFor({ head }).join('\n'));
+  }
+  assert.equal(seen.size, ArtistSprites.HEAD_IDS.length, 'two head styles are identical');
+});
+
+test('the cache key includes geometry, not just colours', () => {
+  /*
+    Two artists can easily share a palette — album-art recolouring makes that
+    likely rather than rare — and without the geometry in the key the second
+    would be served the first one's bitmap and wear the wrong hat.
+  */
+  const base = { skin: '#a', cap: '#b', brim: '#c', hoodie: '#d', hoodieDark: '#e',
+    accent: '#f', pants: '#g', shoe: '#h' };
+  const capped = ArtistSprites.lookSig({ ...base, head: 'cap' });
+  const beanie = ArtistSprites.lookSig({ ...base, head: 'beanie' });
+  const specs = ArtistSprites.lookSig({ ...base, head: 'cap', glasses: true });
+
+  assert.notEqual(capped, beanie, 'head style missing from the cache key');
+  assert.notEqual(capped, specs, 'glasses missing from the cache key');
+});
+
+test('a procedural look is stable for a given name', () => {
+  // An artist must look the same on every machine and every replay, with
+  // nothing stored — that is the whole point of deriving it from the name.
+  const a = ArtistSprites.proceduralLook('Sub Focus', ArtistSprites.hashOf('Sub Focus'));
+  const b = ArtistSprites.proceduralLook('Sub Focus', ArtistSprites.hashOf('Sub Focus'));
+  assert.equal(ArtistSprites.lookSig(a), ArtistSprites.lookSig(b));
+});
+
+test('procedural looks vary in shape across a real library, not only in colour', () => {
+  // The actual complaint: every artist without a hand-authored entry looked the
+  // same. These are the artists in the user's own play history.
+  const artists = ['The Weeknd', 'Marshmello', 'Post Malone', 'Sub Focus', 'KX5',
+    'Don Toliver', 'Karan Aujla', 'Hugel', 'Pritam', 'John Summit', 'Karun',
+    'XXXTENTACION', 'Vishal Dadlani', 'Ownboss'];
+  const heads = new Set();
+  const sigs = new Set();
+  for (const name of artists) {
+    const look = ArtistSprites.proceduralLook(name, ArtistSprites.hashOf(name));
+    heads.add(look.head);
+    sigs.add(ArtistSprites.lookSig(look));
+  }
+  assert.equal(sigs.size, artists.length, 'two artists render identically');
+  assert.ok(heads.size >= 3,
+    `only ${heads.size} distinct silhouettes across ${artists.length} artists`);
+});
+
+test('the Seedhe Maut duo are two visibly different figures', () => {
+  // The one entry with two dancers on stage at once: identical shapes side by
+  // side read as one dancer duplicated.
+  const { actors } = ArtistSprites.actorsFor('Seedhe Maut');
+  assert.equal(actors.length, 2);
+  assert.notEqual(actors[0].look.head, actors[1].look.head);
+});
+
+test('album-art recolouring cannot change an artist silhouette', () => {
+  // Recolouring is meant to theme a dancer to the cover, not to reshape it —
+  // and the shape is the part carrying the identity.
+  const { actors } = ArtistSprites.actorsFor('Some Unknown Artist');
+  const before = actors[0].look.head;
+  ArtistSprites.recolorFromArt(actors, ['#ff0000', '#00ff00']);
+  assert.equal(actors[0].look.head, before);
+});
