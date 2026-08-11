@@ -314,6 +314,32 @@ against a known BPM would settle it either way.
 
 ## Environment gotchas that cost real time
 
+- **An install made before 0.21.0 may be PER-MACHINE, and auto-update cannot
+  replace it.** Hit for real on 0.21.0's first update. Up to 0.20.0 the NSIS
+  installer allowed a custom directory; choosing `C:\Program Files` makes NSIS
+  escalate to an all-users install registered under HKLM with an `/allusers`
+  uninstaller. The app itself is configured `perMachine: false`, so a later
+  installer runs per-user, finds an all-users install it has to remove, and
+  needs elevation to do it — producing *"Failed to uninstall old application
+  files. Please try running the installer again"*.
+
+  Two things compound it. The app leaves **five processes** running (overlay
+  plus renderers) and a tray icon, so files are locked unless it is fully quit.
+  And under auto-update the installer runs **silently on quit**, so for anybody
+  who is not watching this fails with no dialog at all and the update simply
+  never happens, forever.
+
+  **The fix is one-time and manual:** quit the app completely, uninstall the
+  Program Files copy with its own elevated uninstaller, then install normally.
+  Afterwards the install is per-user under `%LOCALAPPDATA%\Programs`, needs no
+  elevation, and every later update works. 0.21.0 sets
+  `allowToChangeInstallationDirectory: false` so a new install cannot end up
+  this way, but that does nothing for one that already did.
+
+  **If the audience ever grows, detect it:** on startup, look for this app's
+  product GUID under HKLM while running from `%LOCALAPPDATA%`, and say so
+  plainly rather than letting updates fail in silence.
+
 - **`node_modules/@huggingface/transformers/.cache` must stay excluded** from the
   build. Any dev run touching a pipeline drops hundreds of MB there and
   electron-builder will bundle it — caught once at 341MB against a normal 124MB.
