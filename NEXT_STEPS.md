@@ -98,6 +98,35 @@ profiler self time.
 
 ## Requested, not built
 
+### Genius as a lyric source — deliberately not done
+
+NetEase shipped as a second **synced** source. Genius did not, and it should not
+be picked up without a decision, because it cannot be done the way every other
+source in this app is done.
+
+Genius has no lyrics API. Their documented API returns metadata — song ids,
+titles, artists, album art — and explicitly not the lyric text; the words exist
+only in the HTML of the song page. Every "Genius lyrics" library works by
+scraping that page.
+
+That collides with a rule this codebase already follows and states in
+`artwork.js`: HTML scraping is avoided because it is brittle, breaks silently,
+and carries ToS risk. Silent breakage is the worst of the three here — a scraper
+that starts returning navigation chrome instead of lyrics produces a song
+captioned with garbage rather than an error anybody notices.
+
+If it is wanted anyway, that is a deliberate reversal of the no-scraping rule
+and should be recorded as one, not slipped in as a fourth source.
+
+**What to do instead**, in rough order of value:
+1. **Musixmatch's community API** — has a documented lyrics endpoint, needs a
+   free key, and returns a 30% excerpt on the free tier. The excerpt limit
+   probably makes it useless for this app; worth ten minutes to confirm.
+2. **QQ Music / Kugou** — same shape as NetEase (public JSON, synced LRC), same
+   strengths and the same caveat about not being formally documented.
+3. **Deepen what exists** — the aligner already turns a *plain* lyric into a
+   synced one, and LRCLIB's plain catalogue is far larger than its synced one.
+
 ### The rest of the optional transcription pack
 
 0.19.0 took the safe half: `DirectML.dll` and `dxcompiler.dll` (35MB on disk)

@@ -20,6 +20,7 @@ app.commandLine.appendSwitch('canvas-oop-rasterization');
 
 const { SmtcWatcher } = require('./smtc');
 const { fetchSyncedLyrics, fetchPlainLyrics, detectIndic, cleanArtist, normaliseCues } = require('./lyrics');
+const { fetchNeteaseSynced } = require('./netease');
 const { alignLyrics, splitPlainLyrics } = require('./align');
 const { attachWordTimings } = require('./wordalign');
 const { correctTranscript, isCorrectionAvailable } = require('./correct');
@@ -458,6 +459,29 @@ async function loadLyricsFor(track) {
   }
   if (token !== lookupToken) return;
 
+  /*
+    Second synced source. Runs only when LRCLIB missed, because LRCLIB is the
+    better-matched source for this library and there is no reason to pay for a
+    second lookup when the first one succeeded.
+
+    A second SYNCED source is worth more than a second plain one: a plain source
+    still has to be aligned by Whisper (minutes of CPU, and only on the next
+    play), whereas this scrolls immediately and offline. NetEase is strongest
+    exactly where LRCLIB is weakest — Mandarin, Cantonese, K-pop and the Asian
+    long tail — and often carries a human-written translation with it.
+
+    Best-effort throughout: any failure returns null and the code below treats
+    it exactly as "not found", which is what it was already doing.
+  */
+  if (!result) {
+    try {
+      result = await fetchNeteaseSynced(track);
+    } catch (err) {
+      console.warn('[netease]', err.message);
+    }
+    if (token !== lookupToken) return;
+  }
+
   if (!result) {
     const payload = {
       cues: [], cuesDevanagari: null, cuesEnglish: null,
@@ -478,7 +502,12 @@ async function loadLyricsFor(track) {
   const payload = {
     cues: result.cues,
     cuesDevanagari: saved.cuesDevanagari || result.cuesDevanagari,
-    cuesEnglish: saved.cuesEnglish || null,
+    /*
+      A source-supplied translation outranks anything cached from the LLM: a
+      human wrote it for this specific song, which no general translator will
+      match. NetEase supplies one for a lot of its catalogue.
+    */
+    cuesEnglish: result.cuesEnglish || saved.cuesEnglish || null,
     language: saved.language,
     mood: saved.mood || null,
     source: result.source,
@@ -498,6 +527,10 @@ async function loadLyricsFor(track) {
     artist: track.artist || null,
     cues: result.cues,
     cuesDevanagari: payload.cuesDevanagari,
+    // Persisted so a source-supplied translation survives a restart, and so
+    // maybeAutoTranslate below short-circuits instead of paying an LLM to
+    // redo work a human already did.
+    cuesEnglish: payload.cuesEnglish,
     language: payload.language,
     source: result.source,
     indic,
