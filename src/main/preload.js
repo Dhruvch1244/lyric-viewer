@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('player', {
   onDisplayMode: (cb) => ipcRenderer.on('display-mode', (_e, data) => cb(data)),
   setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
   getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
+
+  onUpdateState: (cb) => ipcRenderer.on('update-state', (_e, data) => cb(data)),
+  getUpdateState: () => ipcRenderer.invoke('get-update-state'),
+  /** @param {'install'|'dismiss'|'check'} action */
+  updateAction: (action) => ipcRenderer.invoke('update-action', action),
   onOffset: (cb) => ipcRenderer.on('offset', (_e, data) => cb(data)),
 
   getOffset: () => ipcRenderer.invoke('get-offset'),

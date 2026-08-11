@@ -705,6 +705,53 @@ body.lang-devanagari .word--active {
   .nudge { animation: none; }
 }
 
+/* ---- Update surfaces ---- */
+/*
+  The card reuses `.nudge` wholesale — same weight, same placement language,
+  same dismissal. An update prompt that looked more urgent than the capture
+  nudge would be lying about its own importance: nothing is broken, and the
+  update installs itself on the next quit either way.
+
+  It sits above the nudge's slot so the two can never overlap on a first run
+  that also happens to find an update.
+*/
+.nudge--update {
+  bottom: 17vh;
+}
+
+/*
+  The pill is deliberately not a nudge. While bytes are arriving there is
+  nothing to decide, so it gets no border, no buttons and no animation — it is
+  a status line that happens to be visible, closer to the HUD chips than to a
+  prompt.
+*/
+.update-pill {
+  position: fixed;
+  right: 3vw;
+  bottom: 9vh;
+  z-index: 6;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-mid);
+  background: color-mix(in srgb, #000 55%, transparent);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.update-pill[hidden] {
+  display: none;
+}
+
+/* Neither surface has a small version. A 54px click-through strip cannot show
+   a card, and its buttons could not be clicked even if it could. The tray keeps
+   carrying the state in compact modes. */
+.mode-compact .update-pill,
+.mode-compact .nudge--update {
+  display: none;
+}
+
 /* ---- Compact display modes ---- */
 /*
   `bar` is a small floating panel; `strip` is a click-through line along the

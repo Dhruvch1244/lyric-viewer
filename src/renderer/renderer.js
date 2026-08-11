@@ -80,6 +80,11 @@ const els = {
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
+  updatePill: document.getElementById('update-pill'),
+  updateCard: document.getElementById('update-card'),
+  updateVersion: document.getElementById('update-version'),
+  updateInstall: document.getElementById('update-install'),
+  updateLater: document.getElementById('update-later'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -4092,6 +4097,65 @@ if (els.nudgeEnable) {
 }
 if (els.nudgeDismiss) {
   els.nudgeDismiss.addEventListener('click', closeCaptureNudge);
+}
+
+/* ------------------------------------------------------------------ updating */
+/*
+  Auto-update, made visible.
+
+  0.19.0 shipped auto-update, 0.20.0 made it actually reach GitHub, and both
+  reported it into the tray menu alone. On an app whose whole surface is a
+  full-screen overlay, a state that only exists inside a right-click menu is a
+  state nobody sees: the update downloaded, waited, and the only way to learn
+  that was to go looking for it.
+
+  Main decides whether to prompt (see `updateStateForRenderer`), because the
+  dismissal has to outlive this renderer — changing display mode reloads it.
+*/
+
+/** @param {{phase: string, version?: string, percent?: number, prompt: boolean}} s */
+function applyUpdateState(state) {
+  if (!state) return;
+
+  if (els.updateCard) {
+    els.updateCard.hidden = !state.prompt;
+    if (state.prompt && els.updateVersion) {
+      els.updateVersion.textContent = state.version ? `Version ${state.version}` : 'A new version';
+    }
+  }
+
+  if (els.updatePill) {
+    // Only while it is arriving. Once ready the card says it better, and two
+    // things saying the same thing at once reads as a bug.
+    const busy = state.phase === 'downloading' || state.phase === 'available';
+    els.updatePill.hidden = !busy;
+    if (busy) {
+      const pct = Math.max(0, Math.min(99, Math.floor(state.percent || 0)));
+      els.updatePill.textContent = state.phase === 'available'
+        ? `Downloading ${state.version || 'update'}…`
+        : `Downloading ${state.version || 'update'}… ${pct}%`;
+    }
+  }
+}
+
+if (els.updateInstall) {
+  els.updateInstall.addEventListener('click', () => {
+    // The app quits from under us if this succeeds, so nothing follows it.
+    window.lyrics.updateAction('install');
+  });
+}
+if (els.updateLater) {
+  els.updateLater.addEventListener('click', async () => {
+    if (els.updateCard) els.updateCard.hidden = true;
+    await window.lyrics.updateAction('dismiss');
+  });
+}
+if (window.lyrics.onUpdateState) window.lyrics.onUpdateState(applyUpdateState);
+
+/* Ask once at startup: a cold start can settle on 'ready' before this file has
+   run, and the push-only path would then never fire. */
+if (window.lyrics.getUpdateState) {
+  window.lyrics.getUpdateState().then(applyUpdateState).catch(() => { /* not packaged */ });
 }
 
 /* ------------------------------------------------------------------- wiring */

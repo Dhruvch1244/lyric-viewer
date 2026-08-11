@@ -63,11 +63,11 @@
       "oneClick": false,
       "perMachine": false,
       "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Lyric Overlay",
-      "uninstallDisplayName": "Lyric Overlay ${version}"
+      "uninstallDisplayName": "Lyric Overlay"
     }
   },
   "devDependencies": {

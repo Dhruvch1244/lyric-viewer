@@ -296,6 +296,22 @@ function send(channel, payload) {
 }
 
 /**
+ * The updater state as the overlay needs it: the raw phase plus the one
+ * decision the renderer must not make for itself.
+ *
+ * `prompt` is computed here because dismissal lives on the updater — a renderer
+ * that decided for itself would forget every reload, and reloading is exactly
+ * what happens when the display mode changes.
+ *
+ * @returns {{phase: string, version?: string, percent?: number, prompt: boolean}}
+ */
+function updateStateForRenderer() {
+  if (!appUpdater) return { phase: 'idle', prompt: false };
+  const { phase, version, percent } = appUpdater.state;
+  return { phase, version, percent, prompt: appUpdater.shouldPrompt() };
+}
+
+/**
  * Fetch cover art + full artist credit for a track and push it to the renderer.
  * Best-effort: on any failure the visuals simply keep their hash palette and the
  * SMTC-reported artist. Guarded by `artworkToken` so a rapid track change wins.
@@ -798,7 +814,15 @@ app.whenReady().then(() => {
   /* Auto-update. Constructed before the tray so the tray's update row can read
      its state on the very first render; started after, so the first status
      change has somewhere to redraw into. */
-  appUpdater = new AppUpdater({ onChange: () => appTray && appTray.refresh() });
+  appUpdater = new AppUpdater({
+    onChange: () => {
+      if (appTray) appTray.refresh();
+      /* The tray menu was the only place this surfaced, which meant an update
+         could arrive, sit downloaded and ready, and never be mentioned to
+         someone watching a full-screen overlay. Push it to the renderer too. */
+      send('update-state', updateStateForRenderer());
+    },
+  });
 
   appTray = new AppTray({
     onToggleWindow: toggleWindow,
@@ -820,6 +844,24 @@ app.whenReady().then(() => {
      than in createWindow so the renderer is listening for the event. */
   win.webContents.once('did-finish-load', () => {
     applyDisplayMode(settings.get('displayMode') || 'full');
+  });
+
+  /* The overlay asks on load, because the updater may have settled before the
+     renderer was listening — a cold start that finds an update ready reaches
+     'ready' well before the first frame. */
+  ipcMain.handle('get-update-state', () => updateStateForRenderer());
+
+  ipcMain.handle('update-action', (_e, action) => {
+    if (!appUpdater) return { status: 'unavailable' };
+    if (action === 'install') {
+      return { status: appUpdater.installNow() ? 'installing' : 'nothing-ready' };
+    }
+    if (action === 'dismiss') {
+      appUpdater.dismiss();
+      return { status: 'dismissed' };
+    }
+    appUpdater.checkNow();
+    return { status: 'checking' };
   });
 
   ipcMain.handle('set-display-mode', (_e, mode) => {
@@ -1433,5 +1475,8 @@ app.whenReady().then(() => {
   app.on('before-quit', () => watcher.stop());
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (appUpdater) appUpdater.stop();
+});
 app.on('window-all-closed', () => app.quit());
