@@ -833,7 +833,8 @@ function boundsForMode(mode) {
     };
   }
   /* The desktop is the whole display, taskbar included — the icons sit on all
-     of it, and so does what goes behind them. */
+     of it, and so does what goes behind them. The controls are inset instead;
+     see `shellInsets`. */
   if (mode === 'wallpaper') return display.bounds;
 
   if (mode === 'bar') {
@@ -847,6 +848,31 @@ function boundsForMode(mode) {
     };
   }
   return display.bounds;
+}
+
+/**
+ * How much of the display the shell covers, per edge, in CSS pixels.
+ *
+ * Wallpaper mode fills the whole display so the visuals run edge to edge behind
+ * an opaque taskbar — but the HUD lives along the bottom, which put every chip
+ * UNDERNEATH the taskbar: invisible, and unclickable, since a cursor there is
+ * over the taskbar rather than over the desktop. Shrinking the window to the
+ * work area would fix the controls and give up the full-bleed visuals; insetting
+ * only the controls keeps both.
+ *
+ * Derived rather than assumed, because the taskbar can be any height and can be
+ * on any edge.
+ *
+ * @returns {{top: number, right: number, bottom: number, left: number}}
+ */
+function shellInsets() {
+  const { bounds, workArea } = screen.getPrimaryDisplay();
+  return {
+    top: Math.max(0, workArea.y - bounds.y),
+    left: Math.max(0, workArea.x - bounds.x),
+    right: Math.max(0, (bounds.x + bounds.width) - (workArea.x + workArea.width)),
+    bottom: Math.max(0, (bounds.y + bounds.height) - (workArea.y + workArea.height)),
+  };
 }
 
 /**
@@ -893,7 +919,7 @@ function applyDisplayMode(mode) {
       was still 'full' it discarded every forwarded pointer event. Wallpaper
       mode looked like it had simply failed.
     */
-    win.webContents.once('did-finish-load', () => send('display-mode', { mode: displayMode }));
+    win.webContents.once('did-finish-load', () => send('display-mode', { mode: displayMode, insets: shellInsets() }));
 
     if (!wantWallpaper) stopPointerForwarding();
     if (wantWallpaper) {
@@ -930,7 +956,7 @@ function applyDisplayMode(mode) {
   */
   win.setIgnoreMouseEvents(next === 'strip', { forward: true });
 
-  send('display-mode', { mode: next });
+  send('display-mode', { mode: next, insets: shellInsets() });
 }
 
 /* ------------------------------------------------- wallpaper mouse forwarding */
@@ -966,18 +992,37 @@ function startPointerForwarding() {
     const x = cursor.x - bounds.x;
     const y = cursor.y - bounds.y;
 
-    // Outside the window is not ours to report; the taskbar and any window on
-    // top of us are handling that pointer themselves.
+    // Outside the window is not ours to report; the taskbar and anything else
+    // on screen is handling that pointer itself.
     if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) {
       pointerWasDown = false;
       return;
     }
 
-    const down = wallpaper.isMouseDown();
-    /* A click is reported on RELEASE, matching what a real click does — and it
-       means a press that started somewhere else and merely finished over us
-       does not activate anything. */
-    const clicked = pointerWasDown && !down;
+    /*
+      Being inside our bounds is not enough. In wallpaper mode this window
+      covers the entire desktop, so that test is true whenever the cursor is
+      anywhere on screen — including while it is over somebody else's window.
+      Without asking Windows what is actually under the cursor, clicking in a
+      text editor would press whatever chip happened to be beneath it.
+    */
+    const handle = win.getNativeWindowHandle();
+    if (!wallpaper.isCursorOverDesktop(handle, cursor)) {
+      pointerWasDown = false;
+      return;
+    }
+
+    const { down, pressedSince } = wallpaper.mouseState();
+    /*
+      A click is a release, matching what a real click does: a press that began
+      somewhere else and merely finished over us activates nothing.
+
+      `pressedSince` catches the other case — a press and release that both
+      happened between two polls, which at 30Hz is an ordinary quick click and
+      was simply being dropped. Measured: the packaged build ignored the first
+      click of a run and took the second.
+    */
+    const clicked = (pointerWasDown && !down) || (!down && pressedSince);
     pointerWasDown = down;
     send('wallpaper-pointer', { x, y, down, clicked });
   }, Math.round(1000 / WALLPAPER_POINTER_HZ));

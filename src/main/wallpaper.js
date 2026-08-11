@@ -92,6 +92,7 @@ function bind() {
     koffi.struct('RECT', {
       left: 'int', top: 'int', right: 'int', bottom: 'int',
     });
+    koffi.struct('POINT', { x: 'int', y: 'int' });
     user32 = {
       FindWindowExW: lib.func('void* __stdcall FindWindowExW(void*, void*, const char16_t*, const char16_t*)'),
       SendMessageTimeoutW: lib.func('long __stdcall SendMessageTimeoutW(void*, unsigned int, size_t, size_t, unsigned int, unsigned int, _Out_ size_t*)'),
@@ -101,6 +102,9 @@ function bind() {
       SetWindowLongPtrW: lib.func('intptr_t __stdcall SetWindowLongPtrW(void*, int, intptr_t)'),
       SetWindowPos: lib.func('bool __stdcall SetWindowPos(void*, void*, int, int, int, int, unsigned int)'),
       GetAsyncKeyState: lib.func('short __stdcall GetAsyncKeyState(int)'),
+      WindowFromPoint: lib.func('void* __stdcall WindowFromPoint(POINT)'),
+      GetParent: lib.func('void* __stdcall GetParent(void*)'),
+      GetClassNameW: lib.func('int __stdcall GetClassNameW(void*, _Out_ char16_t*, int)'),
       koffi,
     };
     return true;
@@ -360,19 +364,99 @@ function detach(nativeHandle) {
 /** Left mouse button. */
 const VK_LBUTTON = 0x01;
 
-/** @returns {boolean} whether the left button is down right now */
-function isMouseDown() {
+/**
+ * Left-button state, including a press that came and went between polls.
+ *
+ * The high bit is "down right now"; the low bit is "was pressed since this was
+ * last asked". Polling the high bit alone at 30Hz drops quick clicks outright —
+ * a press and release inside one 33ms window is invisible — which showed up as
+ * the packaged build ignoring the first click and taking the second. The low
+ * bit is exactly the leftover this needs.
+ *
+ * Safe to use only because the caller checks the cursor is over OUR window
+ * first: on its own the low bit reports presses made in any application.
+ *
+ * @returns {{down: boolean, pressedSince: boolean}}
+ */
+function mouseState() {
+  if (!bind()) return { down: false, pressedSince: false };
+  try {
+    const state = user32.GetAsyncKeyState(VK_LBUTTON);
+    return { down: (state & 0x8000) !== 0, pressedSince: (state & 0x0001) !== 0 };
+  } catch {
+    return { down: false, pressedSince: false };
+  }
+}
+
+/**
+ * Window classes that ARE the desktop.
+ *
+ * A window parented into the desktop does not take part in hit-testing, so
+ * `WindowFromPoint` never returns it — it returns whatever the desktop itself
+ * puts there: the icon view, its list control, the worker window, or Progman.
+ * Asking "is our window under the cursor" therefore always answers no, which is
+ * how the first version of this check silently disabled every click it was
+ * meant to protect.
+ *
+ * The question that can actually be answered is the one that matters anyway:
+ * is the cursor over the DESKTOP, or over somebody else's window?
+ */
+const DESKTOP_CLASSES = new Set([
+  'Progman', 'WorkerW', 'SHELLDLL_DefView', 'SysListView32',
+]);
+
+/** @param {unknown} handle @returns {string} */
+function classNameOf(handle) {
+  if (!handle) return '';
+  const buf = Buffer.alloc(512);
+  try {
+    user32.GetClassNameW(handle, buf, 256);
+    return buf.toString('ucs2').replace(/ [\s\S]*$/, '');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Whether forwarded input should be delivered at this point.
+ *
+ * In wallpaper mode this window covers the whole desktop, so "the cursor is
+ * inside our bounds" is true whenever the cursor is anywhere on screen —
+ * including while it is over another application. Left at that, clicking in a
+ * text editor would press whatever chip happened to be beneath it.
+ *
+ * True when the cursor is over the desktop (see DESKTOP_CLASSES) or, on the
+ * chance that a layout does let our window be hit, over our window itself.
+ *
+ * @param {Buffer} nativeHandle
+ * @param {{x: number, y: number}} screenPoint
+ * @returns {boolean}
+ */
+function isCursorOverDesktop(nativeHandle, screenPoint) {
   if (!bind()) return false;
   try {
-    // The high bit means "currently down"; the low bit is "pressed since last
-    // asked", which would fire on presses that happened in another app.
-    return (user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000) !== 0;
+    const at = user32.WindowFromPoint({ x: screenPoint.x, y: screenPoint.y });
+    if (!at) return false;
+    if (DESKTOP_CLASSES.has(classNameOf(at))) return true;
+
+    if (nativeHandle && nativeHandle.length) {
+      const ours = user32.koffi.address(handleOf(nativeHandle));
+      let walk = at;
+      for (let depth = 0; walk && depth < 8; depth += 1) {
+        if (user32.koffi.address(walk) === ours) return true;
+        walk = user32.GetParent(walk);
+      }
+    }
+    return false;
   } catch {
+    /* Unable to tell. Inert is the safe answer: reporting "yes" would fire
+       clicks meant for other applications. */
     return false;
   }
 }
 
 module.exports = {
-  attach, detach, isAvailable, unavailableReason, pickWorkerW, isMouseDown,
+  attach, detach, isAvailable, unavailableReason, pickWorkerW,
+  mouseState, isCursorOverDesktop,
   WM_SPAWN_WORKER, VK_LBUTTON,
 };

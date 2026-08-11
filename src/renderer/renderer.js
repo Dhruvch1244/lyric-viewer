@@ -4736,8 +4736,24 @@ if (window.player.onWallpaperPointer) {
   });
 }
 
-window.player.onDisplayMode(({ mode }) => {
+window.player.onDisplayMode(({ mode, insets }) => {
   displayMode = mode || 'full';
+
+  /*
+    In wallpaper mode the window fills the whole display so the visuals run edge
+    to edge — which put the HUD, which lives along the bottom, underneath the
+    taskbar. Invisible, and unclickable too: a cursor over the taskbar is not
+    over the desktop, so forwarded input correctly refuses to fire there.
+
+    The window keeps its full-bleed bounds and the CONTROLS move instead.
+  */
+  const inset = (insets && displayMode === 'wallpaper') ? insets : { top: 0, right: 0, bottom: 0, left: 0 };
+  const root = document.documentElement.style;
+  root.setProperty('--shell-bottom', `${inset.bottom || 0}px`);
+  root.setProperty('--shell-top', `${inset.top || 0}px`);
+  root.setProperty('--shell-left', `${inset.left || 0}px`);
+  root.setProperty('--shell-right', `${inset.right || 0}px`);
+
   if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
   document.body.classList.toggle('mode-bar', displayMode === 'bar');
   document.body.classList.toggle('mode-strip', displayMode === 'strip');

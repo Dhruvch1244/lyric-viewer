@@ -705,6 +705,46 @@ body.lang-devanagari .word--active {
   .nudge { animation: none; }
 }
 
+/* ---- Wallpaper mode: keep the controls out from under the shell ---- */
+/*
+  The window fills the whole display in wallpaper mode so the visuals run edge
+  to edge behind an opaque taskbar. That is right for the visuals and wrong for
+  everything you click: the HUD sits along the bottom and ended up UNDERNEATH
+  the taskbar — invisible, and unclickable too, because a cursor over the
+  taskbar is not over the desktop and forwarded input correctly refuses to fire
+  there.
+
+  So the window keeps its bounds and the controls move. The insets are measured
+  from the display's work area in main (`shellInsets`), not assumed, because the
+  taskbar can be any height and can sit on any edge.
+
+  The measured inset is not enough on its own. An AUTO-HIDE taskbar reports no
+  inset at all — measured here: workArea is identical to bounds — and yet the
+  bottom edge is still its reveal zone, so moving the cursor down to a chip pops
+  the taskbar up and it swallows the click. `max()` keeps a floor under that:
+  the controls clear a docked taskbar by its real height, and clear a hidden
+  one's reveal strip by 3.5rem.
+*/
+body.mode-wallpaper .hud {
+  bottom: max(var(--shell-bottom, 0px), 3.5rem);
+  left: var(--shell-left, 0px);
+  right: var(--shell-right, 0px);
+}
+
+body.mode-wallpaper .transport,
+body.mode-wallpaper .nudge,
+body.mode-wallpaper .update-pill {
+  margin-bottom: max(var(--shell-bottom, 0px), 3.5rem);
+}
+
+/* Panels are centred vertically, so only the shell's top edge can clip them. */
+body.mode-wallpaper .mdp,
+body.mode-wallpaper .library,
+body.mode-wallpaper .poster {
+  margin-top: var(--shell-top, 0px);
+  margin-bottom: var(--shell-bottom, 0px);
+}
+
 /* ---- Update surfaces ---- */
 /*
   The card reuses `.nudge` wholesale — same weight, same placement language,
