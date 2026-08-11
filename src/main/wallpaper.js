@@ -41,11 +41,12 @@ const SMTO_NORMAL = 0x0000;
 /*
   Window style bits.
 
-  SetParent alone is not enough, which the first attempt proved on screen: the
-  reparent reported success and the overlay still covered the desktop icons AND
-  the taskbar, because an Electron window is WS_POPUP and a popup is not clipped
-  to its parent — it merely acquires an owner. The window has to actually become
-  a child for Windows to draw it inside the desktop surface.
+  SetParent alone is genuinely not enough, and this one was measured rather than
+  assumed: with SetParent only, `GetParent` returns null while `GetAncestor`
+  returns the WorkerW — the window is OWNED by the desktop surface, not a child
+  of it, so it is not clipped into it. After switching WS_POPUP for WS_CHILD,
+  `GetParent` returns the WorkerW and the taskbar composites above us, which is
+  the whole behaviour.
 */
 const GWL_STYLE = -16;
 const WS_CHILD = 0x40000000;
@@ -179,6 +180,26 @@ function pickWorkerW(found) {
   return plausible.length === 1 ? plausible[0].handle : null;
 }
 
+/**
+ * Read the HWND out of Electron's native handle buffer.
+ *
+ * THIS IS THE WHOLE FEATURE. `koffi.as(buffer, 'void*')` passes the address OF
+ * the buffer; the HWND is the value INSIDE it. Every call made with the former
+ * failed with ERROR_INVALID_WINDOW_HANDLE — silently, because SetParent reports
+ * failure by returning null and null is also the legitimate previous parent of
+ * a top-level window.
+ *
+ * Three z-order theories were built and photographed on top of that, all of
+ * them aimed at a reparent that had never happened. The measurement that ended
+ * it was one line: ask GetParent what the parent is, instead of believing the
+ * return value.
+ *
+ * @param {Buffer} nativeHandle from BrowserWindow.getNativeWindowHandle()
+ */
+function handleOf(nativeHandle) {
+  return user32.koffi.decode(nativeHandle, 'void*');
+}
+
 /** @param {unknown} handle @returns {{width: number, height: number}} */
 function sizeOf(handle) {
   const r = {};
@@ -266,24 +287,21 @@ function attach(nativeHandle) {
   }
 
   try {
-    const hwnd = user32.koffi.as(nativeHandle, 'void*');
+    const hwnd = handleOf(nativeHandle);
 
     /* Popup to child, BEFORE the reparent. A WS_POPUP window that is merely
-       given a parent is owned by it, not clipped into it — measured: the
-       overlay reparented "successfully" and still covered the icons and the
-       taskbar. Only WS_CHILD makes Windows draw it inside the desktop surface. */
+       given a parent is owned by it, not clipped into it: measured, SetParent
+       alone leaves GetParent returning null while GetAncestor returns the
+       WorkerW. Only WS_CHILD makes Windows draw it inside the desktop. */
     const style = Number(user32.GetWindowLongPtrW(hwnd, GWL_STYLE));
     const asChild = (style & ~WS_POPUP) | WS_CHILD;
     user32.SetWindowLongPtrW(hwnd, GWL_STYLE, asChild);
 
     const previous = user32.SetParent(hwnd, target);
 
-    /* The style change only takes effect once the frame is recalculated, and
-       the same call sinks the window to the bottom of its new parent's
-       Z-order — being a child of the desktop surface is not enough on its own
-       if it sits above the icon view inside it. */
-    user32.SetWindowPos(hwnd, user32.koffi.as(HWND_BOTTOM, 'void*'), 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+    // The style change only takes effect once the frame is recalculated.
+    user32.SetWindowPos(hwnd, HWND_NULL, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
     /* SetParent returns the OLD parent, and null means it failed — but null is
        also a legitimate old parent for a top-level window, so it cannot be used
@@ -308,7 +326,7 @@ function detach(nativeHandle) {
     return { ok: false, reason: 'no native window handle' };
   }
   try {
-    const hwnd = user32.koffi.as(nativeHandle, 'void*');
+    const hwnd = handleOf(nativeHandle);
     user32.SetParent(hwnd, HWND_NULL);
     // Back to a popup, or the orphaned child never draws again.
     const style = Number(user32.GetWindowLongPtrW(hwnd, GWL_STYLE));

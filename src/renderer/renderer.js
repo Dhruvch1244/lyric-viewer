@@ -4669,12 +4669,7 @@ const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Stri
 
 if (els.modeBtn) {
   els.modeBtn.addEventListener('click', () => {
-    /* Wallpaper is deliberately NOT in the cycle. It reparents and renders, but
-       on the Windows 11 desktop this was measured against it still draws OVER
-       the icons and the taskbar rather than behind them — and a mode you can
-       reach by clicking the size chip one time too many, which then hides your
-       taskbar, is worse than a mode that is not offered. See NEXT_STEPS.md. */
-    const order = ['full', 'bar', 'strip'];
+    const order = ['full', 'bar', 'strip', 'wallpaper'];
     const next = order[(order.indexOf(displayMode) + 1) % order.length];
     window.player.setDisplayMode(next);
   });
