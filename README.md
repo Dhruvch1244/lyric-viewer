@@ -3,13 +3,39 @@
 A fullscreen synced lyric player for Windows. Detects whatever is playing —
 Spotify desktop, YouTube Music in a browser, anything that registers with
 Windows — and shows beat-aware lyrics fullscreen, so you never look at the
-music video or the Spotify UI.
+music video or the Spotify UI. Or open your own files and let it play them.
+
+![Synced lyrics over the live GPU field, with per-word emphasis](docs/img/01-liquid.jpg)
+
+## Looks
+
+Each song picks its own look, and you can pin one to a track. Nine presets; a
+few of them:
+
+| | |
+| --- | --- |
+| ![Heatmap](docs/img/02-heatmap.jpg) | **Heatmap** — the shape of the song along the bottom edge, learned by listening and remembered. On a replay the drop is on screen while the build-up is still playing. |
+| ![Vinyl](docs/img/03-vinyl.jpg) | **Vinyl** — the cover art as a record on a deck, turning one revolution every four beats once the tempo locks. The tonearm creeps inward as the song plays. |
+| ![Wormhole](docs/img/04-wormhole.jpg) | **Wormhole** — a twisting tunnel flying toward you. It constricts and winds up in the seconds *before* a drop it already knows is coming. |
+| ![Stage](docs/img/05-stage.jpg) | **Stage** — the artist dancers as the subject: a lit floor, spotlights that punch on the kick, the troupe pushed forward. |
+| ![Ghost](docs/img/07-ghost.jpg) | **Ghost** — lyrics and the cloud, nothing else. The 2D canvas leaves the page entirely, cutting CPU rendering by ~95%. For reading the words, or running over a game. |
+
+## Your songs
+
+![The library](docs/img/06-library.jpg)
+
+Every song the app has seen, with what it knows about each: lyrics cached, beat
+map learned, energy arc learned. Add files or a folder from disk and it plays
+them itself — which is also when the app is at its best, because it can measure
+a whole track before the first chorus.
 
 ## Status
 
-The core spine works: detection → lyric lookup → synced fullscreen player, with a
-Latin/Devanagari script toggle for Hindi tracks. The audio-reactive visual system
-(drop detection, dancing characters, genre themes) is not built yet.
+The full spine works: detection → lyric lookup → synced fullscreen player, with
+a Latin/Devanagari script toggle and English translation for Hindi tracks. The
+audio-reactive system is built — measured tempo, kick and drop detection,
+learned per-song energy maps, word-level sync, and dancing artist sprites. Local
+file playback landed in 0.18.0.
 
 ## How it works
 
@@ -17,12 +43,20 @@ Latin/Devanagari script toggle for Hindi tracks. The audio-reactive visual syste
 SMTC (Windows)  ──►  smtc-poll.ps1  ──►  smtc.js  ──►  main.js  ──►  renderer
  any media app        JSON stream        staleness-     lyric        fullscreen
                                          corrected pos   matching     word emphasis
+
+local file      ──►  read + ID3    ──►  main.js  ──►  renderer ──► analyze.js
+ your library                           same pipeline   plays it    whole song
+                                                                    measured up front
 ```
 
 - **Detection** uses the Windows System Media Transport Controls (SMTC). One API
   covers every media app and gives title, artist, playback status, and position.
 - **Lyrics** come from [LRCLIB](https://lrclib.net) — free, open, no API key.
-- **Sync** interpolates locally between SMTC samples, so word emphasis stays fluid.
+- **Sync** interpolates locally between SMTC samples, so word emphasis stays
+  fluid. A local file skips that entirely — position comes from the audio
+  element, which is exact.
+- **Local files** go through the same lyric/artwork/cache pipeline, so nothing
+  downstream needs to know where a song came from.
 
 ## Requirements
 
@@ -62,11 +96,21 @@ Produces `dist/LyricPlayer-win32-x64/LyricPlayer.exe`.
 ## Performance
 
 The backdrop is the main cost, so it's tuned to stay smooth:
-- Canvas DPR is capped at 1.25 (a 1:1 canvas on 4K is the biggest lag source).
-- Colour glows are **pre-rendered sprites** drawn with `drawImage`, not gradients
-  rebuilt every frame.
-- The vignette gradient is cached and rebuilt only on resize.
+- Canvas DPR is capped at 1.0 (a 1:1 canvas on 4K is the biggest lag source),
+  and both canvases have a **resolution ladder** that sheds pixels when frames
+  run long and earns them back when there is headroom.
+- Colour glows, the vinyl platter, the song timeline and the dancers' name
+  plates and shadows are all **pre-rendered sprites** drawn with `drawImage`,
+  not rebuilt every frame.
+- Gradients are cached and rebuilt only on resize or a colour change — and keyed
+  on a *snapped* hue, because the live accent drifts every frame and would
+  otherwise invalidate the cache constantly.
 - Star count is bounded; lyric lines don't use `will-change` (fewer GPU layers).
+
+Optimise against **CPU cost measured with a profiler**, never against observed
+frame rate: repeated identical runs vary 3–4× in fps on this hardware, and a
+draw-call count once ranked the wrong thing entirely (the galaxy's real expense
+was a colour conversion per particle, not a canvas call).
 
 ## Controls
 
@@ -82,6 +126,7 @@ The backdrop is the main cost, so it's tuned to stay smooth:
 | `◐` chip | Cycle backdrop opacity: faint → tinted → vivid → solid (persisted) |
 | `🅰` chip | Show / hide the lyric text — the backdrop keeps running as a pure visualiser |
 | `☻` chip | Toggle the pixel-art artist dancers (persisted) |
+| `♪ Library` chip | Your songs — search, see what is known about each, add files from disk, click to play |
 | `♫` chip | Audio-reactive mode (captures system sound) — also what lets the app *learn* a song |
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
 
@@ -105,15 +150,28 @@ Each song remembers its own look. Ghost and Minimal are never assigned at
 random — they are modes you choose.
 
 Heatmap, Vinyl and Stage are ordinary layer combinations, so the pieces compose:
-the timeline is on in Vinyl too, and the dancers appear in every look except
-Ghost. Only Ghost is structurally different, because taking the canvas out of
-the page is the entire point of it.
+the timeline is on in Vinyl too, and the dancers appear in every look except the
+two stripped-back ones.
+
+Those two are the exceptions, and they differ from each other. **Ghost** removes
+the 2D canvas from the page entirely — that is the whole point of it, and it is
+why nothing can be drawn in Ghost. **Wormhole** keeps the canvas, because it has
+a picture, but suppresses every always-on extra so only the tunnel and the words
+remain.
 
 Most of what the app *learns* — the energy arc behind the timelines, the
 measured tempo the platter and the dancers run on, and anticipation — needs the
 `♫` chip. The app asks about this once, twenty seconds into a song, and never
 raises it again either way. It is not enabled by default on purpose: recording
 system audio without being asked is not the app's call.
+
+**...unless you play the song here.** Open files or a folder from the Library and
+the app plays them itself, which changes everything about the above: the decoded
+audio is already in hand, so the whole track is measured before the first
+chorus. The timeline is full, the tempo is locked and a drop can be anticipated
+**on the first play**, with no capture and no permission prompt. Position also
+comes from the audio element rather than a 250ms poll, so the lyric clock is
+exact.
 
 **Anticipation.** Once a song's heat map is on disk, the app can read it
 *forwards* — the only thing here that knows what has not happened yet. A few

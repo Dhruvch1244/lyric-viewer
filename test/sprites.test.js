@@ -95,13 +95,18 @@ test('an unlocked dancer falls back to its own free-running tempo', () => {
   assert.ok(actor.beats < 2, `~1 cycle/sec, got ${actor.beats}`);
 });
 
+/* pose() fills and returns a REUSED object — it runs once per dancer per frame
+   and allocating there was measurable GC pressure. Callers must consume it
+   within the frame; these tests snapshot because they compare across calls. */
+const snapshot = (p) => ({ ...p });
+
 test('the pose repeats exactly once per beat when locked', () => {
   const [actor] = ArtistSprites.actorsFor('Nobody Special').actors;
   actor.move = 'bob';
   actor.beats = 4;
-  const onBeat = actor.pose(0, beatEnv(0));
+  const onBeat = snapshot(actor.pose(0, beatEnv(0)));
   actor.beats = 5;               // exactly one beat later
-  const nextBeat = actor.pose(0, beatEnv(0));
+  const nextBeat = snapshot(actor.pose(0, beatEnv(0)));
   assert.ok(Math.abs(onBeat.dy - nextBeat.dy) < 1e-9, 'same point in the cycle');
 
   // A quarter beat later, not a half: the bob is a sine, so it passes through
@@ -114,8 +119,8 @@ test('anticipation coils the dancer down and drops its arms', () => {
   const [actor] = ArtistSprites.actorsFor('Nobody Special').actors;
   actor.move = 'pump';           // a move that raises an arm
   actor.beats = 0.25;            // away from zero so the base pose is non-trivial
-  const calm = actor.pose(0, beatEnv(0.25));
-  const coiled = actor.pose(0, beatEnv(0.25, { anticipation: 0.9 }));
+  const calm = snapshot(actor.pose(0, beatEnv(0.25)));
+  const coiled = snapshot(actor.pose(0, beatEnv(0.25, { anticipation: 0.9 })));
   assert.ok(coiled.dy > calm.dy, 'sinks toward the floor');
   assert.ok(coiled.sq < calm.sq, 'and compresses');
   assert.ok(coiled.armR < calm.armR, 'arms come down as the body gathers');

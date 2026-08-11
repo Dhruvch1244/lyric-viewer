@@ -30,6 +30,18 @@ contextBridge.exposeInMainWorld('player', {
   setApiKey: (name, value) => ipcRenderer.invoke('set-api-key', name, value),
   saveBeatmap: (payload) => ipcRenderer.invoke('save-beatmap', payload),
   saveHeatmap: (payload) => ipcRenderer.invoke('save-heatmap', payload),
+
+  /* Local playback. `readLocalFile` returns the raw bytes so the renderer can
+     both play them and decode them for offline analysis from one read. */
+  openLocalFiles: () => ipcRenderer.invoke('open-local-files'),
+  openLocalFolder: () => ipcRenderer.invoke('open-local-folder'),
+  readLocalFile: (filePath) => ipcRenderer.invoke('read-local-file', filePath),
+  setLocalTrack: (track) => ipcRenderer.invoke('set-local-track', track),
+  endLocalPlayback: () => ipcRenderer.invoke('end-local-playback'),
+
+  /* Background work, mirrored to the tray tooltip and (for the few worth
+     interrupting for) to an OS notification. */
+  reportJobs: (payload) => ipcRenderer.invoke('report-jobs', payload),
   presyncList: (text) => ipcRenderer.invoke('presync-list', text),
   listSynced: () => ipcRenderer.invoke('list-synced'),
 

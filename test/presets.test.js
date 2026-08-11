@@ -49,6 +49,26 @@ test('the wormhole layer belongs to the wormhole preset and nothing else', () =>
   assert.deepEqual(withIt, ['wormhole']);
 });
 
+test('soloLayer is a weaker relative of bare, and never the same preset', () => {
+  // `bare` removes the 2D canvas from the page, so a preset that must DRAW
+  // something cannot use it. Solo keeps the canvas and suppresses the extras.
+  // A preset claiming both would be incoherent.
+  for (const preset of VisualPresets.all) {
+    assert.ok(!(preset.bare && preset.soloLayer),
+      `${preset.id} claims both bare and soloLayer`);
+    assert.equal(typeof preset.soloLayer, 'boolean', `${preset.id} lacks soloLayer`);
+  }
+});
+
+test('a solo preset names exactly the layer it draws', () => {
+  const solo = VisualPresets.all.filter((p) => p.soloLayer);
+  assert.deepEqual(solo.map((p) => p.id), ['wormhole']);
+  for (const preset of solo) {
+    const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
+    assert.equal(on.length, 1, `${preset.id} is solo but draws ${on.join(',')}`);
+  }
+});
+
 test('the learned-song layers reach the presets that need them', () => {
   // Vinyl shows the record; the timeline underneath says where in the song it
   // sits, so Vinyl carries the heatmap layer too.

@@ -153,6 +153,99 @@
     return cv;
   }
 
+  /* ------------------------------------------------- pre-rendered furniture
+
+     Everything below exists because `SpriteActor.draw` was measured as the
+     single largest JavaScript cost in the app — ~49ms of CPU per second, more
+     than every backdrop layer put together. Profiling Ghost confirmed it: with
+     the dancers gone the cost vanishes and idle time rises by 60ms/s.
+
+     Three things in that function were doing per-dancer, per-frame work to
+     produce a picture that barely changes: the name plate (a font assignment, a
+     `measureText` text-shaping pass, then a rect and a fill), the ground shadow
+     (a path build and fill), and the drop glow (`shadowBlur`, which is the most
+     expensive operation the 2D context has). All three are now bitmaps. */
+
+  /** Soft round shadow, drawn once and scaled per dancer. */
+  let shadowSprite = null;
+
+  function groundShadow() {
+    if (shadowSprite) return shadowSprite;
+    const size = 64;
+    const cv = document.createElement('canvas');
+    cv.width = size;
+    cv.height = size;
+    const g = cv.getContext('2d');
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, 'rgba(0,0,0,0.85)');
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.35)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    shadowSprite = cv;
+    return cv;
+  }
+
+  /** Accent glow behind the body on drops — replaces ctx.shadowBlur. */
+  const glowCache = new Map();
+
+  function glowSprite(colour) {
+    const hit = glowCache.get(colour);
+    if (hit) return hit;
+    const size = 96;
+    const cv = document.createElement('canvas');
+    cv.width = size;
+    cv.height = size;
+    const g = cv.getContext('2d');
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, hexAlpha(colour, 0.75));
+    grad.addColorStop(0.45, hexAlpha(colour, 0.28));
+    grad.addColorStop(1, hexAlpha(colour, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    if (glowCache.size >= 24) glowCache.delete(glowCache.keys().next().value);
+    glowCache.set(colour, cv);
+    return cv;
+  }
+
+  /*
+     Name plates.
+
+     The font size follows the dancer's depth, but it is rounded to whole pixels
+     and the band is narrow, so in practice a troupe uses two or three distinct
+     sizes all session — the cache hits essentially always. Geometry is derived
+     from the font size rather than the live sprite unit so the bitmap is
+     self-consistent and can be blitted at its natural size. */
+  const plateCache = new Map();
+
+  function namePlate(label, fontPx, colour) {
+    const key = `${label}|${fontPx}|${colour}`;
+    const hit = plateCache.get(key);
+    if (hit) return hit;
+
+    const measure = document.createElement('canvas').getContext('2d');
+    const font = `700 ${fontPx}px "Segoe UI", system-ui, sans-serif`;
+    measure.font = font;
+    const textW = Math.ceil(measure.measureText(label).width);
+    const padX = Math.round(fontPx * 0.45);
+    const padY = Math.round(fontPx * 0.3);
+    const cv = document.createElement('canvas');
+    cv.width = textW + padX * 2;
+    cv.height = fontPx + padY * 2;
+    const g = cv.getContext('2d');
+    g.fillStyle = 'rgba(0,0,0,0.42)';
+    g.fillRect(0, 0, cv.width, cv.height);
+    g.font = font;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = colour;
+    g.fillText(label, cv.width / 2, cv.height / 2);
+
+    if (plateCache.size >= 64) plateCache.delete(plateCache.keys().next().value);
+    plateCache.set(key, cv);
+    return cv;
+  }
+
   const SKINS = ['#c9895e', '#a56a42', '#e0aa7a', '#8a5a38', '#d79b6b'];
 
   /** Deterministic distinct look from a name hash. */
@@ -345,6 +438,13 @@
       this.spawnDelay = index * 130;                // stagger so a troupe pops in one-by-one
       this.sox = 0;                                 // spawn origin offset (normalised viewport)
       this.soy = 0;
+
+      /* Scratch objects reused by pose() and spawnMod(). Both are called once
+         per dancer per frame and their results are dead by the end of draw(),
+         so allocating them was pure GC pressure — measured at ~2ms/s across the
+         app. Never hold a reference to either past a frame. */
+      this._pose = { dx: 0, dy: 0, rot: 0, sq: 1, armL: 0, armR: 0 };
+      this._sm = { ox: 0, oy: 0, scale: 1, alpha: 1, reveal: 1, flash: 0 };
     }
 
     /**
@@ -376,35 +476,49 @@
       const t = p;
       const eo = 1 - Math.pow(1 - t, 3);            // ease-out cubic
       const alpha = Math.min(1, t * 1.6);
+      // Filled in place; see the note on `_sm` in the constructor. The two
+      // shared constants above are returned directly and allocate nothing.
+      const m = this._sm;
+      m.ox = 0; m.oy = 0; m.scale = 1; m.alpha = alpha; m.reveal = 1; m.flash = 0;
       switch (this.spawnType) {
         case 'corners':
-          return { ox: this.sox * (1 - eo), oy: this.soy * (1 - eo), scale: 0.7 + 0.3 * eo, alpha, reveal: 1, flash: 0 };
+          m.ox = this.sox * (1 - eo); m.oy = this.soy * (1 - eo); m.scale = 0.7 + 0.3 * eo;
+          break;
         case 'dropin': {
           const bounce = eo - Math.sin(t * Math.PI) * 0.06 * (1 - t);
-          return { ox: 0, oy: this.soy * (1 - bounce), scale: 1, alpha, reveal: 1, flash: 0 };
+          m.oy = this.soy * (1 - bounce);
+          break;
         }
         case 'warpslide':
-          return { ox: this.sox * (1 - eo), oy: 0, scale: 1, alpha, reveal: 1, flash: 0 };
+          m.ox = this.sox * (1 - eo);
+          break;
         case 'materialize':
-          return { ox: 0, oy: 0, scale: 1, alpha: 1, reveal: t, flash: 0 };
+          m.alpha = 1; m.reveal = t;
+          break;
         case 'spiral': {
           const rad = (1 - eo) * 0.45;
           const ang = t * Math.PI * 4;
-          return { ox: Math.cos(ang) * rad, oy: Math.sin(ang) * rad * 0.5, scale: 0.5 + 0.5 * eo, alpha, reveal: 1, flash: 0 };
+          m.ox = Math.cos(ang) * rad; m.oy = Math.sin(ang) * rad * 0.5; m.scale = 0.5 + 0.5 * eo;
+          break;
         }
         case 'popscale': {
           // Elastic overshoot: scales past 1 then settles.
           const s = 1 - Math.pow(2, -10 * t) * Math.cos((t * 10 - 0.75) * ((2 * Math.PI) / 3));
-          return { ox: 0, oy: 0, scale: Math.max(0.02, s), alpha, reveal: 1, flash: 0 };
+          m.scale = Math.max(0.02, s);
+          break;
         }
         case 'teleport':
         default: {
           // Rematerialize on the spot: over-scale collapses to 1 while a strobe
           // flicker fades the body in and a flash ring pings (drawn in draw()).
           const flick = 0.5 + 0.5 * Math.sin(t * 40);
-          return { ox: 0, oy: 0, scale: 1 + (1 - eo) * 0.5, alpha: alpha * (0.4 + 0.6 * flick), reveal: 1, flash: 1 - t };
+          m.scale = 1 + (1 - eo) * 0.5;
+          m.alpha = alpha * (0.4 + 0.6 * flick);
+          m.flash = 1 - t;
+          break;
         }
       }
+      return m;
     }
 
     /**
@@ -554,7 +668,16 @@
       const b = osc(1);
       const b2 = osc(2);
       const e = 0.6 + env.intensity * 1.1 + env.pulse * 0.6;
-      const p = { dx: 0, dy: b * 0.35 * e, rot: 0, sq: 1 + b2 * 0.05 * e, armL: 0, armR: 0 };
+      // Filled in place rather than allocated: this runs once per dancer per
+      // frame and the object is dead by the end of draw(), which is pure GC
+      // pressure for no benefit.
+      const p = this._pose;
+      p.dx = 0;
+      p.dy = b * 0.35 * e;
+      p.rot = 0;
+      p.sq = 1 + b2 * 0.05 * e;
+      p.armL = 0;
+      p.armR = 0;
       switch (this.move) {
         case 'sway': p.dx = osc(0.5) * 1.4; p.rot = osc(0.5) * 0.08; break;
         case 'pump': p.armR = 0.5 + 0.5 * Math.abs(b); p.armL = 0.3 * Math.abs(b2); p.dy = Math.abs(b) * 0.6 * e; break;
@@ -650,12 +773,13 @@
 
       ctx.save();
 
-      // Ground shadow, tightening on jumps; fades in with the entrance.
+      // Ground shadow, tightening on jumps; fades in with the entrance. One
+      // blit of a cached radial sprite, which is both cheaper than building and
+      // filling a path every frame and softer than the hard ellipse it replaces.
       ctx.globalAlpha = 0.26 * (1 - this.jump * 0.5) * depth * sm.alpha * fade;
-      ctx.fillStyle = '#000';
-      ctx.beginPath();
-      ctx.ellipse(x, feetY, spriteW * 0.45 * (1 - this.jump * 0.4), su * 1.1, 0, 0, Math.PI * 2);
-      ctx.fill();
+      const shW = spriteW * 1.10 * (1 - this.jump * 0.4);
+      const shH = su * 3.2;
+      ctx.drawImage(groundShadow(), x - shW / 2, feetY - shH / 2, shW, shH);
 
       // Move to feet, apply pose; body + arms inherit the entrance alpha.
       ctx.globalAlpha = sm.alpha * fade;
@@ -666,7 +790,26 @@
       const left = -spriteW / 2;
       const top = -spriteH;
 
-      if (env.drop > 0.05) { ctx.shadowColor = this.look.accent; ctx.shadowBlur = 18 * env.drop; }
+      /*
+        Drop glow. This was `ctx.shadowBlur = 18 * env.drop` on the body blit —
+        a real-time Gaussian blur, the most expensive operation the 2D context
+        offers, applied to every dancer on every drop. That is precisely the
+        frame that is already doing the most work: confetti, ripples, clones and
+        a hue jump all land together.
+
+        A cached radial sprite behind the body reads the same at these sizes and
+        costs one blit.
+      */
+      if (env.drop > 0.05) {
+        const gr = spriteW * (1.5 + env.drop * 0.7);
+        const prevAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = prevAlpha * Math.min(1, env.drop);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.drawImage(glowSprite(this.look.accent),
+          -gr / 2, top + spriteH / 2 - gr / 2, gr, gr);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = prevAlpha;
+      }
       const reveal = sm.reveal;                   // < 1 during a pixel-materialize
       if (reveal < 1) {
         // Transient spawn reveal: per-cell materialize (slow path, spawn only).
@@ -685,7 +828,6 @@
         ctx.imageSmoothingEnabled = false;        // keep the pixels crisp when scaled
         ctx.drawImage(bodyCanvas(this.look), left, top, spriteW, spriteH);
       }
-      ctx.shadowBlur = 0;
 
       // Animated arms (drawn over the body; flip with facing automatically).
       this.drawArm(ctx, left + spriteW * 0.80, top + spriteH * 0.52, pose.armR, su);
@@ -693,19 +835,21 @@
 
       ctx.restore();
 
-      // Name plate above the head (drawn unscaled so text stays upright/legible).
+      /*
+        Name plate above the head, blitted from a cached bitmap.
+
+        It used to assign a font, run `measureText` — which forces a text-shaping
+        pass — and then fill a rect and the text, once per dancer per frame, for
+        a label that never changes. The font size is rounded to whole pixels and
+        the roaming band is narrow, so a troupe uses two or three distinct plate
+        sizes for a whole session.
+      */
       if (this.name) {
-        const label = this.name;
+        const fontPx = Math.max(9, Math.round(su * 1.5));
+        const plate = namePlate(this.name, fontPx, this.look.accent);
         const ny = feetY + pose.dy * su + jumpY - spriteH - su * 1.6;
-        ctx.font = `700 ${Math.max(9, Math.round(su * 1.5))}px "Segoe UI", system-ui, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const tw = ctx.measureText(label).width;
         ctx.globalAlpha = 0.9 * sm.alpha;
-        ctx.fillStyle = 'rgba(0,0,0,0.42)';
-        ctx.fillRect(x - tw / 2 - su * 0.6, ny - su, tw + su * 1.2, su * 2);
-        ctx.fillStyle = this.look.accent;
-        ctx.fillText(label, x, ny);
+        ctx.drawImage(plate, Math.round(x - plate.width / 2), Math.round(ny - plate.height / 2));
         ctx.globalAlpha = 1;
       }
     }

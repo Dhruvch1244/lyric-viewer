@@ -39,8 +39,21 @@ const els = {
   presyncInput: document.getElementById('presync-input'),
   presyncRun: document.getElementById('presync-run'),
   presyncStatus: document.getElementById('presync-status'),
-  syncedList: document.getElementById('synced-list'),
-  syncedCount: document.getElementById('synced-count'),
+  libraryBtn: document.getElementById('btn-library'),
+  library: document.getElementById('library'),
+  libraryGrid: document.getElementById('library-grid'),
+  librarySearch: document.getElementById('library-search'),
+  libraryAdd: document.getElementById('library-add'),
+  libraryAddFolder: document.getElementById('library-add-folder'),
+  libraryCount: document.getElementById('library-count'),
+  libraryClose: document.getElementById('library-close'),
+  libraryEmpty: document.getElementById('library-empty'),
+  transport: document.getElementById('transport'),
+  trPrev: document.getElementById('tr-prev'),
+  trPlay: document.getElementById('tr-play'),
+  trNext: document.getElementById('tr-next'),
+  trStop: document.getElementById('tr-stop'),
+  trNow: document.getElementById('tr-now'),
   source: document.getElementById('hud-source'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
@@ -757,6 +770,25 @@ function paintWords(positionMs) {
   }
 }
 
+/**
+ * Why the translation line is not showing, or '' when it is fine.
+ *
+ * Translations are looked up BY INDEX, so a list of a different length is
+ * unusable and gets hidden — correct, but until now completely silent, which
+ * left "does translation work with sync?" unanswerable from the UI. The honest
+ * answer is that they work together until the line counts disagree, and that
+ * now says so.
+ *
+ * @returns {string}
+ */
+function translationBlockedReason() {
+  if (!cuesEnglish) return '';
+  if (cuesEnglish.length !== cues.length) {
+    return `${cues.length} lyric lines, ${cuesEnglish.length} translated — can't line them up`;
+  }
+  return '';
+}
+
 function updateTranslation(index) {
   // The translation is looked up BY INDEX, so it is only meaningful against the
   // exact list it was produced from. A Devanagari track fetched as its own
@@ -997,15 +1029,75 @@ let lastSwirlScaleAt = 0;
 /** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
 let canvasHidden = false;
 
+/*
+  Resolution ladder for the 2D backdrop, mirroring the swirl's.
+
+  The swirl could already shed pixels under load; the 2D canvas could not, so
+  when the machine struggled only half the fill cost was adjustable. Compositing
+  these two full-screen layers is by far the largest single cost in any profile
+  (`(program)` sits near 850ms/s against ~50ms/s for all app JavaScript), and
+  backing-store size is the only lever we have on it.
+
+  Deliberately shallower than the swirl's ladder and it only engages under real
+  pressure. The swirl is soft and upscales invisibly; this canvas carries the
+  pixel-art dancers and the timeline, which soften visibly when downscaled. A
+  slightly soft dancer beats a dropped frame, but only when frames are actually
+  being dropped.
+*/
+const CANVAS_SCALES = [0.70, 0.85, 1.0];
+let canvasScale = 1.0;
+let lastCanvasScaleAt = 0;
+
+/**
+ * Move the 2D canvas up or down a rung based on presented frame cadence.
+ * Uses the same signal and hysteresis as applySwirlScale — resolution is a GPU
+ * lever and needs a GPU signal, not our JavaScript cost.
+ * @param {number} now
+ */
+function applyCanvasScale(now) {
+  let rung = CANVAS_SCALES.indexOf(canvasScale);
+  if (rung < 0) rung = CANVAS_SCALES.length - 1;
+
+  if (frameIntervalMs > 24 && rung > 0) {
+    rung -= 1;
+    lastCanvasScaleAt = now;
+  } else if (frameIntervalMs < 13 && rung < CANVAS_SCALES.length - 1
+    && now - lastCanvasScaleAt > 1500) {
+    rung += 1;
+    lastCanvasScaleAt = now;
+  }
+
+  const next = CANVAS_SCALES[rung];
+  if (next === canvasScale) return;
+  canvasScale = next;
+  /*
+    Only the backing store — NOT the full resizeCanvas, which also reseeds the
+    stars, bokeh, web, galaxy and wormhole. Reseeding on a rung change would
+    visibly reshuffle every particle layer, so a frame-rate dip would announce
+    itself as the starfield jumping. Everything cached by CSS-pixel dimensions
+    (the timeline bitmap, the vinyl platter, the stage gradients) stays valid,
+    because setTransform keeps drawing in CSS pixels either way.
+  */
+  sizeBackdropCanvas();
+}
+
+/** Size the 2D backing store for the current DPR cap and governor rung. */
+function sizeBackdropCanvas() {
+  // Cap DPR at 1.0: the backdrop is soft glows, gradients and blur, so native
+  // hi-DPI is pure wasted fill-rate (the single biggest cause of lag on 4K).
+  // Lyrics stay crisp regardless — they are DOM, not canvas.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.0) * canvasScale;
+  els.canvas.width = Math.floor(window.innerWidth * dpr);
+  els.canvas.height = Math.floor(window.innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
 function resizeCanvas() {
   // Cap DPR at 1.0 for the backdrop canvas: it is all soft glows, gradients and
   // blur, so rendering at native hi-DPI resolution is pure wasted fill-rate (the
   // single biggest cause of lag on 4K screens). Lyrics stay crisp — they're DOM,
   // unaffected by the canvas backing-store resolution.
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
-  els.canvas.width = Math.floor(window.innerWidth * dpr);
-  els.canvas.height = Math.floor(window.innerHeight * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sizeBackdropCanvas();
 
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -1602,12 +1694,18 @@ function drawWormhole(w, h, dt, life) {
       removes the recycle pop without ever dimming a ring you can still see.
     */
     const fade = Math.min(1, z * 6) * Math.min(1, (1 - z) * 10);
-    const alpha = (0.10 + z * 0.78) * fade * (0.55 + life * 0.6);
+    /*
+      Softer than a neon tunnel: lower opacity and wider, lighter strokes so the
+      rings read as vapour lit from within rather than as drawn lines. Widening
+      while dimming is the trick — a thick faint stroke on `lighter` blends into
+      its neighbours and loses its edge, which is what "ghostly" means here.
+    */
+    const alpha = (0.09 + z * 0.58) * fade * (0.55 + life * 0.6);
     if (alpha < 0.01) continue;
 
     ctx.globalAlpha = Math.min(1, alpha);
     ctx.strokeStyle = i % 2 === 0 ? q.accent : q.tint;
-    ctx.lineWidth = 1 + z * z * 6 + beatFlash * 1.2;
+    ctx.lineWidth = 1.5 + z * z * 11 + beatFlash * 1.6;
     ctx.beginPath();
     // Rotation grows with depth, which is what makes the tunnel look twisted
     // rather than like a stack of rings.
@@ -1618,8 +1716,8 @@ function drawWormhole(w, h, dt, life) {
 
   // The throat: a bright core so the vanishing point reads as somewhere the
   // tunnel is coming FROM. Uses the cached glow sprite, so it is one blit.
-  const glowR = Math.min(w, h) * (0.06 + beatFlash * 0.03 + anticipation * 0.05);
-  ctx.globalAlpha = Math.min(1, 0.35 + beatFlash * 0.35 + anticipation * 0.4);
+  const glowR = Math.min(w, h) * (0.08 + beatFlash * 0.03 + anticipation * 0.06);
+  ctx.globalAlpha = Math.min(1, 0.20 + beatFlash * 0.22 + anticipation * 0.3);
   ctx.drawImage(accentGlow(q.accent), cx - glowR, cy - glowR, glowR * 2, glowR * 2);
 
   ctx.globalAlpha = 1;
@@ -2621,20 +2719,43 @@ function drawBackdrop(now) {
       return;   // `finally` still prices the frame and re-arms the loop
     }
 
+    // Shed or reclaim backdrop pixels when the compositor is struggling. Only
+    // in the non-bare path: Ghost has no 2D canvas in the page to resize.
+    applyCanvasScale(now);
+
     ctx.clearRect(0, 0, w, h);
 
     // Album-art backdrop photo (pre-blurred + darkened), painted behind the wash.
     // Fades in over ~0.9s when a new cover arrives; capped by the backdrop level
     // so a "faint" overlay still lets the desktop show through.
+    /*
+      Solo: this preset's layer and the words, nothing else.
+
+      Ghost's `bare` cannot serve a mode that has to draw something — it takes
+      the canvas out of the page. Solo is the weaker version: the canvas stays,
+      the named layers draw, and every always-on extra below is suppressed —
+      cover photo, wash, vignette, glows, stars, shooting stars, ripples, the
+      build-up bloom, flicker, the timeline, the dancers and confetti.
+    */
+    const solo = Boolean(activePreset.soloLayer);
+
     let artAlpha = 0;
-    if (artReady && artBlurred) {
+    if (!solo && artReady && artBlurred) {
       artFadeIn = Math.min(1, artFadeIn + dt / 900);
       artAlpha = artFadeIn * level.alpha;
       drawArtCover(w, h, artAlpha);
     }
 
-    // Matches the wash's own art-thinning so a cover photo still reads.
-    renderSwirl(now, dt, life, Math.min(1, level.alpha * (1 - artAlpha * 0.7)),
+    /*
+      Matches the wash's own art-thinning so a cover photo still reads.
+
+      A solo look also thins the field hard. In Ghost the field IS the picture,
+      so it runs at full strength; here the tunnel is, and at full strength the
+      shader simply swallowed it — the rings were technically drawn and
+      practically invisible.
+    */
+    const fieldAlpha = level.alpha * (1 - artAlpha * 0.7) * (solo ? 0.42 : 1);
+    renderSwirl(now, dt, life, Math.min(1, fieldAlpha),
       activePreset.swirl, audioActive ? audioEnv.bass : 0, tintLive, accentLive);
 
     // Wash opacity follows the level and swells with build-up/drop so colour
@@ -2644,11 +2765,13 @@ function drawBackdrop(now) {
     // drops to a thin unifying tint instead of hiding the shader behind it.
     const washBase = swirlOn ? level.alpha * 0.16 : level.alpha;
     const washAlpha = Math.min(1, washBase * (1 - artAlpha * 0.85) + buildup * 0.12 + dropFlash * 0.15);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = washAlpha;
-    ctx.fillStyle = tintLive;
-    ctx.fillRect(0, 0, w, h);
-    ctx.globalAlpha = 1;
+    if (!solo) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = washAlpha;
+      ctx.fillStyle = tintLive;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalAlpha = 1;
+    }
 
     // Reactive background layers (each self-limits by scene flags + energy).
     if (scene.aurora) drawAurora(now, w, h, life);
@@ -2669,6 +2792,10 @@ function drawBackdrop(now) {
     if (scene.web) drawConstellation(now, w, h, life);
     // The stage floor goes down before anything that stands on it.
     if (scene.stage) drawStage(w, h, now, accentLive, tintLive);
+
+    // Solo looks stop here: the layer above IS the picture. `finally` still
+    // prices the frame and re-arms the loop, as it does for the bare path.
+    if (solo) return;
     // Depth vignette (cached gradient, rebuilt only on resize). Must draw in
     // 'source-over' — the layers above leave the composite op set to 'lighter',
     // under which a black gradient would add nothing.
@@ -2946,9 +3073,37 @@ const jobs = new Map();
  * @param {string} name stable job key, e.g. 'whisper'
  * @param {string|null} label what to show; null/'' ends the job
  */
+/**
+ * What to say when a job finishes, for the few that notify.
+ * @param {string} name @returns {string}
+ */
+function jobDoneLabel(name) {
+  const song = currentTrack ? `${currentTrack.title}` : 'the last song';
+  if (name === 'transcribe') return `Finished transcribing ${song} — it will be word-synced from now on`;
+  return `${name} finished`;
+}
+
 function setJob(name, label) {
+  const wasRunning = jobs.has(name);
   if (label) jobs.set(name, label);
   else jobs.delete(name);
+
+  /*
+    Mirror the job map to the tray. The HUD chip is inside a bar that stays
+    invisible until the cursor moves, so work taking minutes could finish with
+    nothing on screen having said it started. The tray tooltip always shows it,
+    and the few jobs worth interrupting for raise a notification (see
+    NOTIFY_ON_DONE in src/main/tray.js).
+  */
+  if (window.player.reportJobs) {
+    const finished = wasRunning && !label ? { id: name, label: jobDoneLabel(name) } : null;
+    // Never let a tray that failed to start (it is a convenience) surface as an
+    // unhandled rejection in the renderer.
+    window.player.reportJobs({
+      jobs: [...jobs.entries()].map(([id, text]) => ({ id, label: text })),
+      finished,
+    }).catch(() => { /* tray unavailable */ });
+  }
 
   if (!els.work) return;
   if (jobs.size === 0) {
@@ -3074,6 +3229,19 @@ function refreshButtons() {
   els.scriptBtn.disabled = cuesLatin.length === 0 || (!cuesDevanagari && !transliterationAvailable);
   els.translateBtn.setAttribute('aria-pressed', String(showTranslation && Boolean(cuesEnglish)));
   els.translateBtn.disabled = cuesLatin.length === 0 || (!cuesEnglish && !translationAvailable);
+
+  /*
+    Say why, when there is a why. A translation that exists but cannot be lined
+    up with the current cue list is hidden deliberately — captioning a line with
+    its neighbour's translation is worse than showing nothing — but silence made
+    that indistinguishable from a broken feature.
+  */
+  const blocked = translationBlockedReason();
+  els.translateBtn.title = blocked
+    ? `Translation unavailable — ${blocked}`
+    : (cuesEnglish ? 'Show / hide the English line' : 'English translation');
+  els.translateBtn.classList.toggle('chip--warn', Boolean(blocked));
+  if (blocked && showTranslation) setStatus(`no translation — ${blocked}`);
 }
 
 /**
@@ -4076,45 +4244,247 @@ function closePresync() {
   document.body.classList.remove('keybox-open');
 }
 
-/**
- * Fetch the synced-songs library from main and render it into the panel. Each row
- * shows title · artist and badges: ✓ lyrics cached, ♪ beat map learned.
- */
+/* ----------------------------------------------------------------- library */
+
+/*
+  The library.
+
+  This replaces a `<ul>` capped at 30vh inside the pre-sync panel, inside a HUD
+  that is invisible until the cursor moves. Songs are what this app is about;
+  they were three lines of small text behind two disclosures.
+
+  Every song the app has ever seen is here — cached lyrics, learned beat maps
+  and heat maps — alongside anything added from disk, and a card is now
+  clickable because the app can play files itself.
+*/
+
+/** Everything known, before the search filter. */
+let libraryItems = [];
+/** Local files added this session, keyed by cache key so they merge with it. */
+const localFiles = new Map();
+
+function libraryKey(artist, title) {
+  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
+}
+
+/** Fetch the cached library from main and merge in locally-added files. */
 async function refreshSyncedList() {
-  if (!els.syncedList || !window.player.listSynced) return;
-  let items = [];
+  if (!els.libraryGrid || !window.player.listSynced) return;
+  let cached = [];
   try {
-    items = await window.player.listSynced();
-  } catch { /* leave the list as-is on failure */ }
+    cached = await window.player.listSynced();
+  } catch { /* show whatever we already have */ }
 
-  els.syncedList.textContent = '';
-  if (els.syncedCount) els.syncedCount.textContent = items.length ? `(${items.length})` : '';
+  const merged = new Map();
+  for (const it of cached) {
+    merged.set(libraryKey(it.artist, it.title), {
+      title: it.title || it.key,
+      artist: it.artist || '',
+      hasCues: Boolean(it.hasCues),
+      hasBeatmap: Boolean(it.hasBeatmap),
+      hasHeatmap: Boolean(it.hasHeatmap),
+      localPath: null,
+    });
+  }
+  // A local file for a song we already know about should light up that card
+  // rather than appearing twice.
+  for (const [key, file] of localFiles) {
+    const existing = merged.get(key);
+    if (existing) existing.localPath = file.localPath;
+    else {
+      merged.set(key, {
+        title: file.title, artist: file.artist,
+        hasCues: false, hasBeatmap: false, hasHeatmap: false,
+        localPath: file.localPath,
+      });
+    }
+  }
 
-  if (items.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'synced-empty';
-    li.textContent = 'Nothing synced yet — play or pre-sync some songs.';
-    els.syncedList.appendChild(li);
-    return;
+  libraryItems = [...merged.values()];
+  renderLibrary();
+}
+
+/** Draw the cards for the current search term. */
+function renderLibrary() {
+  if (!els.libraryGrid) return;
+  const term = (els.librarySearch && els.librarySearch.value || '').toLowerCase().trim();
+  const items = term
+    ? libraryItems.filter((it) => `${it.title} ${it.artist}`.toLowerCase().includes(term))
+    : libraryItems;
+
+  els.libraryGrid.textContent = '';
+  if (els.libraryCount) {
+    els.libraryCount.textContent = term
+      ? `${items.length} of ${libraryItems.length}`
+      : `${libraryItems.length} song${libraryItems.length === 1 ? '' : 's'}`;
+  }
+
+  if (els.libraryEmpty) {
+    const empty = items.length === 0;
+    els.libraryEmpty.hidden = !empty;
+    els.libraryEmpty.textContent = libraryItems.length === 0
+      ? 'Nothing here yet — add songs from disk, or play something and it will appear.'
+      : 'No songs match that search.';
   }
 
   const frag = document.createDocumentFragment();
   for (const it of items) {
-    const li = document.createElement('li');
-    const title = document.createElement('span');
-    title.className = 'synced-title';
-    title.textContent = it.title || it.key;
-    const artist = document.createElement('span');
-    artist.className = 'synced-artist';
-    artist.textContent = it.artist || '';
-    const badges = document.createElement('span');
-    badges.className = 'synced-badges';
-    badges.textContent = `${it.hasCues ? '✓' : '·'}${it.hasBeatmap ? ' ♪' : ''}`;
-    badges.title = `${it.hasCues ? 'lyrics cached' : 'no lyrics'}${it.hasBeatmap ? ' · beat map learned' : ''}`;
-    li.append(title, artist, badges);
-    frag.appendChild(li);
+    frag.appendChild(libraryCard(it));
   }
-  els.syncedList.appendChild(frag);
+  els.libraryGrid.appendChild(frag);
+}
+
+/**
+ * One card. Playable only when we have the file — a cached song we can merely
+ * describe is shown but disabled, which is honest about what clicking would do.
+ * @param {object} it
+ * @returns {HTMLElement}
+ */
+function libraryCard(it) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'library__card';
+  if (!it.localPath) {
+    card.disabled = true;
+    card.title = 'Known from an earlier play — add the file to play it here';
+  } else {
+    card.title = `Play ${it.title}`;
+    card.addEventListener('click', () => {
+      closeLibrary();
+      window.LocalPlayer.enqueue([{
+        localPath: it.localPath, title: it.title, artist: it.artist,
+      }]);
+    });
+  }
+
+  const art = document.createElement('div');
+  art.className = 'library__art';
+  art.textContent = it.localPath ? '▶' : '♪';
+
+  const meta = document.createElement('div');
+  meta.className = 'library__meta';
+  const song = document.createElement('div');
+  song.className = 'library__song';
+  song.textContent = it.title;
+  const artist = document.createElement('div');
+  artist.className = 'library__artist';
+  artist.textContent = it.artist || 'Unknown artist';
+
+  // What the app already knows about this song, at a glance.
+  const badges = document.createElement('div');
+  badges.className = 'library__badges';
+  for (const [on, label, hint] of [
+    [it.hasCues, 'lyrics', 'lyrics cached — plays offline'],
+    [it.hasBeatmap, 'beats', 'beat map learned'],
+    [it.hasHeatmap, 'shape', 'energy arc learned — anticipation works'],
+  ]) {
+    const b = document.createElement('span');
+    b.className = `library__badge${on ? ' library__badge--on' : ''}`;
+    b.textContent = label;
+    b.title = on ? hint : `no ${label} yet`;
+    badges.appendChild(b);
+  }
+
+  meta.append(song, artist, badges);
+  card.append(art, meta);
+  return card;
+}
+
+function openLibrary() {
+  if (!els.library) return;
+  els.library.hidden = false;
+  document.body.classList.add('show-cursor');
+  refreshSyncedList();
+  if (els.librarySearch) els.librarySearch.focus();
+}
+
+function closeLibrary() {
+  if (els.library) els.library.hidden = true;
+}
+
+/** Add files from disk to the library, and start playing them. */
+async function addLocalFiles(fromFolder) {
+  const picked = fromFolder
+    ? await window.player.openLocalFolder()
+    : await window.player.openLocalFiles();
+  if (!picked || picked.length === 0) return;
+  for (const f of picked) localFiles.set(libraryKey(f.artist, f.title), f);
+  refreshSyncedList();
+  window.LocalPlayer.enqueue(picked);
+}
+
+if (els.libraryBtn) els.libraryBtn.addEventListener('click', openLibrary);
+if (els.libraryClose) els.libraryClose.addEventListener('click', closeLibrary);
+if (els.librarySearch) els.librarySearch.addEventListener('input', renderLibrary);
+if (els.libraryAdd) els.libraryAdd.addEventListener('click', () => addLocalFiles(false));
+if (els.libraryAddFolder) els.libraryAddFolder.addEventListener('click', () => addLocalFiles(true));
+
+/* ------------------------------------------------------- local playback UI */
+
+/*
+  The transport only exists while a local file is loaded. When the overlay is
+  watching Spotify, drawing play/pause buttons that cannot control it would be
+  a lie about what this app can do.
+*/
+function updateTransport() {
+  if (!els.transport || !window.LocalPlayer) return;
+  const active = window.LocalPlayer.isActive();
+  els.transport.hidden = !active;
+  if (!active) return;
+  const el = window.LocalPlayer.audioElement();
+  if (els.trPlay) els.trPlay.textContent = el && el.paused ? '▶' : '⏸';
+  if (els.trNow) {
+    const q = window.LocalPlayer.queue;
+    const i = window.LocalPlayer.index;
+    els.trNow.textContent = q.length > 1 ? `${i + 1} / ${q.length}` : '';
+  }
+}
+
+if (window.LocalPlayer) {
+  /*
+    A local file drives the whole app: position comes from `audio.currentTime`
+    (exact, where SMTC is a 250ms poll), and the element is tapped directly for
+    the reactive envelope — so the visuals react with no loopback capture and no
+    permission prompt at all.
+  */
+  window.LocalPlayer.on('track', (track) => {
+    durationMs = track.durationMs || 0;
+    updateTransport();
+    const el = window.LocalPlayer.audioElement();
+    if (el && !audioEnabled && window.AudioReactive) {
+      audioEnabled = window.AudioReactive.startFromElement(el);
+      els.audioBtn.setAttribute('aria-pressed', String(audioEnabled));
+      // Playing our own file answers the capture question for good.
+      closeCaptureNudge();
+    }
+  });
+
+  window.LocalPlayer.on('tick', (state) => {
+    playbackStatus = state.status;
+    anchorPositionMs = state.positionMs;
+    anchorAt = performance.now();
+    if (state.durationMs) durationMs = state.durationMs;
+    document.body.classList.toggle('is-playing', state.status === 'Playing');
+    updateTransport();
+  });
+
+  /* The whole song measured before the first chorus: the timeline is full, the
+     tempo is known and a drop can be anticipated — on play one. */
+  window.LocalPlayer.on('analysed', (track, summary) => {
+    const bpm = summary.bpm ? ` · ${summary.bpm.toFixed(0)} BPM` : '';
+    setStatus(`analysed ${track.title} in ${Math.round(summary.ms)}ms${bpm}`);
+    if (summary.bpm && window.Tempo) {
+      tempoLocked = true;
+      tempoBpm = summary.bpm;
+      beatPeriodMs = 60000 / summary.bpm;
+    }
+    updateBpmChip();
+  });
+
+  if (els.trPlay) els.trPlay.addEventListener('click', () => { window.LocalPlayer.togglePlay(); updateTransport(); });
+  if (els.trNext) els.trNext.addEventListener('click', () => window.LocalPlayer.next());
+  if (els.trPrev) els.trPrev.addEventListener('click', () => window.LocalPlayer.previous());
+  if (els.trStop) els.trStop.addEventListener('click', () => { window.LocalPlayer.stop(); updateTransport(); });
 }
 
 els.presyncBtn.addEventListener('click', () => {

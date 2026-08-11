@@ -2,6 +2,87 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.18.0 — 2026-08-11
+
+### Added
+
+- **Play your own songs — and the app knows them before they start.** Open files
+  or a folder and the overlay plays them itself, rather than only watching what
+  another app is doing.
+
+  The reason this matters is not convenience. Everything the app *learns* — the
+  energy arc behind the timeline, the measured tempo the platter and the dancers
+  run on, and the anticipation that reads a stored map forwards — has until now
+  needed `♫` loopback capture and a full listen, so a first play got none of it.
+  With a local file the decoded samples are already in hand, so the whole track
+  is measured offline in a fraction of a second: **the timeline is full, the
+  tempo is locked and a drop can be anticipated on play one**, with no capture
+  and no permission prompt.
+
+  Position also comes from the audio element itself, which is exact, where SMTC
+  is a 250ms poll.
+
+  The measurement is deliberately plain arithmetic over the samples rather than
+  Web Audio filters, so it is unit-tested in Node with no browser: a 120 BPM
+  click train recovers at 120 ± 3 through the *same* tempo estimator the live
+  beat clock uses.
+
+- **A library worth opening.** The old one was a `<ul>` capped at 30% of the
+  window height, inside the pre-sync panel, inside a HUD that stays invisible
+  until the cursor moves. Songs are what this app is about.
+
+  It is now a proper panel: a card grid with search, badges showing what is
+  known about each song (lyrics cached · beat map · energy arc), and — since the
+  app can play files now — click a card to play it. Songs known only from an
+  earlier play are shown but not playable, which is honest about what clicking
+  would do.
+
+- **A system tray icon.** The overlay has no window chrome and hides on a
+  hotkey, so once running nothing on screen said it existed. The tray shows the
+  current song and any background work, and only transcription finishing raises
+  an OS notification — "finding lyrics" fires on every track and would train you
+  to dismiss everything this app ever says.
+
+- **Wormhole is ghost-like now, in both senses.** A new `soloLayer` flag draws
+  the named layer and the words and suppresses every always-on extra — no
+  dancers, stars, glows, ripples or timeline. It is deliberately weaker than
+  `bare`, which removes the 2D canvas entirely and therefore cannot serve a mode
+  that has a picture. The rings are also wider, dimmer and softer, and the field
+  is thinned in solo looks: at full strength the shader simply swallowed the
+  tunnel.
+
+- **The `EN` chip says why a translation is missing.** Translations are matched
+  to lyrics by index, so a list of a different length is unusable and gets
+  hidden — correct, but silent, which made "do translation and sync work
+  together?" unanswerable from the UI. It now reads *"42 lyric lines, 39
+  translated — can't line them up"*.
+
+### Performance
+
+- **The dancers were the most expensive thing in the app.** `SpriteActor.draw`
+  measured ~49 ms/s — more than every backdrop layer combined. Confirmed by
+  profiling Ghost, where it vanishes entirely and idle time rises by 60 ms/s.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `SpriteActor.draw` | 49.25 ms/s | **0.48 ms/s** |
+
+  Four causes, all doing per-dancer, per-frame work for a picture that barely
+  changes: the name plate (a font assignment, a `measureText` text-shaping pass,
+  a rect and a fill), the ground shadow (a path build and fill), the drop glow
+  (`ctx.shadowBlur` — a real-time Gaussian blur, the most expensive operation
+  the 2D context has, applied to every dancer on exactly the frame that is
+  already busiest), and a fresh pose object per dancer per frame. All are now
+  bitmaps or reused scratch objects.
+
+- **A resolution ladder for the 2D backdrop**, mirroring the one the swirl
+  already had. Compositing the two full-screen layers is ~850 ms/s against
+  ~50 ms/s for all app JavaScript, and backing-store size is the only lever on
+  it. Shallower and slower to engage than the swirl's, because this canvas
+  carries pixel-art dancers that soften visibly, and it resizes only the backing
+  store — the full resize reseeds every particle layer, which would make a
+  frame-rate dip announce itself as the starfield reshuffling.
+
 ## 0.17.0 — 2026-08-11
 
 ### Added
