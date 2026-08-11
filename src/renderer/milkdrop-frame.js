@@ -15,12 +15,15 @@
                                           the resident pack
       {type:'resize', width, height}      CSS pixels
       {type:'render', t, l, r, elapsed}   draw one frame with this audio
+      {type:'thumb', name, data}          render a preview of this preset
+      {type:'thumb-end'}                  drop the preview context
 
     frame → parent
       {type:'ready', names:[...]}         the resident catalogue, once it is known
       {type:'loaded', name}               which preset is actually showing
       {type:'missing', name}              asked for a preset it does not hold, and
                                           was sent no data for it
+      {type:'thumb', name, url}           a preview, as a JPEG data URL
       {type:'error', message}
 
   THE PARENT DRIVES THE CLOCK. The frame has no requestAnimationFrame of its
@@ -173,6 +176,104 @@
     }
   }
 
+  /* ---------------------------------------------------------------- previews */
+  /*
+    Preset names are not a way to choose a picture. They were written by
+    strangers twenty years ago — `$$$ Royal - Mashup (160)`, `!!!---flexi +
+    amandio c - organic12-3d-2` — and reading 1754 of them tells you nothing
+    about what any of them looks like. The browser needs images.
+
+    A SECOND WEBGL CONTEXT, DELIBERATELY. milkdrop.js states that two engines
+    alive at once doubles GPU cost for no benefit, and that rule is about two
+    *full-screen* surfaces. This one is 192x108 — 1/100th of the pixels of a
+    1080p overlay — and it exists only while the browser panel is open, which
+    is a moment when nobody is watching the visuals anyway. It is torn down on
+    'thumb-end'.
+
+    SYNTHETIC AUDIO, NOT SILENCE. Fed nothing, Butterchurn's own analysers
+    return zeroes and most presets render a still, dark frame — every preview
+    would look like every other preview. The waveform below is not music; it is
+    enough movement for a preset to show what it does with it.
+  */
+
+  const THUMB_W = 192;
+  const THUMB_H = 108;
+  /** Frames to run before capturing. Many presets are feedback loops and have
+      nothing to show on frame one; this is roughly a second of evolution. */
+  const THUMB_WARMUP = 34;
+
+  let thumbViz = null;
+  let thumbCanvas = null;
+  let thumbAudio = null;
+
+  /** A synthetic waveform, re-phased per frame so presets see movement. */
+  function fillThumbAudio(frameIndex) {
+    if (!thumbAudio) thumbAudio = new Uint8Array(1024);
+    const phase = frameIndex * 0.21;
+    for (let i = 0; i < 1024; i += 1) {
+      const t = i / 1024;
+      const bass = Math.sin((t * 4 + phase) * Math.PI * 2) * 0.55;
+      const mid = Math.sin((t * 17 + phase * 1.7) * Math.PI * 2) * 0.28;
+      const air = Math.sin((t * 63 + phase * 2.9) * Math.PI * 2) * 0.14;
+      thumbAudio[i] = Math.max(0, Math.min(255, 128 + (bass + mid + air) * 120));
+    }
+    return thumbAudio;
+  }
+
+  /** @returns {boolean} whether a preview renderer exists */
+  function ensureThumbRenderer() {
+    if (thumbViz) return true;
+    const bc = unwrap(window.butterchurn);
+    if (!bc || !ctx) return false;
+    try {
+      thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = THUMB_W;
+      thumbCanvas.height = THUMB_H;
+      thumbViz = bc.createVisualizer(ctx, thumbCanvas, {
+        width: THUMB_W, height: THUMB_H, pixelRatio: 1,
+      });
+      return true;
+    } catch (err) {
+      post({ type: 'error', message: `preview renderer: ${err.message}` });
+      thumbViz = null;
+      return false;
+    }
+  }
+
+  /** Render one preview and hand it back as a JPEG data URL. */
+  function thumbnail(name, data) {
+    if (!name || !ensureThumbRenderer()) return;
+    const preset = data || presetMap[name] || sent.get(name);
+    if (!preset) {
+      post({ type: 'missing', name });
+      return;
+    }
+    try {
+      thumbViz.loadPreset(preset, 0);
+      for (let i = 0; i < THUMB_WARMUP; i += 1) {
+        const t = fillThumbAudio(i);
+        thumbViz.render({
+          audioLevels: { timeByteArray: t, timeByteArrayL: t, timeByteArrayR: t },
+          elapsedTime: 1 / 30,
+        });
+      }
+      // JPEG, not PNG: these are soft, noisy, full-frame images where PNG is
+      // several times larger for no visible gain across 1754 of them.
+      post({ type: 'thumb', name, url: thumbCanvas.toDataURL('image/jpeg', 0.72) });
+    } catch (err) {
+      /* A preset that will not compile has no preview and no card image. That
+         is the honest outcome — it would not run as a visual either. */
+      post({ type: 'error', message: `preview ${name}: ${err.message}` });
+    }
+  }
+
+  /** Release the preview context. The panel closing is the only caller. */
+  function endThumbnails() {
+    thumbViz = null;
+    thumbCanvas = null;
+    thumbAudio = null;
+  }
+
   function resize(width, height) {
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
@@ -192,6 +293,8 @@
       case 'preset': loadPreset(msg.name, msg.blend, msg.data); break;
       case 'resize': resize(msg.width, msg.height); break;
       case 'render': render(msg); break;
+      case 'thumb': thumbnail(msg.name, msg.data); break;
+      case 'thumb-end': endThumbnails(); break;
       default: break;
     }
   });

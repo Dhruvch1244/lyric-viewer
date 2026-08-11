@@ -84,6 +84,13 @@
       }
     } else if (msg.type === 'loaded') {
       currentName = msg.name;
+    } else if (msg.type === 'thumb') {
+      const pending = thumbWaiters.get(msg.name);
+      if (pending) {
+        thumbWaiters.delete(msg.name);
+        clearTimeout(pending.timer);
+        pending.resolve(msg.url || null);
+      }
     } else if (msg.type === 'missing') {
       // The frame was asked for something it does not hold and was sent no
       // data. Either the file read failed or the name is stale (a pin from an
@@ -107,8 +114,8 @@
     Ask main for the corpus once. It is a list of ~1754 strings, not the
     presets themselves — the bytes stay on disk until something is shown.
   */
-  if (window.lyrics && window.lyrics.milkdropCatalogue) {
-    window.lyrics.milkdropCatalogue().then((list) => {
+  if (window.player && window.player.milkdropCatalogue) {
+    window.player.milkdropCatalogue().then((list) => {
       corpus = Array.isArray(list) ? list : [];
       names = mergeCatalogue(resident, corpus);
       /* `ready` deliberately not touched here. It means "the frame has a
@@ -181,7 +188,7 @@
     */
     loadToken += 1;
     const token = loadToken;
-    window.lyrics.milkdropPreset(target).then((data) => {
+    window.player.milkdropPreset(target).then((data) => {
       if (token !== loadToken || !frame) return;
       // A null reply means the corpus could not produce it. Send the name
       // anyway: the frame reports it as missing and falls back to something
@@ -229,6 +236,60 @@
    */
   function reconnect() { /* audio is sampled per frame; nothing is bound */ }
 
+  /* --------------------------------------------------------------- previews */
+
+  /** @type {Map<string, {resolve: (url: string|null) => void, timer: number}>} */
+  const thumbWaiters = new Map();
+
+  /** A preset that will not compile posts an error, not a preview. */
+  const THUMB_TIMEOUT_MS = 6000;
+
+  /**
+   * Render a preview of a preset, for the browser's grid.
+   *
+   * The parent has to supply the preset object for anything outside the
+   * resident pack — the frame cannot read files, which is the whole point of
+   * the frame — so this is the same fetch the live loader does, at a different
+   * destination.
+   *
+   * @param {string} name
+   * @returns {Promise<string|null>} a JPEG data URL, or null if it cannot be drawn
+   */
+  function thumbnail(name) {
+    if (!frame || !ready || !name) return Promise.resolve(null);
+    // One request per name in flight. The grid can ask twice while scrolling.
+    const already = thumbWaiters.get(name);
+    if (already) return already.promise;
+
+    const send = (data) => post({ type: 'thumb', name, data: data || undefined });
+
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    const timer = setTimeout(() => {
+      thumbWaiters.delete(name);
+      resolve(null);
+    }, THUMB_TIMEOUT_MS);
+    thumbWaiters.set(name, { resolve, timer, promise });
+
+    if (resident.has(name)) send(null);
+    else {
+      window.player.milkdropPreset(name)
+        .then((data) => send(data))
+        .catch(() => send(null));
+    }
+    return promise;
+  }
+
+  /** Release the preview renderer. Called when the browser panel closes. */
+  function endThumbnails() {
+    for (const [, pending] of thumbWaiters) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    thumbWaiters.clear();
+    post({ type: 'thumb-end' });
+  }
+
   /** Take the engine off screen and let its WebGL context go. */
   function destroy() {
     if (!frame) return;
@@ -244,6 +305,8 @@
 
   window.MilkDrop = {
     init, loadPreset, render, resize, reconnect, destroy,
+    thumbnail, endThumbnails,
     names: () => names, isSupported, current: () => currentName,
+    isResident: (name) => resident.has(name),
   };
 })();

@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('player', {
   milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),
   /** One preset, parsed. Read from disk in main; see presetlib.js. */
   milkdropPreset: (name) => ipcRenderer.invoke('milkdrop-preset', name),
+  /** @param {string[]} names @returns {Promise<Record<string,string>>} name → data URL */
+  milkdropThumbs: (names) => ipcRenderer.invoke('milkdrop-thumb-get', names),
+  milkdropThumbSave: (name, dataUrl) => ipcRenderer.invoke('milkdrop-thumb-put', name, dataUrl),
+  milkdropThumbClear: () => ipcRenderer.invoke('milkdrop-thumb-clear'),
 
   onUpdateState: (cb) => ipcRenderer.on('update-state', (_e, data) => cb(data)),
   getUpdateState: () => ipcRenderer.invoke('get-update-state'),

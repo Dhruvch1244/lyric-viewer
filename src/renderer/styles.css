@@ -1316,7 +1316,9 @@ body.keybox-open .hud {
   bottom: 14vh;
   right: 3vw;
   z-index: 20;
-  width: min(24rem, 44vw);
+  /* Wider since 0.21.0: the panel shows pictures now, and a 24rem column fits
+     one thumbnail per row, which is a list with extra steps. */
+  width: min(46rem, 62vw);
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -1335,7 +1337,7 @@ body.keybox-open .hud {
    button stranded alone on a second line. */
 .mdp__bar {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr repeat(6, auto);
   align-items: center;
   gap: 0.5rem;
 }
@@ -1343,6 +1345,13 @@ body.keybox-open .hud {
 .mdp__bar .mdp__search {
   grid-column: 1 / -1;
   grid-row: 2;
+}
+
+/* The filter chips read as a segmented control: only one is ever on. */
+.mdp__filter[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--accent-live, var(--accent, #e94560));
+  background: color-mix(in srgb, var(--accent, #e94560) 20%, transparent);
 }
 
 .mdp__title {
@@ -1373,43 +1382,157 @@ body.keybox-open .hud {
   color: var(--ink-dim);
 }
 
-.mdp__list {
+/*
+  A grid of pictures, because a preset is a picture. The card is sized by the
+  thumbnail's own 16:9 so the grid never reflows as images arrive — a layout
+  that jumps under the cursor while 1754 previews render in the background
+  would be worse than no previews at all.
+*/
+.mdp__grid {
   flex: 1;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  /*
+    Rows are a fixed height, not `auto`. Auto rows sized every card to 2px
+    around a 101px scroll height — the item's intrinsic contribution came back
+    as zero — and the pager then chased a viewport it could never fill, turning
+    60 cards into 300 before anyone scrolled. Three wrong theories were
+    measured out of the way first (the <button> element, flex direction, and
+    aspect-ratio versus a pixel height); a definite row height is the one that
+    holds, and it is also honest: every card in this grid is the same shape by
+    design, so there is nothing for auto sizing to discover.
+
+    5.6rem preview + two lines of name + padding.
+  */
+  grid-auto-rows: 8.6rem;
+  gap: 0.55rem;
+  align-content: start;
 }
 
-.mdp__item {
+/*
+  Block, not flex. A flex card blockifies its children's `display`, which
+  silently turned the name's `-webkit-box` into `flow-root` and disabled the
+  two-line clamp — the third line was then merely clipped by the card, leaving
+  a sliver of text showing that reads as a rendering fault. Measured: the
+  computed display came back `flow-root` with `-webkit-line-clamp: 2` still
+  set and doing nothing.
+*/
+.mdp__card {
+  position: relative;
+  display: block;
   text-align: left;
   font: inherit;
-  font-size: 0.76rem;
-  line-height: 1.3;
-  color: var(--ink-mid);
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 0.4rem 0.55rem;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  overflow: hidden;
   cursor: pointer;
-  /* Preset names are long and idiosyncratic ("Rovastar + Geiss - Hurricane
-     Nightmare (Posterize Mix)"); wrapping beats truncating, because the
-     distinguishing part is usually at the end. */
-  overflow-wrap: anywhere;
 }
 
-.mdp__item:hover,
-.mdp__item:focus-visible {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: var(--ink);
+.mdp__card:hover,
+.mdp__card:focus-visible {
+  border-color: rgba(255, 255, 255, 0.28);
   outline: none;
 }
 
-.mdp__item[aria-current="true"] {
-  color: var(--ink);
+.mdp__card[aria-current="true"] {
   border-color: var(--accent-live, var(--accent, #e94560));
-  background: color-mix(in srgb, var(--accent, #e94560) 14%, transparent);
+  box-shadow: 0 0 0 1px var(--accent-live, var(--accent, #e94560));
+}
+
+/*
+  A definite height, not an aspect ratio. `aspect-ratio: 16/9` with
+  `width: 100%` produced a box that rendered 90px tall and contributed ZERO to
+  its row's intrinsic height — a percentage width is treated as auto while
+  sizing an auto row, so the ratio has nothing to resolve against. Every card
+  collapsed to 2px around a visible image, and the grid's pager then filled a
+  viewport that could never be full: 60 cards became 300 before anyone
+  scrolled. Measured in the harness, twice, after the button and flex theories
+  both proved wrong.
+
+  The tracks are minmax(9.5rem, 1fr), so 5.6rem is roughly 16:9 across the
+  range; `object-fit: cover` absorbs the rest.
+*/
+.mdp__shot {
+  display: block;
+  width: 100%;
+  height: 5.6rem;
+  object-fit: cover;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+}
+
+/* Two lines, then ellipsis. Preset names run past 60 characters and the grid
+   cannot give each one as much room as it would like. */
+.mdp__name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0.3rem 0.45rem 0.4rem;
+  font-size: 0.66rem;
+  line-height: 1.25;
+  color: var(--ink-mid);
+  overflow-wrap: anywhere;
+}
+
+.mdp__card[aria-current="true"] .mdp__name { color: var(--ink); }
+
+/* Marks sit on the image, not in the flow: the card is a picture first. */
+.mdp__marks {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  display: flex;
+  gap: 0.2rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.mdp__card:hover .mdp__marks,
+.mdp__card:focus-within .mdp__marks,
+.mdp__card[aria-current="true"] .mdp__marks {
+  opacity: 1;
+}
+
+/* A liked preset keeps its heart visible when the cursor is elsewhere —
+   otherwise the ♥ filter is the only way to see what you already liked. */
+.mdp__card.is-fav .mdp__marks { opacity: 1; }
+
+.mdp__mark {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0.18rem 0.3rem;
+  color: var(--ink-mid);
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mdp__mark:hover { color: var(--ink); }
+.mdp__mark[aria-pressed="true"] { color: var(--accent-live, var(--accent, #e94560)); }
+
+.mdp__hint {
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--ink-dim);
+}
+
+.mdp__hint b {
+  color: var(--ink-mid);
+  font-weight: 600;
+}
+
+.mdp__more {
+  grid-column: 1 / -1;
+  padding: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  text-align: center;
 }
 
 /*

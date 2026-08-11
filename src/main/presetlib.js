@@ -107,4 +107,88 @@ class PresetLibrary {
   }
 }
 
-module.exports = { PresetLibrary, CACHE_MAX };
+/*
+  Preview thumbnails.
+
+  Rendering one costs a preset compile plus ~34 frames, so the first pass over
+  the catalogue is real work. It is done once: the images are written under
+  userData and read back on every later open, which is what makes a grid of
+  1754 previews a reasonable thing to offer at all.
+
+  Filenames are hashed rather than derived, for the same reason preset files are
+  numbered — a name is not a path. A hash also keeps the directory flat and
+  fixed-width, which matters when it holds 1754 entries.
+*/
+
+const crypto = require('crypto');
+
+class ThumbnailStore {
+  /** @param {string} dir where to keep the JPEGs (under userData in the app) */
+  constructor(dir) {
+    this.dir = dir;
+    this.ready = false;
+  }
+
+  /** @param {string} name @returns {string} absolute path for this preset */
+  pathFor(name) {
+    const hash = crypto.createHash('sha1').update(name).digest('hex').slice(0, 16);
+    return path.join(this.dir, `${hash}.jpg`);
+  }
+
+  ensureDir() {
+    if (this.ready) return true;
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      this.ready = true;
+    } catch (err) {
+      console.error('[thumbs] cannot write:', err.message);
+    }
+    return this.ready;
+  }
+
+  /**
+   * @param {string} name
+   * @returns {string|null} a JPEG data URL, or null if not rendered yet
+   */
+  get(name) {
+    if (!name) return null;
+    try {
+      const buf = fs.readFileSync(this.pathFor(name));
+      return `data:image/jpeg;base64,${buf.toString('base64')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @param {string} name
+   * @param {string} dataUrl as produced by canvas.toDataURL('image/jpeg')
+   * @returns {boolean} whether it was stored
+   */
+  put(name, dataUrl) {
+    if (!name || typeof dataUrl !== 'string') return false;
+    const comma = dataUrl.indexOf(',');
+    if (!dataUrl.startsWith('data:image/jpeg;base64,') || comma < 0) return false;
+    if (!this.ensureDir()) return false;
+    try {
+      fs.writeFileSync(this.pathFor(name), Buffer.from(dataUrl.slice(comma + 1), 'base64'));
+      return true;
+    } catch (err) {
+      console.error(`[thumbs] ${name}: ${err.message}`);
+      return false;
+    }
+  }
+
+  /** Throw away every rendered preview. */
+  clear() {
+    try {
+      fs.rmSync(this.dir, { recursive: true, force: true });
+      this.ready = false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+module.exports = { PresetLibrary, ThumbnailStore, CACHE_MAX };

@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { PresetLibrary, CACHE_MAX } = require('../src/main/presetlib');
+const { PresetLibrary, ThumbnailStore, CACHE_MAX } = require('../src/main/presetlib');
 
 /** Build a throwaway corpus on disk. */
 function fixture(presets, extra = {}) {
@@ -127,6 +127,57 @@ test('the shipped corpus holds every preset a visual look names', () => {
     assert.ok(names.has(name),
       `presets.js starts a look on "${name}", which the corpus does not hold`);
   }
+});
+
+/* --- the preview cache --- */
+
+test('a preview round-trips through disk unchanged', () => {
+  // The point of the cache is that a second open of the browser paints from
+  // disk instead of re-rendering 1754 presets on the GPU.
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-')), 'preset-thumbs');
+  const store = new ThumbnailStore(dir);
+  const url = `data:image/jpeg;base64,${Buffer.from('not really a jpeg').toString('base64')}`;
+
+  assert.equal(store.get('Flexi - alien fish pond'), null);
+  assert.equal(store.put('Flexi - alien fish pond', url), true);
+  assert.equal(store.get('Flexi - alien fish pond'), url);
+});
+
+test('preset names with path characters do not become paths', () => {
+  // Real catalogue entries include `$$$ Royal - Mashup (160)` and names with
+  // slashes and quotes. The filename is a hash for exactly this reason.
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-')), 'preset-thumbs');
+  const store = new ThumbnailStore(dir);
+  const nasty = '../../escape/attempt "quoted" <angle> |pipe|';
+  const url = `data:image/jpeg;base64,${Buffer.from('x').toString('base64')}`;
+
+  assert.equal(store.put(nasty, url), true);
+  assert.equal(store.get(nasty), url);
+  assert.equal(path.dirname(store.pathFor(nasty)), dir, 'wrote outside its directory');
+  assert.match(path.basename(store.pathFor(nasty)), /^[0-9a-f]{16}\.jpg$/);
+});
+
+test('anything that is not a JPEG data URL is refused', () => {
+  // This value comes from the renderer. A wrong one should be dropped here
+  // rather than written and then handed back as a broken <img>.
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-')), 'preset-thumbs');
+  const store = new ThumbnailStore(dir);
+  for (const bad of ['', 'https://example.com/x.jpg', 'data:image/png;base64,AAAA', null, 42]) {
+    assert.equal(store.put('alpha', bad), false, `accepted ${String(bad)}`);
+  }
+  assert.equal(store.get('alpha'), null);
+});
+
+test('clear throws the previews away', () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-')), 'preset-thumbs');
+  const store = new ThumbnailStore(dir);
+  const url = `data:image/jpeg;base64,${Buffer.from('x').toString('base64')}`;
+  store.put('alpha', url);
+  assert.equal(store.clear(), true);
+  assert.equal(store.get('alpha'), null);
+  // ...and the store still works afterwards, rather than needing a restart.
+  assert.equal(store.put('alpha', url), true);
+  assert.equal(store.get('alpha'), url);
 });
 
 test('every shipped preset actually parses', () => {

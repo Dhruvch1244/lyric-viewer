@@ -6,7 +6,7 @@ const fs = require('fs');
 const { identify } = require('./tags');
 const { AppTray } = require('./tray');
 const { AppUpdater, describeUpdate, isUpdateActionable } = require('./updater');
-const { PresetLibrary } = require('./presetlib');
+const { PresetLibrary, ThumbnailStore } = require('./presetlib');
 
 // GPU / performance: the overlay is a full-screen, always-animating Canvas 2D
 // surface, so hardware acceleration matters. These switches force the GPU path
@@ -93,6 +93,11 @@ let appUpdater = null;
    read the first time the MilkDrop engine or its browser asks for anything, so
    a session that never uses MilkDrop never touches it. */
 const presetLibrary = new PresetLibrary();
+
+/* Rendered previews. Under userData rather than beside the presets: the app
+   directory is not reliably writable, and these are a cache — losing them costs
+   one re-render, not a feature. */
+let thumbnailStore = null;
 
 /** Current display size: fullscreen overlay, floating bar, or taskbar strip. */
 let displayMode = 'full';
@@ -861,6 +866,22 @@ app.whenReady().then(() => {
      preset is actually shown. See presetlib.js for why main owns the files. */
   ipcMain.handle('milkdrop-catalogue', () => presetLibrary.names());
   ipcMain.handle('milkdrop-preset', (_e, name) => presetLibrary.get(name));
+
+  /* Previews. Rendering one costs a preset compile and ~34 frames, so they are
+     rendered once by the frame and kept here; a second open of the browser
+     paints from disk. */
+  thumbnailStore = new ThumbnailStore(path.join(app.getPath('userData'), 'preset-thumbs'));
+  ipcMain.handle('milkdrop-thumb-get', (_e, names) => {
+    const wanted = Array.isArray(names) ? names : [names];
+    const out = {};
+    for (const name of wanted) {
+      const url = thumbnailStore.get(name);
+      if (url) out[name] = url;
+    }
+    return out;
+  });
+  ipcMain.handle('milkdrop-thumb-put', (_e, name, dataUrl) => thumbnailStore.put(name, dataUrl));
+  ipcMain.handle('milkdrop-thumb-clear', () => thumbnailStore.clear());
 
   ipcMain.handle('update-action', (_e, action) => {
     if (!appUpdater) return { status: 'unavailable' };

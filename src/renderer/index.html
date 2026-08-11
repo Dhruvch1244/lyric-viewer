@@ -164,22 +164,36 @@
       <p id="library-empty" class="library__empty" hidden></p>
     </section>
 
-    <!-- MilkDrop preset browser. 0.19.0 shipped 395 presets reachable only by
-         waiting for a drop on a 42-second cooldown, which is a catalogue you
-         cannot actually use. Search it, click to switch instantly, and pin one
-         to the song so it comes back next play. -->
+    <!-- MilkDrop preset browser.
+         0.19.0 shipped 395 presets reachable only by waiting for a drop on a
+         42-second cooldown. 0.20.0 gave them a search box and a list of names,
+         which was better and still the wrong interface: the names were written
+         by strangers twenty years ago and say nothing about what a preset looks
+         like, so choosing one meant loading it and looking. 0.21.0 shows the
+         pictures, remembers the ones you like, and lets you throw away the ones
+         you never want to see again. -->
     <section id="milkdrop-panel" class="mdp" hidden aria-label="MilkDrop presets">
       <header class="mdp__bar">
         <h2 class="mdp__title">MilkDrop</h2>
         <input id="mdp-search" class="mdp__search" type="search"
-               placeholder="Search 395 presets…" spellcheck="false" />
+               placeholder="Search presets…" spellcheck="false" />
+        <button id="mdp-filter-all" class="chip mdp__filter" type="button"
+                data-filter="all" aria-pressed="true">All</button>
+        <button id="mdp-filter-fav" class="chip mdp__filter" type="button"
+                data-filter="fav" aria-pressed="false" title="Only the ones you liked">♥</button>
+        <button id="mdp-filter-new" class="chip mdp__filter" type="button"
+                data-filter="unseen" aria-pressed="false"
+                title="Presets you have not looked at yet">Unseen</button>
         <button id="mdp-random" class="chip chip--muted" type="button" title="Surprise me">🎲</button>
         <button id="mdp-pin" class="chip chip--muted" type="button"
                 title="Keep this preset for this song" aria-pressed="false">📌</button>
         <button id="mdp-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
       </header>
       <p id="mdp-status" class="mdp__status" role="status"></p>
-      <div id="mdp-list" class="mdp__list"></div>
+      <div id="mdp-list" class="mdp__grid"></div>
+      <p class="mdp__hint">
+        <b>↑↓←→</b> step through and watch · <b>F</b> like · <b>X</b> hide · <b>Enter</b> pin
+      </p>
     </section>
 
     <!-- Cover art picker. The automatic search returns a single winner and is
