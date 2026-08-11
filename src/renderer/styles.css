@@ -1423,7 +1423,7 @@ body.keybox-open .hud {
   display: block;
   text-align: left;
   font: inherit;
-  padding: 0;
+  padding: 0 0 0.4rem;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
@@ -1471,7 +1471,11 @@ body.keybox-open .hud {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  padding: 0.3rem 0.45rem 0.4rem;
+  /* No bottom padding. With it, a third line renders INTO the padding and is
+     only then clipped, leaving a sliver of text under the second line on the
+     longest names — the card carries the bottom gap instead, so the clip edge
+     falls exactly where line two ends. */
+  padding: 0.3rem 0.45rem 0;
   font-size: 0.66rem;
   line-height: 1.25;
   color: var(--ink-mid);
