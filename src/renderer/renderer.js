@@ -264,6 +264,12 @@ let overlayVisible = true;
    next frame to write, which is what resets it on a track change. */
 let lastProgressPct = -1;
 
+/* Eased spectral centroid, 0..1 — the live "brightness" of the mix, which is
+   what separates a filtered breakdown from a full-range drop at equal loudness.
+   Starts at the value a mid-range mix settles on, so the first seconds of a
+   track do not swing the hue while it converges. */
+let brightness = 0.3;
+
 /* --------------------------------------------------------------- sync core */
 
 function estimatePosition() {
@@ -2891,9 +2897,20 @@ function drawBackdrop(now) {
       updateBpmChip();
     }
 
-    // Slowly drift the global hue (faster when intense), and jump it on drops —
-    // this shifts the whole wash + live layers so the background never settles.
-    bgHue = (bgHue + dt * 0.01 * (0.6 + intensity + baseEnergy) + dropFlash * 0.6) % 360;
+    /*
+      Slowly drift the global hue (faster when intense), and jump it on drops —
+      this shifts the whole wash + live layers so the background never settles.
+
+      Brightness now steers it as well. A bright, open mix pushes the hue
+      forward; a filtered breakdown lets it fall back, so the colour of the room
+      tracks the character of the sound and not merely its volume. Bounded to
+      ±40% of the base rate: the drift is a signature of the app, not something
+      the spectrum should be able to run away with.
+    */
+    const tone = 0.6 + (brightness - 0.3) * 1.3;
+    bgHue = (bgHue
+      + dt * 0.01 * (0.6 + intensity + baseEnergy) * Math.max(0.6, Math.min(1.4, tone))
+      + dropFlash * 0.6) % 360;
 
     /*
       Beat clock: advance the phase, fire a flash + micro-flicker on each
@@ -3002,6 +3019,21 @@ function drawBackdrop(now) {
         tempoBpm = 0;
       }
       }
+    }
+
+    /*
+      Brightness drives the palette's live hue.
+
+      The spectral centroid is the one measure that separates a filtered
+      breakdown from a full-range drop when both are equally loud, which is
+      exactly the moment the visuals most need to change character and the
+      moment a level-only reading cannot see. Eased hard, because the centroid
+      is jumpy frame to frame and the hue is a slow, global thing.
+    */
+    if (audioActive && typeof audioEnv.centroid === 'number') {
+      brightness += (audioEnv.centroid - brightness) * 0.04;
+    } else {
+      brightness += (0.3 - brightness) * 0.02;
     }
 
     // Real audio overrides the synthetic envelope: kicks punch the pulse/flash,

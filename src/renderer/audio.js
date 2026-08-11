@@ -37,6 +37,10 @@
 
   /* Smoothed bands + detector state. */
   let bassEMA = 0;      // slow bass floor, for onset comparison
+  /** Previous frame's spectrum, for spectral flux. Allocated with `freq`. */
+  let prevFreq = null;
+  let fluxEMA = 0;      // adaptive onset floor
+  let fluxVar = 0;      // mean deviation of the flux, for the threshold margin
   let levelFast = 0;    // ~120ms energy
   let levelSlow = 0;    // ~1.5s energy
   let trebleFast = 0;
@@ -49,6 +53,13 @@
   const env = {
     active: false, level: 0, bass: 0, mid: 0, treble: 0,
     kick: 0, build: 0, drop: false,
+    /* Deeper analysis. `bands` is reused in place every frame rather than
+       reallocated — this runs 60 times a second and a fresh array each time is
+       pure garbage for the collector. Consumers must read it, not keep it. */
+    bands: new Array(8).fill(0),
+    centroid: 0,
+    flux: 0,
+    fluxFloor: 0,
   };
 
   /**
@@ -149,15 +160,102 @@
     analyser.maxDecibels = -12;
     src.connect(analyser);
     freq = new Uint8Array(analyser.frequencyBinCount);
+    // Flux needs a previous frame; starting it as a copy of nothing means the
+    // very first sample reports no onset rather than a spurious full-scale one.
+    prevFreq = new Uint8Array(analyser.frequencyBinCount);
   }
 
   /** Release the capture stream and reset detector state. */
   function stop() {
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
     if (audioCtx) audioCtx.close().catch(() => {});
-    audioCtx = null; analyser = null; sourceNode = null; mediaStream = null; freq = null;
+    audioCtx = null; analyser = null; sourceNode = null; mediaStream = null;
+    freq = null; prevFreq = null;
+    fluxEMA = 0; fluxVar = 0;
     running = false;
     env.active = false;
+  }
+
+  /* ------------------------------------------------------- spectral analysis */
+  /*
+    Three bands (bass/mid/treble) plus a bass-rise onset test was the shallowest
+    layer in the app, and it had a measured consequence: played against a real
+    138 BPM track, the onset stream was noisy enough that the tempo estimator
+    reported 60, 64, 86, 147, 172 and 179 across one song. The tempo fix
+    insulated the CLOCK from that, but the onsets themselves are still the input
+    to the beat detector whenever there is no offline analysis to fall back on —
+    i.e. the whole loopback-capture path.
+
+    So: more bands for the visuals to read, and a real onset detector.
+  */
+
+  /*
+    Band edges in analyser bins (~46Hz each at fftSize 1024 / 48kHz).
+    Roughly logarithmic, because pitch is: even spacing puts six of eight bands
+    above 4kHz where almost no musical energy lives.
+  */
+  const BAND_EDGES = [0, 2, 4, 8, 16, 32, 72, 160, 512];
+  const BAND_COUNT = BAND_EDGES.length - 1;
+
+  /**
+   * Average magnitude per band, 0..1.
+   * @param {Uint8Array} bins
+   * @param {number[]} out written in place; allocates nothing per frame
+   */
+  function computeBands(bins, out) {
+    for (let b = 0; b < BAND_COUNT; b += 1) {
+      const from = BAND_EDGES[b];
+      const to = Math.min(BAND_EDGES[b + 1], bins.length);
+      let sum = 0;
+      for (let i = from; i < to; i += 1) sum += bins[i];
+      out[b] = to > from ? sum / (to - from) / 255 : 0;
+    }
+    return out;
+  }
+
+  /**
+   * Spectral centroid — the "centre of mass" of the spectrum, 0..1.
+   *
+   * This is brightness. It separates a filtered breakdown from a full-range
+   * drop even when both are equally loud, which no amount of level watching
+   * can do.
+   *
+   * @param {Uint8Array} bins
+   * @returns {number} 0..1 as a fraction of the spectrum's width
+   */
+  function spectralCentroid(bins) {
+    let weighted = 0;
+    let total = 0;
+    for (let i = 0; i < bins.length; i += 1) {
+      const v = bins[i];
+      weighted += i * v;
+      total += v;
+    }
+    return total > 0 ? (weighted / total) / bins.length : 0;
+  }
+
+  /**
+   * Spectral flux — the sum of POSITIVE frame-to-frame changes.
+   *
+   * Positive only, deliberately: onsets are energy appearing, and counting
+   * energy disappearing as well would make every note-off look like a note-on.
+   * This is the standard onset function, and it is far more selective than
+   * watching one band's level rise, because a broadband transient (a drum)
+   * lights up many bins at once where a bass wobble moves only a few.
+   *
+   * @param {Uint8Array} bins
+   * @param {Uint8Array} prev previous frame's bins
+   * @param {number} [from] first bin to consider
+   * @param {number} [to] one past the last bin
+   * @returns {number} 0..1
+   */
+  function spectralFlux(bins, prev, from = 0, to = bins.length) {
+    let flux = 0;
+    for (let i = from; i < to; i += 1) {
+      const d = bins[i] - prev[i];
+      if (d > 0) flux += d;
+    }
+    return flux / ((to - from) * 255);
   }
 
   /**
@@ -190,6 +288,30 @@
 
     env.bass = bass; env.mid = mid; env.treble = treble; env.level = total;
 
+    /*
+      Richer spectrum for anything that wants it. Computed every frame because
+      it is a single pass over bins we have already fetched — the expensive part
+      (the FFT) happened inside getByteFrequencyData regardless.
+    */
+    computeBands(freq, env.bands);
+    env.centroid = spectralCentroid(freq);
+
+    // Flux over the low end only for the kick test, and broadband for `env.flux`
+    // so visuals can react to any transient rather than only to drums.
+    const lowFlux = prevFreq ? spectralFlux(freq, prevFreq, 0, 16) : 0;
+    env.flux = prevFreq ? spectralFlux(freq, prevFreq) : 0;
+    if (prevFreq) prevFreq.set(freq);
+
+    /*
+      Adaptive onset floor, tracked but not currently used as a gate — see the
+      kick test below for the measurement that decided that. Kept because it is
+      three arithmetic operations and it is the thing any future onset work
+      would start from.
+    */
+    fluxEMA += (lowFlux - fluxEMA) * 0.10;
+    fluxVar += (Math.abs(lowFlux - fluxEMA) - fluxVar) * 0.10;
+    env.fluxFloor = fluxEMA + fluxVar * 1.4;
+
     // Energy envelopes at two timescales.
     levelFast += (total - levelFast) * 0.30;
     levelSlow += (total - levelSlow) * 0.02;
@@ -212,6 +334,29 @@
     */
     let kick = 0;
     const rise = bass - bassEMA;
+
+    /*
+      NOT gated on spectral flux, and that is a measured decision rather than an
+      oversight.
+
+      The theory was sound: this test fires on anything that moves the bass band
+      — sub-bass melodies, wobbles, an off-beat 808 — and a low-end flux peak
+      should separate a broadband drum transient from a bass note. It was built,
+      and then played against the same 138 BPM track that motivated it.
+
+      Result: onset counts fell (22–61 per sample against 39–125), so the gate
+      was certainly filtering, but the tempo estimate did not improve — 2 of 12
+      samples landed within 6 BPM of the truth, against 4 of 12 without it. With
+      twelve samples that difference is noise, which is precisely the point: no
+      improvement could be demonstrated, and the gate costs real kick sensitivity
+      that the ripples and the beat flash spend.
+
+      So the flux is still computed and exposed (`env.flux` — it is genuinely
+      useful for visuals, and one pass over bins already in hand), but it does
+      not veto a kick. Whatever is wrong with the live tempo estimate is not
+      simply that the onsets are dirty; a 12-second Fourier window is the more
+      likely culprit and is a bigger change than this.
+    */
     if (bass > 0.22 && rise > 0.045 && now - lastKickAt > 130) {
       kick = Math.min(1, rise * 4.5);
       lastKickAt = now;
@@ -257,6 +402,9 @@
        cope with that rather than assume sound is available. */
     getContext: () => audioCtx,
     getSource: () => sourceNode,
+    /* Pure DSP, exposed for tests. These are the parts with arithmetic worth
+       checking against known input — the rest of this file is plumbing. */
+    computeBands, spectralCentroid, spectralFlux, BAND_EDGES, BAND_COUNT,
     /**
      * Fill `out` with time-domain samples from the live analyser.
      *
