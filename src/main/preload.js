@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('player', {
      wheel/drag/focus work; false settles it back behind the desktop. */
   wallpaperInteract: (on) => ipcRenderer.invoke('wallpaper-interact', on),
 
+  /* Local developer-CLI fallback for the AI features (Claude/Gemini/Ollama/…). */
+  localcliDetect: () => ipcRenderer.invoke('localcli-detect'),
+  localcliStatus: () => ipcRenderer.invoke('localcli-status'),
+  localcliConsent: (id) => ipcRenderer.invoke('localcli-consent', id),
+  onLocalcliOffer: (cb) => ipcRenderer.on('localcli-offer', (_e, data) => cb(data)),
+
   /** Every MilkDrop preset name the installed app holds. */
   milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),
   /** One preset, parsed. Read from disk in main; see presetlib.js. */

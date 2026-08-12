@@ -257,6 +257,23 @@
               title="Installs by itself next time you quit">Later</button>
     </section>
 
+    <!-- Local-CLI fallback. When every cloud AI provider fails (quota, a
+         revoked key, no network) and the user has a developer CLI installed,
+         offer to use it locally rather than leaving the AI features dead. Never
+         shown unprompted — only after a real failure — and never acts without
+         an explicit pick, since it runs the user's own tools. -->
+    <section id="localcli-card" class="nudge nudge--update" role="status" hidden
+             aria-label="Use a local AI tool">
+      <div class="localcli__body">
+        <span class="nudge__text" id="localcli-text">
+          Cloud AI is unavailable right now. Use a tool you already have installed?
+        </span>
+        <div id="localcli-options" class="localcli__options"></div>
+      </div>
+      <button id="localcli-dismiss" class="chip chip--muted" type="button"
+              title="Not now">✕</button>
+    </section>
+
     <!-- First run. A new user gets a transparent overlay and a row of
          single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do — and
          the row itself is invisible until the cursor moves, so many never find

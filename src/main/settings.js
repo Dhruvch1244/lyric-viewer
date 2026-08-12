@@ -1,8 +1,31 @@
 'use strict';
 
-const { app } = require('electron');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+
+/**
+ * The userData directory, resilient to running outside Electron.
+ *
+ * Electron's `app.getPath('userData')` is the real answer in the app. In a bare
+ * `node --test` run there is no Electron app, so `require('electron')` yields a
+ * stub with no `app` and `getPath` throws — which used to crash any module that
+ * constructed a Settings at load time. Fall back to a per-OS config dir so the
+ * store works headless too.
+ *
+ * @returns {string}
+ */
+function userDataDir() {
+  try {
+    // eslint-disable-next-line global-require
+    const { app } = require('electron');
+    if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  } catch { /* not in Electron — fall through */ }
+  const base = process.env.APPDATA
+    || process.env.XDG_CONFIG_HOME
+    || path.join(os.homedir(), '.config');
+  return path.join(base, 'lyric-overlay');
+}
 
 /**
  * Tiny JSON-backed settings store.
@@ -13,7 +36,7 @@ const path = require('path');
  */
 class Settings {
   constructor() {
-    this.file = path.join(app.getPath('userData'), 'settings.json');
+    this.file = path.join(userDataDir(), 'settings.json');
     this.data = this.#load();
   }
 

@@ -35,7 +35,8 @@ const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
 const { fetchArtwork, fetchArtworkCandidates, downloadImage } = require('./artwork');
-const { activeProvider } = require('./llm');
+const { activeProvider, setAllFailedHook } = require('./llm');
+const localcli = require('./localcli');
 const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
 
@@ -1117,6 +1118,25 @@ app.whenReady().then(() => {
   win = createWindow();
   registerShortcuts();
 
+  /*
+    When every cloud provider fails, offer the local-CLI fallback — but only
+    if the user has an installed CLI and has not already decided. Failure-driven
+    (not a startup nag) because that is the moment it is actually useful, and
+    once per session so a run of failures does not stack cards.
+  */
+  let offeredCliThisSession = false;
+  setAllFailedHook(() => {
+    if (offeredCliThisSession) return;
+    const decided = localcli.consent();
+    if (decided.consented || decided.id === 'declined') return;
+    localcli.detect().then((clis) => {
+      const installed = clis.filter((c) => c.installed);
+      if (installed.length === 0) return; // nothing to offer; stay quiet
+      offeredCliThisSession = true;
+      send('localcli-offer', { detected: clis });
+    }).catch(() => { /* detection failed; no offer */ });
+  });
+
   /* The overlay has no window chrome and hides on a hotkey, so once it is
      running nothing on screen says it exists. The tray fixes that and gives
      background work somewhere to report that is not inside a hidden HUD. */
@@ -1206,6 +1226,14 @@ app.whenReady().then(() => {
   ipcMain.handle('wallpaper-interact', (_e, on) => {
     setWallpaperInteractive(Boolean(on));
     return { status: 'ok' };
+  });
+
+  /* Local developer-CLI fallback for the AI features. See localcli.js. */
+  ipcMain.handle('localcli-detect', () => localcli.detect());
+  ipcMain.handle('localcli-status', () => localcli.consent());
+  ipcMain.handle('localcli-consent', (_e, id) => {
+    localcli.setConsent(id || null);
+    return localcli.consent();
   });
 
   /* Background work, forwarded from the renderer's job map. Only the jobs in

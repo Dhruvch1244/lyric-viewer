@@ -89,6 +89,10 @@ const els = {
   updateVersion: document.getElementById('update-version'),
   updateInstall: document.getElementById('update-install'),
   updateLater: document.getElementById('update-later'),
+  localcliCard: document.getElementById('localcli-card'),
+  localcliText: document.getElementById('localcli-text'),
+  localcliOptions: document.getElementById('localcli-options'),
+  localcliDismiss: document.getElementById('localcli-dismiss'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -4317,6 +4321,71 @@ if (window.player.onUpdateState) window.player.onUpdateState(applyUpdateState);
    run, and the push-only path would then never fire. */
 if (window.player.getUpdateState) {
   window.player.getUpdateState().then(applyUpdateState).catch(() => { /* not packaged */ });
+}
+
+/* ------------------------------------------------------- local-CLI fallback */
+/*
+  When every cloud AI provider has failed, main sends `localcli-offer` with the
+  CLIs it detected. This turns that into a card: one button per installed CLI to
+  turn it on, an install hint for the rest, and a dismiss that is remembered so
+  it does not ask again. Nothing runs a CLI until a button here is clicked —
+  consent is the whole point.
+*/
+function closeLocalcliCard() {
+  if (els.localcliCard) els.localcliCard.hidden = true;
+}
+
+function showLocalcliOffer(detected) {
+  if (!els.localcliCard || !els.localcliOptions) return;
+  const clis = Array.isArray(detected) ? detected : [];
+  const installed = clis.filter((c) => c.installed);
+
+  els.localcliOptions.replaceChildren();
+
+  if (installed.length > 0) {
+    if (els.localcliText) {
+      els.localcliText.textContent = 'Cloud AI is unavailable. Use a tool you already have?';
+    }
+    for (const c of installed) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.textContent = `Use ${c.label}${c.unverified ? ' (beta)' : ''}`;
+      btn.title = c.unverified
+        ? 'Its non-interactive mode is unverified — may not work'
+        : `Run ${c.label} locally for lyric AI`;
+      btn.addEventListener('click', async () => {
+        await window.player.localcliConsent(c.id);
+        closeLocalcliCard();
+        setStatus(`AI features will use ${c.label} from now on`);
+      });
+      els.localcliOptions.appendChild(btn);
+    }
+  } else {
+    // None installed: offer install hints for the ones worth getting.
+    if (els.localcliText) {
+      els.localcliText.textContent = 'Cloud AI is unavailable. Install a local AI CLI to keep these features working:';
+    }
+    for (const c of clis.slice(0, 3)) {
+      const hint = document.createElement('span');
+      hint.className = 'localcli__hint';
+      hint.textContent = `${c.label}: ${c.install}`;
+      els.localcliOptions.appendChild(hint);
+    }
+  }
+
+  els.localcliCard.hidden = false;
+}
+
+if (els.localcliDismiss) {
+  els.localcliDismiss.addEventListener('click', async () => {
+    closeLocalcliCard();
+    // Remembered as a decision so it does not ask again.
+    await window.player.localcliConsent('declined');
+  });
+}
+if (window.player.onLocalcliOffer) {
+  window.player.onLocalcliOffer(({ detected }) => showLocalcliOffer(detected));
 }
 
 /* ------------------------------------------------------------------- wiring */
