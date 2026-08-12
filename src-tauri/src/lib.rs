@@ -301,6 +301,8 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
         if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
             *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
         }
+        let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
+        set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
 
         // Disk cache hit → replay immediately, offline.
         if let Some(path) = lyrics_cache_path(&app, &key) {
@@ -947,8 +949,43 @@ fn save_beatmap(_payload: Value) {}
 #[tauri::command]
 fn save_heatmap(_payload: Value) {}
 
+/// Update the tray tooltip with the current song + any background work, so the
+/// chromeless overlay has somewhere that says what it is doing.
+fn set_tray_tooltip(app: &AppHandle, text: &str) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
 #[tauri::command]
-fn report_jobs(_payload: Value) {}
+fn report_jobs(payload: Value, cur: State<Mutex<CurTrack>>, app: AppHandle) {
+    let jobs = payload
+        .get("jobs")
+        .and_then(|j| j.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|j| j.get("label").and_then(|l| l.as_str()))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .unwrap_or_default();
+    let song = {
+        let c = cur.lock().unwrap();
+        if c.title.is_empty() {
+            "Nothing playing".to_string()
+        } else if c.artist.is_empty() {
+            c.title.clone()
+        } else {
+            format!("{} — {}", c.title, c.artist)
+        }
+    };
+    let text = if jobs.is_empty() {
+        format!("Lyric Overlay\n{song}")
+    } else {
+        format!("Lyric Overlay\n{song}\n{jobs}")
+    };
+    set_tray_tooltip(&app, &text);
+}
 
 /// Auto-transcription (Whisper) is the one remaining feature: in Electron it ran
 /// through onnxruntime-node in the main process; the chosen Tauri path runs it
@@ -1074,7 +1111,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&toggle, &PredefinedMenuItem::separator(app)?, &quit])?;
 
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .tooltip("Lyric Overlay")
         .on_menu_event(|app, event| match event.id.as_ref() {
