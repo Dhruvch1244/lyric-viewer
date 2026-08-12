@@ -202,6 +202,11 @@ let pulse = 0;
 let baseEnergy = 0.35;
 /** Current song mood label, for the status line. */
 let currentMood = null;
+/**
+ * The visual profile derived from the song's mood + energy — motion character,
+ * not just palette. Neutral until the sentiment pass lands. See mood.js.
+ */
+let moodProfile = { key: 'neutral', motion: 1, turbulence: 1, flicker: 1, warmth: 0 };
 
 /* ---- build-up / drop engine (no audio yet — inferred from lyric gaps) ---- */
 /** 0..1 ramp while an instrumental gap approaches its next lyric. */
@@ -2985,8 +2990,16 @@ function drawBackdrop(now) {
     // Sentiment energy raises the constant floor of motion, so high-energy songs
     // stay visibly more alive than mellow ones even between lyric lines. Build-up
     // and drop add a temporary surge on top.
-    const life = Math.min(1, intensity + ambient + baseEnergy * 0.45 + buildup * 0.5);
-    const motion = 1 + baseEnergy * 1.4 + buildup * 1.6 + dropFlash * 1.2;
+    /*
+      The mood profile shapes the CHARACTER of the motion on top of energy — a
+      calm song churns less and a driving one more, even at the same energy.
+      Applied as a gentle multiplier (clamped 0.4..2 in mood.js) so it colours
+      the feel without ever stalling the field or running it away. Build-up and
+      drop surges are left un-multiplied: a drop should hit hard regardless of
+      the song's baseline mood.
+    */
+    const life = Math.min(1, (intensity + ambient + baseEnergy * 0.45) * moodProfile.motion + buildup * 0.5);
+    const motion = 1 + (baseEnergy * 1.4) * moodProfile.motion + buildup * 1.6 + dropFlash * 1.2;
     const accent = (palette && palette[3]) || '#e94560';
 
     // Per-frame dt (backdrop loop is independent of the lyric frame loop).
@@ -3590,7 +3603,10 @@ function drawBackdrop(now) {
     // a brief additive veil. A per-frame random keeps it a genuine flicker rather
     // than a smooth fade, punching the "moment" hard on drops.
     if (flicker > 0.02) {
-      const strobe = flicker * (0.5 + Math.random() * 0.5);
+      // Mood shapes how hard the screen strobes: a calm song barely flickers, a
+      // dark or driving one leans in. Applied at the point of use so the flicker
+      // state still decays normally.
+      const strobe = flicker * moodProfile.flicker * (0.5 + Math.random() * 0.5);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.5, strobe * 0.5);
       ctx.fillStyle = Math.random() < 0.5 ? '#ffffff' : accentLive;
@@ -4608,6 +4624,7 @@ window.player.onTrack((track) => {
   // Reset mood/energy; the sentiment analysis (if available) upgrades this soon.
   baseEnergy = typeof track.energy === 'number' ? track.energy : 0.35;
   currentMood = null;
+  applyMoodProfile(); // back to neutral until this track's mood lands
   buildup = 0;
   dropFlash = 0;
 
@@ -4738,8 +4755,22 @@ window.player.onMood((data) => {
   }
   if (typeof data.energy === 'number') baseEnergy = data.energy;
   currentMood = data.mood || null;
+  applyMoodProfile();
   if (currentMood) setStatus(currentMood);
 });
+
+/**
+ * Derive the visual profile from the current mood + energy and expose its key
+ * to CSS. The renderer folds `moodProfile.motion` / `.flicker` into the motion
+ * it already computes each frame; the `data-mood` attribute lets the stylesheet
+ * tune anything CSS owns (glow weight, wash) per character.
+ */
+function applyMoodProfile() {
+  moodProfile = window.MoodProfile
+    ? window.MoodProfile.profileFor(currentMood, baseEnergy)
+    : moodProfile;
+  document.body.dataset.mood = moodProfile.key;
+}
 
 window.player.onLyrics((payload) => {
   if (!isForCurrentTrack(payload.track)) return;
@@ -6436,3 +6467,4 @@ window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
+applyMoodProfile(); // sets body[data-mood="neutral"] so CSS always has a value
