@@ -9,7 +9,9 @@
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
 mod artwork;
+mod llm;
 mod lyrics;
+mod mood;
 #[cfg(windows)]
 mod wallpaper;
 
@@ -269,10 +271,13 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                    let cue_texts = cue_texts_of(&cached);
+                    let cached_mood = cached.get("mood").cloned();
                     let mut payload = cached;
                     payload["track"] = json!({ "title": title, "artist": artist });
                     payload["origin"] = json!("disk");
                     let _ = app.emit("lyrics", payload);
+                    resolve_mood(&app, &title, &artist, &key, cue_texts, cached_mood);
                     return;
                 }
             }
@@ -286,6 +291,7 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
         let track = lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
         match lyrics::fetch_synced(&track) {
             Some((cues, source)) => {
+                let cue_texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
                 let payload = json!({
                     "cues": cues,
                     "cuesDevanagari": Value::Null,
@@ -305,6 +311,8 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                 out["track"] = json!({ "title": title, "artist": artist });
                 out["origin"] = json!("network");
                 let _ = app.emit("lyrics", out);
+                // Upgrade the hash palette to a mood-driven one (LLM, cached).
+                resolve_mood(&app, &title, &artist, &key, cue_texts, None);
             }
             None => {
                 let _ = app.emit(
@@ -317,6 +325,58 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                 );
             }
         }
+    });
+}
+
+/// The lyric texts from a cached `lyrics` payload, for re-running mood analysis.
+fn cue_texts_of(payload: &Value) -> Vec<String> {
+    payload
+        .get("cues")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.get("text").and_then(|t| t.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Emit the mood-driven palette for a track. A cached mood emits immediately;
+/// otherwise the LLM analyses the lyrics once, the result is merged back into the
+/// lyrics cache file, and it is emitted. No-op when no provider is configured.
+fn resolve_mood(
+    app: &AppHandle,
+    title: &str,
+    artist: &str,
+    key: &str,
+    cue_texts: Vec<String>,
+    cached_mood: Option<Value>,
+) {
+    if let Some(m) = cached_mood {
+        let mut payload = m;
+        payload["track"] = json!({ "title": title, "artist": artist });
+        let _ = app.emit("mood", payload);
+        return;
+    }
+    let app = app.clone();
+    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
+    std::thread::spawn(move || {
+        let Some(m) = mood::analyze(&cue_texts) else { return };
+        let mood_val = json!({
+            "mood": m.mood, "hue": m.hue, "energy": m.energy, "palette": m.palette,
+        });
+        // Merge the mood into the lyrics cache so it runs once per song.
+        if let Some(path) = lyrics_cache_path(&app, &key) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
+                    cached["mood"] = mood_val.clone();
+                    let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+                }
+            }
+        }
+        let mut payload = mood_val;
+        payload["track"] = json!({ "title": title, "artist": artist });
+        let _ = app.emit("mood", payload);
     });
 }
 
@@ -493,7 +553,7 @@ fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle)
 
 #[tauri::command]
 fn get_provider_status() -> Value {
-    json!({ "provider": null })
+    json!({ "provider": llm::active_provider() })
 }
 
 #[tauri::command]
