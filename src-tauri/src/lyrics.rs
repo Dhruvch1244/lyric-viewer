@@ -227,6 +227,49 @@ pub fn parse_lrc(lrc: &str) -> Vec<Cue> {
     out
 }
 
+/// Fetch *plain* (unsynced) lyrics — LRCLIB's plain catalogue is far larger than
+/// its synced one. Used with a transcription's timings (see align.rs) to sync a
+/// song that has the real words but no timing.
+pub fn fetch_plain(track: &Track) -> Option<String> {
+    let query = format!("{} {}", clean_title(&track.title), track.artist);
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let resp = ureq::get(LRCLIB_SEARCH)
+        .set("User-Agent", USER_AGENT)
+        .query("q", query)
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .ok()?;
+    let results: Value = resp.into_json().ok()?;
+    let arr = results.as_array()?;
+    let mut best: Option<String> = None;
+    let mut best_score = f64::NEG_INFINITY;
+    for cand in arr {
+        let plain = cand.get("plainLyrics").and_then(|v| v.as_str()).unwrap_or("");
+        if plain.trim().is_empty() {
+            continue;
+        }
+        // score_candidate rejects entries without syncedLyrics; we want exactly
+        // the ones lacking it, so score a copy that satisfies the guard.
+        let mut c = cand.clone();
+        if let Some(obj) = c.as_object_mut() {
+            obj.insert("syncedLyrics".into(), Value::String("x".into()));
+        }
+        let s = score_candidate(&c, track);
+        if s > best_score {
+            best_score = s;
+            best = Some(plain.to_string());
+        }
+    }
+    // Same floor the JS uses — a bad match with confident timing is worse than none.
+    if best_score < 1.2 {
+        return None;
+    }
+    best
+}
+
 /// Look up synced lyrics for a track. Returns (cues, source label) or None.
 pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
     let query = format!("{} {}", clean_title(&track.title), track.artist);

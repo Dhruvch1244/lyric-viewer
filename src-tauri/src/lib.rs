@@ -8,6 +8,7 @@
 //! The renderer talks to it through `window.player` (see tauri-shim.js), which
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
+mod align;
 mod artwork;
 mod attribute;
 mod kugou;
@@ -1023,6 +1024,62 @@ fn transcribe_audio(app: AppHandle, payload: Value) -> Value {
     json!({ "status": "unavailable" })
 }
 
+/// Re-emit a transcription progress update from the webview's Whisper run, so it
+/// reaches the renderer's existing onTranscribeProgress handler.
+#[tauri::command]
+fn report_transcribe_progress(app: AppHandle, data: Value) {
+    let _ = app.emit("transcribe-progress", data);
+}
+
+/// Finalise a webview Whisper result: align the raw transcription to the real
+/// plain lyrics where they exist (the correct words on the transcription's
+/// clock), cache it as normal synced lyrics for the next play, and report done.
+#[tauri::command]
+fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
+    let track = payload.get("track").cloned().unwrap_or(Value::Null);
+    let t = track_from_value(&track);
+    let raw_cues: Vec<lyrics::Cue> = payload
+        .get("cues")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    if raw_cues.is_empty() {
+        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+        return json!({ "status": "empty" });
+    }
+    let key = track_key(&t.artist, &t.title);
+
+    // Prefer the real words on the transcription's timing when we can anchor
+    // enough of them; otherwise keep the honest raw transcription.
+    let mut final_cues = raw_cues.clone();
+    let mut source = "whisper";
+    if let Some(plain) = lyrics::fetch_plain(&t) {
+        let lines = align::split_plain_lyrics(&plain);
+        let (aligned, coverage) = align::align_lyrics(&lines, &raw_cues, t.duration_ms);
+        if coverage >= 0.35 && !aligned.is_empty() {
+            final_cues = aligned;
+            source = "lrclib-plain+whisper";
+            let _ = app.emit(
+                "transcribe-progress",
+                json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }),
+            );
+        }
+    }
+
+    let lines = final_cues.len();
+    let payload_out = json!({
+        "title": t.title, "artist": t.artist,
+        "cues": final_cues,
+        "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+        "source": { "name": source },
+        "status": "ok", "indic": false, "hasWordTimings": false,
+    });
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::write(&path, serde_json::to_string(&payload_out).unwrap_or_default());
+    }
+    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "done", "lines": lines }));
+    json!({ "status": "ok", "lines": lines })
+}
+
 #[tauri::command]
 fn wallpaper_interact(_on: bool) {}
 
@@ -1332,6 +1389,8 @@ pub fn run() {
             set_local_track,
             end_local_playback,
             transcribe_audio,
+            report_transcribe_progress,
+            finalize_transcription,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
