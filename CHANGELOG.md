@@ -24,6 +24,12 @@ Bug fixes and UX, from real-use feedback on 0.23.0.
   longer runs a wizard you had to click through — it downloads and installs on
   restart without interaction.
 
+- **Switching to desktop mode was slow.** Entering it asked the Windows shell to
+  spawn the wallpaper surface with a one-second timeout, three times — up to
+  three seconds of frozen UI whenever the shell was momentarily busy. It now
+  aborts immediately if the shell isn't answering and caps the wait at 250ms;
+  measured, the switch dropped to 7–36ms.
+
 ### Changed
 
 - **Language toggles moved to the top-right, always visible.** Script (अ) and
