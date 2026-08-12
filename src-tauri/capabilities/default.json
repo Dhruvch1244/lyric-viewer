@@ -9,6 +9,8 @@
     "core:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

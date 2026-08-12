@@ -761,9 +761,53 @@ fn get_provider_status() -> Value {
     json!({ "provider": llm::active_provider() })
 }
 
+/// Last-known auto-update state, mirrored to the renderer's update card.
+struct UpdateStore(Mutex<Value>);
+
+/// Check GitHub for a newer signed release; store + emit the result. Silent on
+/// no-update / no-network (the card only appears when there is something to say).
+fn check_for_update(app: AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    tauri::async_runtime::spawn(async move {
+        let Ok(updater) = app.updater() else { return };
+        if let Ok(Some(update)) = updater.check().await {
+            let state = json!({ "available": true, "version": update.version, "status": "available" });
+            if let Some(st) = app.try_state::<UpdateStore>() {
+                *st.0.lock().unwrap() = state.clone();
+            }
+            let _ = app.emit("update-state", state);
+        }
+    });
+}
+
+/// Download and install the pending update, then restart into it.
+fn install_update(app: AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    tauri::async_runtime::spawn(async move {
+        let Ok(updater) = app.updater() else { return };
+        if let Ok(Some(update)) = updater.check().await {
+            let _ = app.emit("update-state", json!({ "status": "downloading" }));
+            if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+                app.restart();
+            } else {
+                let _ = app.emit("update-state", json!({ "status": "error" }));
+            }
+        }
+    });
+}
+
 #[tauri::command]
-fn get_update_state() -> Value {
-    json!({ "available": false })
+fn get_update_state(store: State<UpdateStore>) -> Value {
+    store.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn update_action(action: String, app: AppHandle) {
+    match action.as_str() {
+        "check" => check_for_update(app),
+        "install" => install_update(app),
+        _ => {} // dismiss: nothing to do
+    }
 }
 
 #[tauri::command]
@@ -975,6 +1019,8 @@ fn register_hotkeys(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = build_tray(&handle);
@@ -985,6 +1031,10 @@ pub fn run() {
             let mode = prefs.display_mode.clone();
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(CurTrack::default()));
+            app.manage(UpdateStore(Mutex::new(json!({ "available": false }))));
+
+            // Check for a newer signed release shortly after boot.
+            check_for_update(handle.clone());
 
             // Fill the primary monitor at the remembered display mode.
             size_overlay(&handle, &mode);
@@ -1027,6 +1077,7 @@ pub fn run() {
             request_translation,
             get_provider_status,
             get_update_state,
+            update_action,
             list_synced,
             milkdrop_catalogue,
             milkdrop_preset,
