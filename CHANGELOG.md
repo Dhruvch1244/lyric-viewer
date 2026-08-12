@@ -48,6 +48,15 @@ stop throwing your song away.
   short, warm summary of what changed — separate from the first-run welcome,
   shown once per new version.
 
+- **Local AI fallback when the cloud fails.** When every configured cloud
+  provider is unavailable — a spent quota, a bad key, no network — and you have
+  a developer CLI installed, the app offers to use it instead of letting the AI
+  features (translation, transcript correction, per-line artist attribution) go
+  dark. It supports Claude, Gemini, Ollama, GitHub Models (`gh`) and Antigravity,
+  tries them only after the cloud, and never runs one without you picking it
+  first. Verified end to end with `claude`. This is also the first path that
+  makes per-line attribution work on a machine with no working cloud key.
+
 ## 0.21.0 — 2026-08-11
 
 The release where three things everyone believed turned out to be wrong, and
