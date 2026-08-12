@@ -2,6 +2,14 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.27.4 — 2026-08-13
+
+- **Signed Windows installers.** Windows builds are now Authenticode-signed via
+  SignPath, so the installer carries a publisher identity ("Dhruv Choudhary")
+  instead of being unsigned. The signature is applied before the updater
+  signature, so auto-update stays valid. (The certificate is self-signed for
+  now, so Windows SmartScreen may still warn on first download.)
+
 ## 0.27.3 — 2026-08-13
 
 - **Fixed audio capture failing to start.** The picker-bypass experiment in
