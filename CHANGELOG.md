@@ -37,9 +37,11 @@ Bug fixes and UX, from real-use feedback on 0.23.0.
   Compact modes are reachable again. `Ctrl+Alt+M` still quick-toggles the
   desktop.
 
-- **The local-AI picker is clearer.** When it offers a CLI, the verified one
-  (Claude) is listed first and marked ✓; the others are labelled best-effort or
-  experimental, so you can tell what will actually work.
+- **The local-AI picker is clearer, and reachable on demand.** When it offers a
+  CLI, the verified one (Claude) is listed first and marked ✓; the others are
+  labelled best-effort or experimental. And it no longer only appears after a
+  failure — the 🔑 key panel now has a "Local AI" row to pick (or turn off) a
+  CLI any time.
 
 ## 0.23.0 — 2026-08-12
 
