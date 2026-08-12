@@ -67,6 +67,16 @@ jobs:
         # JS deps present for the vendor:whisper step, not byte-for-byte pinning.
         run: npm install
 
+      - name: Install SignPath module (Windows)
+        # Provides Submit-SigningRequest, called by scripts/signpath-sign.ps1 via
+        # Tauri's bundle.windows.signCommand. CurrentUser scope + Windows PowerShell
+        # 5.1 so the signCommand's own `powershell` process finds the module.
+        if: matrix.platform == 'windows-latest'
+        shell: powershell
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name SignPath -Force -Scope CurrentUser
+
       - name: Build + publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -75,6 +85,9 @@ jobs:
           # ~/.tauri/lyric-overlay.key on the dev machine; the password is empty).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Authenticode signing via SignPath (Windows only; ignored elsewhere).
+          # Regenerate the token in SignPath if it is ever exposed in cleartext.
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Lyric Overlay ${{ github.ref_name }}'
