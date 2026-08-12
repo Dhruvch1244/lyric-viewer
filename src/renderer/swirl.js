@@ -75,6 +75,7 @@ uniform int   u_octaves;
 uniform float u_bandBias;
 uniform float u_vortexBias;
 uniform float u_glowBias;
+uniform float u_stars;     // deep-space starfield intensity (0 = off)
 
 const int MAX_OCTAVES = 6;
 
@@ -141,6 +142,25 @@ vec2 vortex(vec2 p, vec2 c, float strength) {
   float s = sin(a);
   float co = cos(a);
   return c + mat2(co, -s, s, co) * d;
+}
+
+/* --- deep-space stars (GPU) -------------------------------------------- */
+/*
+  A hashed grid of sparse, twinkling points. This is a 2D layer that used to
+  cost the CPU one draw per star; on the GPU it is a few instructions per pixel,
+  reuses the field own hash, and scales to any density for free. thresh is how
+  empty the grid is (higher = sparser); scale is the grid frequency.
+*/
+float starLayer(vec2 uv, float t, float thresh, float scale) {
+  vec2 g = uv * scale;
+  vec2 cell = floor(g);
+  float h = hash(cell);
+  if (h < thresh) return 0.0;                 // most cells hold no star
+  vec2 f = fract(g) - 0.5;
+  vec2 off = (vec2(hash(cell + 1.7), hash(cell + 4.3)) - 0.5) * 0.6;
+  float d = length(f - off);
+  float tw = 0.55 + 0.45 * sin(t * (0.8 + h * 2.5) + h * 40.0);  // twinkle
+  return smoothstep(0.06, 0.0, d) * tw;
 }
 
 void main() {
@@ -221,6 +241,15 @@ void main() {
   // Depth vignette so the lyric column always sits on darker pixels.
   float vig = 1.0 - smoothstep(0.55, 1.35, length(uv) * 1.15);
   col *= 0.30 + 0.70 * vig;
+
+  // Deep-space starfield: two parallax layers, added after the vignette so the
+  // points stay crisp across the whole field. Reads as depth behind the liquid.
+  // Costs nothing on the CPU — this is the old galaxy-style layer, on the GPU.
+  if (u_stars > 0.001) {
+    float stars = starLayer(uv, t, 0.90, 7.0)
+                + starLayer(uv * 1.6 + vec2(3.1, 1.7), t * 1.3, 0.93, 12.0) * 0.6;
+    col += vec3(0.82, 0.88, 1.0) * stars * u_stars * (0.6 + u_beat * 0.6);
+  }
 
   fragColor = vec4(col, u_alpha);
 }
@@ -329,7 +358,7 @@ void main() {
     for (const name of [
       'u_res', 'u_time', 'u_pal0', 'u_pal1', 'u_pal2', 'u_pal3', 'u_alpha',
       'u_life', 'u_swirl', 'u_buildup', 'u_drop', 'u_beat', 'u_bass', 'u_octaves',
-      'u_bandBias', 'u_vortexBias', 'u_glowBias',
+      'u_bandBias', 'u_vortexBias', 'u_glowBias', 'u_stars',
     ]) {
       u[name] = gl.getUniformLocation(prog, name);
     }
@@ -407,6 +436,7 @@ void main() {
     gl.uniform1f(u.u_bandBias, style.bandBias == null ? 1 : style.bandBias);
     gl.uniform1f(u.u_vortexBias, style.vortexBias == null ? 1 : style.vortexBias);
     gl.uniform1f(u.u_glowBias, style.glowBias == null ? 1 : style.glowBias);
+    gl.uniform1f(u.u_stars, s.stars || 0);
     gl.uniform1i(u.u_octaves, octaves);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);

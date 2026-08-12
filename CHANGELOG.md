@@ -20,6 +20,13 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   motion the field already computes; drops still hit hard regardless. Unblockable
   end to end now via the local-CLI sentiment path.
 
+- **A GPU starfield.** A deep-space layer of sparse, twinkling stars now drifts
+  behind the swirl field — rendered inside the shader, so it costs the CPU
+  nothing where the old star layers cost a draw per point. The first step of
+  moving the 2D layers onto the GPU; the phyllotaxis galaxy port is still to
+  come. A shader that fails to compile degrades to the 2D wash rather than
+  breaking anything, and this one was verified compiling and visible.
+
 ### Notes
 
 - This is the first half of the "karaoke-grade sync" and "visual depth" work.

@@ -2392,6 +2392,16 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
     drop: dropFlash * kick,
     beat: beatFlash * kick,
     bass: bass * kick,
+    /*
+      Deep-space starfield, rendered on the GPU inside the swirl shader — a new
+      depth layer that costs the CPU nothing, where the old star/galaxy layers
+      cost one draw call per point. Kept subtle and lifted by energy so it reads
+      as depth behind the liquid, and pulled back hard for a solo/bare look that
+      wants the field and nothing else. (The phyllotaxis galaxy on the 2D canvas
+      is untouched; porting that faithfully is the larger remaining half of the
+      GPU-layer move — see NEXT_STEPS.)
+    */
+    stars: (style && style.bare) ? 0 : Math.min(1, 0.4 + life * 0.45),
     // Per-preset character, so the field changes with the look instead of
     // staying identical underneath every one of them.
     style,
@@ -4195,6 +4205,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.23.0': [
+    '<b>Karaoke word fill</b> — the word being sung now lights up left-to-right in time, instead of all at once.',
+    '<b>The visuals match the mood</b> — a calm song moves gently, a driving one harder, not just a different colour.',
+    '<b>A deep-space starfield</b> drifts behind the field now, rendered on the GPU.',
+    '<b>MilkDrop presets stick</b> — a preset you pick no longer snaps back to the default.',
+  ],
   '0.22.0': [
     '<b>Desktop mode is one toggle now</b> — the size chip (or Ctrl+Alt+M) flips between the overlay and living on your desktop, behind your icons.',
     '<b>Switching keeps your song playing</b> — no more restart when you flip modes.',
