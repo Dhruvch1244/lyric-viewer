@@ -30,6 +30,15 @@ contextBridge.exposeInMainWorld('player', {
   onDisplayMode: (cb) => ipcRenderer.on('display-mode', (_e, data) => cb(data)),
   setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
   getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
+  /* Ask to surface the wallpaper window while a scrollable panel is open, so
+     wheel/drag/focus work; false settles it back behind the desktop. */
+  wallpaperInteract: (on) => ipcRenderer.invoke('wallpaper-interact', on),
+
+  /* Local developer-CLI fallback for the AI features (Claude/Gemini/Ollama/…). */
+  localcliDetect: () => ipcRenderer.invoke('localcli-detect'),
+  localcliStatus: () => ipcRenderer.invoke('localcli-status'),
+  localcliConsent: (id) => ipcRenderer.invoke('localcli-consent', id),
+  onLocalcliOffer: (cb) => ipcRenderer.on('localcli-offer', (_e, data) => cb(data)),
 
   /** Every MilkDrop preset name the installed app holds. */
   milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),

@@ -98,9 +98,14 @@ function activeProvider() {
   return null;
 }
 
-/** @returns {boolean} Whether any provider is configured. */
+/**
+ * Whether any provider — a cloud key or a consented local CLI — can run.
+ * @returns {boolean}
+ */
 function isLLMAvailable() {
-  return activeProvider() !== null;
+  if (activeProvider() !== null) return true;
+  const cli = localCli();
+  return Boolean(cli && cli.isReady());
 }
 
 /**
@@ -356,6 +361,22 @@ async function callClaude({ system, user, schema }) {
  * @param {object} args.schema JSON Schema (draft form) describing the output.
  * @returns {Promise<object>} Parsed JSON matching the schema.
  */
+/**
+ * Whether a consented local developer CLI is ready to use.
+ *
+ * Required lazily to break the require cycle: localcli.js uses
+ * `parseJsonLoose` from this file, so it cannot be imported at load time here.
+ * @returns {import('./localcli')|null}
+ */
+function localCli() {
+  try {
+    // eslint-disable-next-line global-require
+    return require('./localcli');
+  } catch {
+    return null;
+  }
+}
+
 /** Every configured provider, in preference order. */
 function availableProviders() {
   const chain = [];
@@ -363,6 +384,11 @@ function availableProviders() {
   if (hasGroq()) chain.push(['groq', callGroq]);
   if (hasHuggingFace()) chain.push(['huggingface', callHuggingFace]);
   if (hasClaude()) chain.push(['claude', callClaude]);
+  /* The local CLI goes LAST, on purpose: it spends the user's own machine or
+     tokens, so a cloud key they configured should be tried first. It appears
+     only after they have explicitly consented to one. */
+  const cli = localCli();
+  if (cli && cli.isReady()) chain.push(['local-cli', cli.call]);
   return chain;
 }
 
@@ -384,9 +410,19 @@ function availableProviders() {
  * @param {{system: string, user: string, schema: object}} args
  * @returns {Promise<object>} the parsed result from whichever provider answered
  */
+/**
+ * Called when a conversion exhausts every provider. Main uses it to offer the
+ * local-CLI fallback exactly when the user's "if all three fail" case happens,
+ * rather than nagging up front. Optional; llm.js works without it.
+ * @type {null | (() => void)}
+ */
+let allFailedHook = null;
+function setAllFailedHook(fn) { allFailedHook = typeof fn === 'function' ? fn : null; }
+
 async function convert({ system, user, schema }) {
   const chain = availableProviders();
   if (chain.length === 0) {
+    if (allFailedHook) { try { allFailedHook(); } catch { /* never let the hook break a conversion */ } }
     throw new Error('No LLM provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, HF_API_KEY, or ANTHROPIC_API_KEY.');
   }
 
@@ -401,7 +437,11 @@ async function convert({ system, user, schema }) {
       console.warn(`[llm] ${name} failed, trying next provider:`, err.message);
     }
   }
+  if (allFailedHook) { try { allFailedHook(); } catch { /* as above */ } }
   throw new Error(`All ${chain.length} LLM provider(s) failed. ${failures.join(' | ')}`);
 }
 
-module.exports = { convert, isLLMAvailable, activeProvider, availableProviders };
+module.exports = {
+  convert, isLLMAvailable, activeProvider, availableProviders, parseJsonLoose,
+  setAllFailedHook,
+};

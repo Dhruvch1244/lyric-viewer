@@ -745,6 +745,25 @@ body.mode-wallpaper .poster {
   margin-bottom: var(--shell-bottom, 0px);
 }
 
+/* ---- Local-CLI offer ---- */
+.localcli__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.localcli__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.localcli__hint {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  align-self: center;
+}
+
 /* ---- Update surfaces ---- */
 /*
   The card reuses `.nudge` wholesale — same weight, same placement language,
@@ -984,6 +1003,13 @@ body.mode-wallpaper .poster {
   font-size: 1.25rem;
   letter-spacing: 0.02em;
   color: var(--ink-high, #fff);
+}
+
+.welcome__version {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-live, var(--accent, #e94560));
+  letter-spacing: 0.04em;
 }
 
 .welcome__lede {

@@ -105,7 +105,7 @@
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
-        <button id="btn-mode" class="chip" type="button" title="Size — fullscreen / bar / strip (Ctrl+Alt+M)">▭ Full</button>
+        <button id="btn-mode" class="chip" type="button" title="Live on your desktop, behind the icons (Ctrl+Alt+M)">▨ Desktop</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
@@ -257,6 +257,23 @@
               title="Installs by itself next time you quit">Later</button>
     </section>
 
+    <!-- Local-CLI fallback. When every cloud AI provider fails (quota, a
+         revoked key, no network) and the user has a developer CLI installed,
+         offer to use it locally rather than leaving the AI features dead. Never
+         shown unprompted — only after a real failure — and never acts without
+         an explicit pick, since it runs the user's own tools. -->
+    <section id="localcli-card" class="nudge nudge--update" role="status" hidden
+             aria-label="Use a local AI tool">
+      <div class="localcli__body">
+        <span class="nudge__text" id="localcli-text">
+          Cloud AI is unavailable right now. Use a tool you already have installed?
+        </span>
+        <div id="localcli-options" class="localcli__options"></div>
+      </div>
+      <button id="localcli-dismiss" class="chip chip--muted" type="button"
+              title="Not now">✕</button>
+    </section>
+
     <!-- First run. A new user gets a transparent overlay and a row of
          single-glyph chips with no explanation of what अ, ◐, ♫ or ⚡ do — and
          the row itself is invisible until the cursor moves, so many never find
@@ -281,6 +298,19 @@
       </ul>
       <div class="welcome__row">
         <button id="welcome-close" class="chip" type="button">Got it</button>
+      </div>
+    </section>
+
+    <!-- What's new, after an update. Different from the first-run welcome: a
+         returning user does not need the chips explained again, they want to
+         know what changed. Shown once per new version, friendly and short —
+         the list is filled by the renderer from a per-version highlights map. -->
+    <section id="whatsnew" class="welcome" hidden aria-label="What's new">
+      <h2 class="welcome__title">Hey — a few new things <span id="whatsnew-version" class="welcome__version"></span></h2>
+      <p class="welcome__lede">Thanks for keeping it running. Here's what changed:</p>
+      <ul id="whatsnew-list" class="welcome__keys"></ul>
+      <div class="welcome__row">
+        <button id="whatsnew-close" class="chip" type="button">Nice, got it</button>
       </div>
     </section>
 

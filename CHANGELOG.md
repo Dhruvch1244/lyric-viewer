@@ -2,6 +2,68 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.22.0 — 2026-08-12
+
+The release that made desktop mode actually usable, and made switching modes
+stop throwing your song away.
+
+### Fixed
+
+- **Switching modes lost everything.** Entering desktop/wallpaper mode rebuilt
+  the whole window — because the code believed a transparent window could not be
+  a wallpaper. It can (it composites over your real Windows wallpaper), so the
+  window is now created once and never rebuilt. The playing song, its position,
+  the lyrics, audio capture and any open panel all survive a switch now; before,
+  each toggle was effectively a restart to a blank state.
+
+- **Coming back to the overlay showed nothing.** Leaving desktop mode left the
+  window at the bottom of the z-order, so the overlay returned behind every
+  other window. It is now raised back to the front in the same native step that
+  detaches it from the desktop.
+
+- **Desktop mode was half-unusable.** Panels like the library and the 1754-preset
+  browser could be opened but not scrolled, because forwarded mouse input
+  covered clicks but not the wheel. Opening a panel now briefly brings the whole
+  window to the front so everything works — scroll, drag, clicks — and it
+  settles back behind your icons when you close it.
+
+- **A picked MilkDrop preset reverted to the original.** You'd choose a preset,
+  it would show, then a second or two later snap back. The FPS governor swaps
+  MilkDrop for a cheap fallback whenever the frame rate dips below 24 — and
+  MilkDrop dips often — and swapping back was wiping your choice and reloading
+  the look's default. Your pick now survives that bounce; only changing the look
+  itself clears it.
+
+### Changed
+
+- **One mode, plus a desktop toggle.** The size chip and `Ctrl+Alt+M` now simply
+  flip between the fullscreen overlay and living on your desktop, instead of
+  cycling four modes. The floating bar and taskbar strip are still in the code
+  but off the main path, so you can't land on a half-finished one by clicking
+  once too many.
+
+- **MilkDrop opens on a good preset.** The catalogue is 1754 presets and a large
+  share of them are dim, broken here, or ugly, so opening on a random one landed
+  on a dud more often than not. A curated shortlist of ten reliably-good presets
+  is now what the dice, the beat-synced cycle and the opening look draw from —
+  until you like some of your own, after which yours take over. The browser
+  still offers all 1754.
+
+### Added
+
+- **A friendly "what's new" card after an update.** A returning user sees a
+  short, warm summary of what changed — separate from the first-run welcome,
+  shown once per new version.
+
+- **Local AI fallback when the cloud fails.** When every configured cloud
+  provider is unavailable — a spent quota, a bad key, no network — and you have
+  a developer CLI installed, the app offers to use it instead of letting the AI
+  features (translation, transcript correction, per-line artist attribution) go
+  dark. It supports Claude, Gemini, Ollama, GitHub Models (`gh`) and Antigravity,
+  tries them only after the cloud, and never runs one without you picking it
+  first. Verified end to end with `claude`. This is also the first path that
+  makes per-line attribution work on a machine with no working cloud key.
+
 ## 0.21.0 — 2026-08-11
 
 The release where three things everyone believed turned out to be wrong, and

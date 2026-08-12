@@ -58,8 +58,9 @@ const SWP_NOSIZE = 0x0001;
 const SWP_NOZORDER = 0x0004;
 const SWP_FRAMECHANGED = 0x0020;
 
-/** Bottom of the Z-order, as a pseudo-handle. */
-const HWND_BOTTOM = 1;
+/** Z-order pseudo-handles, passed to SetWindowPos as integers. */
+const HWND_TOP = 0;
+const HWND_TOPMOST = -1;
 
 /** Give Progman a second to answer; it is a message pump, not a network. */
 const SPAWN_TIMEOUT_MS = 1000;
@@ -100,7 +101,12 @@ function bind() {
       GetWindowRect: lib.func('bool __stdcall GetWindowRect(void*, _Out_ RECT*)'),
       GetWindowLongPtrW: lib.func('intptr_t __stdcall GetWindowLongPtrW(void*, int)'),
       SetWindowLongPtrW: lib.func('intptr_t __stdcall SetWindowLongPtrW(void*, int, intptr_t)'),
-      SetWindowPos: lib.func('bool __stdcall SetWindowPos(void*, void*, int, int, int, int, unsigned int)'),
+      /* hWndInsertAfter is declared as intptr_t, not void*, so the special
+         z-order pseudo-handles (HWND_TOPMOST = -1, HWND_TOP = 0, HWND_BOTTOM =
+         1) can be passed as plain integers — koffi will not coerce a negative
+         number into a pointer. The real window handle in the first arg is still
+         a void*. */
+      SetWindowPos: lib.func('bool __stdcall SetWindowPos(void*, intptr_t, int, int, int, int, unsigned int)'),
       GetAsyncKeyState: lib.func('short __stdcall GetAsyncKeyState(int)'),
       WindowFromPoint: lib.func('void* __stdcall WindowFromPoint(POINT)'),
       GetParent: lib.func('void* __stdcall GetParent(void*)'),
@@ -305,7 +311,7 @@ function attach(nativeHandle) {
     const previous = user32.SetParent(hwnd, target);
 
     // The style change only takes effect once the frame is recalculated.
-    user32.SetWindowPos(hwnd, HWND_NULL, 0, 0, 0, 0,
+    user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
       SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
     /* SetParent returns the OLD parent, and null means it failed — but null is
@@ -336,8 +342,17 @@ function detach(nativeHandle) {
     // Back to a popup, or the orphaned child never draws again.
     const style = Number(user32.GetWindowLongPtrW(hwnd, GWL_STYLE));
     user32.SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~WS_CHILD) | WS_POPUP);
-    user32.SetWindowPos(hwnd, null, 0, 0, 0, 0,
-      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    /*
+      Raise it to TOPMOST here, not merely restyle it. As a child of the desktop
+      the window sat at the very bottom of the z-order; SetParent(null) makes it
+      top-level again but leaves it there, so it comes back *behind every other
+      window* — which is exactly the "switched to overlay and it's not visible"
+      bug. Electron's setAlwaysOnTop afterwards does not reliably re-raise it,
+      because from Electron's side the always-on-top state never changed. Doing
+      it in the same native context that reparented it is what sticks.
+    */
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: `reparent failed: ${err.message}` };

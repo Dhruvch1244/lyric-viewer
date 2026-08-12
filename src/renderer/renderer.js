@@ -77,6 +77,10 @@ const els = {
   posterClose: document.getElementById('poster-close'),
   welcome: document.getElementById('welcome'),
   welcomeClose: document.getElementById('welcome-close'),
+  whatsnew: document.getElementById('whatsnew'),
+  whatsnewList: document.getElementById('whatsnew-list'),
+  whatsnewVersion: document.getElementById('whatsnew-version'),
+  whatsnewClose: document.getElementById('whatsnew-close'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -85,6 +89,10 @@ const els = {
   updateVersion: document.getElementById('update-version'),
   updateInstall: document.getElementById('update-install'),
   updateLater: document.getElementById('update-later'),
+  localcliCard: document.getElementById('localcli-card'),
+  localcliText: document.getElementById('localcli-text'),
+  localcliOptions: document.getElementById('localcli-options'),
+  localcliDismiss: document.getElementById('localcli-dismiss'),
   keybox: document.getElementById('keybox'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
@@ -2188,6 +2196,41 @@ function applySwirlScale(now) {
  * @param {string} accentLive accent for this frame
  */
 /**
+ * Which MilkDrop preset should be showing for this visual look — the ONE place
+ * that decides, so the engine-init path and the steady-state path cannot
+ * disagree.
+ *
+ * Precedence: a pin (this song, persisted) beats a session choice (a click or
+ * the dice) beats the look's own starting preset, falling back to a curated
+ * default so a look never opens on a dud.
+ *
+ * THE BUG THIS FIXES. A session choice must survive an *engine bounce*. The
+ * FPS governor swaps MilkDrop for the cheap swirl preset whenever the frame
+ * rate dips below 24 — which happens constantly, because MilkDrop is
+ * GPU-heavy — and swaps back when it recovers. The old init path cleared
+ * `milkdropChosen` on every such re-entry, so a preset you picked reverted to
+ * the look's seed a second or two later, for no reason you could see. The reset
+ * now happens ONLY when the visual look itself changes (a different `preset.id`),
+ * not when the same look's engine restarts.
+ *
+ * @param {object} preset the visual look being rendered
+ * @returns {string|null} the preset name to show
+ */
+function milkdropTargetFor(preset) {
+  if (preset.id !== milkdropSeededFor) {
+    // A genuinely new look: its starting point is the new intent, and any
+    // session choice belonged to the previous look.
+    milkdropSeededFor = preset.id;
+    milkdropChosen = null;
+    milkdropWanted = preset.milkdrop;
+  }
+  const seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted))
+    ? milkdropWanted
+    : milkdropDefault();
+  return pinnedMilkdrop() || milkdropChosen || seed;
+}
+
+/**
  * Put the right engine on screen, and draw it if it is the MilkDrop one.
  *
  * The swirl field is rendered further down the backdrop loop, where it can be
@@ -2213,14 +2256,11 @@ function applyEngine(preset, now, dt, w, h) {
       window.MilkDrop.init(els.milkdrop);
       window.MilkDrop.resize(w, h);
       milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
-      // A preset pinned to this song outranks the preset's own starting point —
-      // that is the whole reason for pinning one.
       // Cut rather than blend on the way in: there is nothing to blend FROM,
-      // and a fade from black reads as the app being slow to start.
-      milkdropSeededFor = preset.id;
-      milkdropChosen = null;
-      milkdropWanted = preset.milkdrop;
-      milkdropName = window.MilkDrop.loadPreset(pinnedMilkdrop() || milkdropWanted, 0);
+      // and a fade from black reads as the app being slow to start. The target
+      // respects a pin and a session choice — see milkdropTargetFor for why
+      // that matters here specifically.
+      milkdropName = window.MilkDrop.loadPreset(milkdropTargetFor(preset), 0);
       lastMilkdropSwitchAt = now;
     } else {
       window.MilkDrop.destroy();
@@ -2240,27 +2280,8 @@ function applyEngine(preset, now, dt, w, h) {
   */
   if (!window.MilkDrop.isSupported()) return;
 
-  /*
-    ONE place decides which preset should be showing, and it is `milkdropWanted`.
-
-    Getting this wrong is easy and was: the first version compared the live
-    preset against `preset.milkdrop` every frame, so anything that changed the
-    preset by another route — a click in the browser, the dice, the beat-synced
-    cycle — was reverted on the very next frame. Browsing the catalogue was
-    impossible unless you pinned first, which rather defeats browsing.
-
-    Precedence: a pin (this song, persisted) beats a session choice (a click or
-    the dice) beats the visual preset's own starting point.
-  */
   const pinned = pinnedMilkdrop();
-  if (preset.id !== milkdropSeededFor) {
-    // The visual preset itself changed (MilkDrop → MilkDrop II), so its
-    // starting point is the new intent and any session choice is stale.
-    milkdropSeededFor = preset.id;
-    milkdropChosen = null;
-    milkdropWanted = preset.milkdrop;
-  }
-  const want = pinned || milkdropChosen || milkdropWanted;
+  const want = milkdropTargetFor(preset);
 
   if (want && want !== milkdropName && now - lastMilkdropSwitchAt > 500) {
     // An explicit choice cuts; an automatic one blends.
@@ -2286,10 +2307,7 @@ function applyEngine(preset, now, dt, w, h) {
        Liked presets, when there are any, are the only ones the cycle draws
        from — the fastest way to make 1754 looks feel curated is to let someone
        curate them. */
-    const liked = mdpFavourites.size
-      ? milkdropAllowed().filter((n) => mdpFavourites.has(n))
-      : [];
-    const all = liked.length > 1 ? liked : milkdropAllowed();
+    const all = milkdropCyclePool();
     if (all.length > 1) {
       const i = all.indexOf(milkdropName);
       // Recorded as the new intent, not just loaded — otherwise the block above
@@ -4122,11 +4140,83 @@ function maybeShowWelcome() {
 
 if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 
+/*
+  What's new, after an update.
+
+  A returning user does not need the chips explained again — they want to know
+  what changed. So the first-run welcome and this are separate: welcome shows
+  once ever, this shows once per new version. Kept warm and short on purpose;
+  a changelog nobody reads is worse than a sentence they do.
+
+  Highlights are per version. Add the newest at the top; anything without an
+  entry simply shows a friendly generic line rather than nothing.
+*/
+const SEEN_VERSION_KEY = 'seenVersion';
+
+/** App version, filled from main once get-prefs resolves. */
+let appVersion = null;
+
+const WHATS_NEW = {
+  '0.22.0': [
+    '<b>Desktop mode is one toggle now</b> — the size chip (or Ctrl+Alt+M) flips between the overlay and living on your desktop, behind your icons.',
+    '<b>Switching keeps your song playing</b> — no more restart when you flip modes.',
+    '<b>Desktop mode is fully usable</b> — open the library or preset browser and it comes to the front so you can scroll and click; it settles back when you close it.',
+    '<b>MilkDrop opens on a good preset</b> now, not a random dud — and you can still browse all 1754.',
+  ],
+};
+
+function friendlyHighlights(version) {
+  return WHATS_NEW[version] || ['A handful of fixes and polish. Thanks for updating!'];
+}
+
+function closeWhatsNew(version) {
+  if (els.whatsnew) els.whatsnew.hidden = true;
+  try { localStorage.setItem(SEEN_VERSION_KEY, version || ''); } catch { /* ignore */ }
+}
+
+/**
+ * Decide between the first-run welcome and the what's-new card, and show the
+ * right one. First-ever run gets the welcome; a version bump gets what's new;
+ * an unchanged version gets neither.
+ *
+ * @param {string} version app version from main
+ */
+function showWelcomeOrWhatsNew(version) {
+  let seenWelcome = false;
+  let seenVersion = null;
+  try {
+    seenWelcome = localStorage.getItem(WELCOME_KEY) === '1';
+    seenVersion = localStorage.getItem(SEEN_VERSION_KEY);
+  } catch { /* storage unavailable — fall through to the welcome */ }
+
+  if (!seenWelcome) {
+    // Brand new install: the chips need naming before anything else.
+    maybeShowWelcome();
+    try { localStorage.setItem(SEEN_VERSION_KEY, version || ''); } catch { /* ignore */ }
+    return;
+  }
+
+  if (version && seenVersion !== version && els.whatsnew && els.whatsnewList) {
+    if (els.whatsnewVersion) els.whatsnewVersion.textContent = `in ${version}`;
+    els.whatsnewList.replaceChildren(...friendlyHighlights(version).map((html) => {
+      const li = document.createElement('li');
+      li.innerHTML = html; // trusted, in-app copy — never network content
+      return li;
+    }));
+    els.whatsnew.hidden = false;
+  }
+}
+
+if (els.whatsnewClose) {
+  els.whatsnewClose.addEventListener('click', () => closeWhatsNew(appVersion));
+}
+
 /* Esc also dismisses it. Scoped to "while the card is up" so this does not
    become a global key handler competing with the panels' own Esc bindings. */
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (els.welcome && !els.welcome.hidden) closeWelcome();
+  else if (els.whatsnew && !els.whatsnew.hidden) closeWhatsNew(appVersion);
   else if (els.mdPanel && !els.mdPanel.hidden) closeMilkdropPanel();
   else if (els.poster && !els.poster.hidden) closePoster();
 });
@@ -4163,6 +4253,7 @@ function maybeShowCaptureNudge(positionMs) {
   // Never stack the two cards. A first-time user who has not dismissed the
   // welcome yet is not ready for a second thing to read.
   if (els.welcome && !els.welcome.hidden) return;
+  if (els.whatsnew && !els.whatsnew.hidden) return;
   if (!currentTrack || positionMs < CAPTURE_NUDGE_AFTER_MS) return;
   if (captureNudgeAnswered()) return;
   captureNudgeVisible = true;
@@ -4237,6 +4328,71 @@ if (window.player.onUpdateState) window.player.onUpdateState(applyUpdateState);
    run, and the push-only path would then never fire. */
 if (window.player.getUpdateState) {
   window.player.getUpdateState().then(applyUpdateState).catch(() => { /* not packaged */ });
+}
+
+/* ------------------------------------------------------- local-CLI fallback */
+/*
+  When every cloud AI provider has failed, main sends `localcli-offer` with the
+  CLIs it detected. This turns that into a card: one button per installed CLI to
+  turn it on, an install hint for the rest, and a dismiss that is remembered so
+  it does not ask again. Nothing runs a CLI until a button here is clicked —
+  consent is the whole point.
+*/
+function closeLocalcliCard() {
+  if (els.localcliCard) els.localcliCard.hidden = true;
+}
+
+function showLocalcliOffer(detected) {
+  if (!els.localcliCard || !els.localcliOptions) return;
+  const clis = Array.isArray(detected) ? detected : [];
+  const installed = clis.filter((c) => c.installed);
+
+  els.localcliOptions.replaceChildren();
+
+  if (installed.length > 0) {
+    if (els.localcliText) {
+      els.localcliText.textContent = 'Cloud AI is unavailable. Use a tool you already have?';
+    }
+    for (const c of installed) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.textContent = `Use ${c.label}${c.unverified ? ' (beta)' : ''}`;
+      btn.title = c.unverified
+        ? 'Its non-interactive mode is unverified — may not work'
+        : `Run ${c.label} locally for lyric AI`;
+      btn.addEventListener('click', async () => {
+        await window.player.localcliConsent(c.id);
+        closeLocalcliCard();
+        setStatus(`AI features will use ${c.label} from now on`);
+      });
+      els.localcliOptions.appendChild(btn);
+    }
+  } else {
+    // None installed: offer install hints for the ones worth getting.
+    if (els.localcliText) {
+      els.localcliText.textContent = 'Cloud AI is unavailable. Install a local AI CLI to keep these features working:';
+    }
+    for (const c of clis.slice(0, 3)) {
+      const hint = document.createElement('span');
+      hint.className = 'localcli__hint';
+      hint.textContent = `${c.label}: ${c.install}`;
+      els.localcliOptions.appendChild(hint);
+    }
+  }
+
+  els.localcliCard.hidden = false;
+}
+
+if (els.localcliDismiss) {
+  els.localcliDismiss.addEventListener('click', async () => {
+    closeLocalcliCard();
+    // Remembered as a decision so it does not ask again.
+    await window.player.localcliConsent('declined');
+  });
+}
+if (window.player.onLocalcliOffer) {
+  window.player.onLocalcliOffer(({ detected }) => showLocalcliOffer(detected));
 }
 
 /* ------------------------------------------------------------------- wiring */
@@ -4665,13 +4821,14 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
-const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop' };
+/* The chip is a single toggle now: overlay ⇄ desktop. It reads as the action
+   it will take, not the state it is in — "Desktop" when clicking sends it to
+   the wallpaper, "Overlay" when clicking brings it back. */
+const DISPLAY_MODE_LABELS = { full: '▨ Desktop', bar: '▨ Desktop', strip: '▨ Desktop', wallpaper: '▭ Overlay' };
 
 if (els.modeBtn) {
   els.modeBtn.addEventListener('click', () => {
-    const order = ['full', 'bar', 'strip', 'wallpaper'];
-    const next = order[(order.indexOf(displayMode) + 1) % order.length];
-    window.player.setDisplayMode(next);
+    window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
   });
 }
 
@@ -4736,6 +4893,38 @@ if (window.player.onWallpaperPointer) {
   });
 }
 
+/*
+  Surface the wallpaper window while a scrollable panel is open.
+
+  Forwarded input covers clicks and hover but not the wheel, so the preset
+  browser and the library — which scroll — could be opened in wallpaper mode
+  but not used. Rather than forward yet more event types (wheel needs a global
+  hook the main process deliberately avoids), the window briefly lifts to the
+  foreground while a panel is open and settles back behind the desktop when it
+  closes. Main does the lifting; this just tells it when a panel is up.
+
+  A MutationObserver on the panels' `hidden` attribute keeps it in step no
+  matter which of the many open/close paths fired, without hooking each one.
+*/
+const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync]
+  .filter(Boolean);
+
+function anyPanelOpen() {
+  return WALLPAPER_PANELS.some((el) => !el.hidden);
+}
+
+function syncWallpaperInteract() {
+  if (!window.player.wallpaperInteract) return;
+  window.player.wallpaperInteract(displayMode === 'wallpaper' && anyPanelOpen());
+}
+
+if (WALLPAPER_PANELS.length) {
+  const panelObserver = new MutationObserver(syncWallpaperInteract);
+  for (const el of WALLPAPER_PANELS) {
+    panelObserver.observe(el, { attributes: true, attributeFilter: ['hidden'] });
+  }
+}
+
 window.player.onDisplayMode(({ mode, insets }) => {
   displayMode = mode || 'full';
 
@@ -4762,6 +4951,10 @@ window.player.onDisplayMode(({ mode, insets }) => {
      that tears the GPU surfaces out of the page. */
   document.body.classList.toggle('mode-wallpaper', displayMode === 'wallpaper');
   document.body.classList.toggle('mode-compact', isCompact());
+
+  /* Leaving wallpaper with a panel still open must not leave the window stuck
+     surfaced; re-evaluate against the new mode. */
+  syncWallpaperInteract();
 
   if (isCompact()) {
     /*
@@ -5527,6 +5720,58 @@ function milkdropAllowed() {
   return kept.length > 0 ? kept : all;
 }
 
+/*
+  A hand-picked shortlist of presets that reliably look good.
+
+  The catalogue is 1754 presets contributed over twenty years, and a large
+  share of them are dim, broken on this renderer, or just ugly — so opening
+  MilkDrop on a *random* one, or cycling the whole set on the beat, lands on a
+  dud more often than not. That is what "the default MilkDrop sucks" was.
+
+  These are verified present in the shipped corpus (see the curated check in
+  scripts) and chosen for being bright, legible under lyrics, and stable. They
+  are the pool the automatic paths draw from until the user has liked some of
+  their own; the browser still offers all 1754.
+*/
+const MILKDROP_CURATED = [
+  'Cope - Cartune (extrusion machine) [fixed]',
+  'Geiss - Artifact Plasma',
+  'Flexi - Julia fractal',
+  'Rovastar - VooV′s Organic Light',
+  'Flexi + fiShbRaiN - operation fatcap II',
+  'Aderrasi - Kevlar Tunnel',
+  'Geiss - Artifact Plasma 2',
+  '$$$ Royal - Mashup (169)',
+  'martin - mandelbox explorer - high speed demo version',
+  'Flexi - alien fish pond',
+];
+
+/**
+ * The pool the dice and the beat-synced cycle draw from.
+ *
+ * Favourites first, once there are enough to cycle. Otherwise the curated
+ * shortlist (minus anything hidden), so the automatic look is a good one rather
+ * than a roll of the 1754-sided die. Falls through to the whole allowed set
+ * only if the curated names somehow are not in this corpus.
+ *
+ * @returns {string[]}
+ */
+function milkdropCyclePool() {
+  const allowed = milkdropAllowed();
+  const liked = allowed.filter((n) => mdpFavourites.has(n));
+  if (liked.length > 1) return liked;
+
+  const allowedSet = new Set(allowed);
+  const curated = MILKDROP_CURATED.filter((n) => allowedSet.has(n));
+  return curated.length > 0 ? curated : allowed;
+}
+
+/** The preset to open MilkDrop on when nothing is pinned or chosen. */
+function milkdropDefault() {
+  const pool = milkdropCyclePool();
+  return pool.length ? pool[0] : null;
+}
+
 /** Per-track MilkDrop preset pins, keyed like every other per-track override. */
 function readMilkdropPins() {
   try { return JSON.parse(localStorage.getItem('milkdropPins') || '{}') || {}; }
@@ -6160,12 +6405,12 @@ window.player.getPrefs().then((prefs) => {
   script = prefs.script === 'devanagari' ? 'devanagari' : 'latin';
   showTranslation = prefs.showTranslation !== false;
   applyScript();
+  // Once the version is known, show the first-run welcome OR the what's-new
+  // card — over a running backdrop rather than a blank window mid-boot.
+  appVersion = prefs.appVersion || null;
+  showWelcomeOrWhatsNew(appVersion);
 });
 window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
-
-// Last, so a first-time user sees the card over a running backdrop rather than
-// over a blank window mid-boot.
-maybeShowWelcome();

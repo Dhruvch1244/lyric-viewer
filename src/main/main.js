@@ -35,7 +35,8 @@ const { analyzeSentiment, isSentimentAvailable } = require('./sentiment');
 const { Settings } = require('./settings');
 const { LlmCache } = require('./cache');
 const { fetchArtwork, fetchArtworkCandidates, downloadImage } = require('./artwork');
-const { activeProvider } = require('./llm');
+const { activeProvider, setAllFailedHook } = require('./llm');
+const localcli = require('./localcli');
 const { transcribePcm, DEFAULT_MODEL, MODELS } = require('./transcribe');
 const { setKey } = require('./keys');
 
@@ -290,7 +291,7 @@ function setOffsetMs(valueMs) {
  *
  * @returns {BrowserWindow}
  */
-function createWindow(opaque = false) {
+function createWindow() {
   const { bounds } = screen.getPrimaryDisplay();
 
   const window = new BrowserWindow({
@@ -299,16 +300,18 @@ function createWindow(opaque = false) {
     width: bounds.width,
     height: bounds.height,
     frame: false,
-    /* Wallpaper mode needs an OPAQUE window. Transparency exists so the desktop
-       shows through an overlay; behind the desktop icons there is nothing to
-       show through, and a transparent window reparented there renders black.
-       Electron fixes `transparent` at construction, so the mode switch rebuilds
-       the window rather than toggling anything. */
-    transparent: !opaque,
+    /* Always transparent, and never rebuilt. Wallpaper mode used to reopen the
+       window opaque, on the belief that a transparent window reparented behind
+       the desktop icons renders black — measured false: it composites over the
+       real Windows wallpaper, transparent areas and all. Keeping one window for
+       the life of the app is what lets a mode switch preserve the playing song,
+       the lyrics, the audio capture and any open panel, instead of throwing the
+       whole renderer away and starting from a blank state. */
+    transparent: true,
     resizable: false,
     movable: false,
     skipTaskbar: false,
-    backgroundColor: opaque ? '#05060c' : '#00000000',
+    backgroundColor: '#00000000',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -321,13 +324,8 @@ function createWindow(opaque = false) {
     },
   });
 
-  /* Always-on-top is the opposite of wallpaper: the point there is to be behind
-     everything, and Windows will not keep a topmost window parented under the
-     desktop anyway. */
-  if (!opaque) {
-    window.setAlwaysOnTop(true, 'screen-saver');
-    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  }
+  window.setAlwaysOnTop(true, 'screen-saver');
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.once('ready-to-show', () => window.show());
 
   // Hung off the window's own events rather than the toggle, so every path that
@@ -787,23 +785,23 @@ async function ensureDevanagari(key) {
 
 /* ------------------------------------------------------------ display modes */
 /*
-  Three sizes of the same app.
+  The app is a fullscreen overlay, and that is the one mode people land on.
 
-  This is the single biggest adoption problem the app has — it takes over the
-  screen or it does nothing, and every competitor offers a small always-on mode,
-  so people try it once and stop. It is also, unexpectedly, the largest
-  performance change available: profiling puts `(program)` at ~850 ms/s against
-  ~45 ms/s for all app JavaScript combined, and that is native compositing of a
-  full-screen transparent always-on-top window. The only lever big enough to
-  matter is compositing fewer pixels, and a taskbar strip composites a few
-  percent of what fullscreen does.
+  0.19 added a compact floating bar and a click-through taskbar strip, and 0.21
+  added wallpaper. Cycling all four with one control meant clicking the size
+  chip once too many dropped you into a half-finished bar, or a strip that
+  hides your taskbar, with no obvious way back — so the primary control is now
+  a single overlay ⇄ desktop toggle (see `toggleWallpaper`). `bar` and `strip`
+  stay implemented and reachable through `set-display-mode`, just off the main
+  path.
 
-  So the modes are a feature and a fix at the same time. The visualiser stays in
-  `full`; the compact modes are a lyric line, and the renderer drops both WebGL
-  contexts and the 2D canvas when it is in one.
+  `full` and `wallpaper` are the same fullscreen visuals; wallpaper reparents
+  the one window behind the desktop icons. `bar` and `strip` shrink it to a
+  lyric line, and the renderer drops both WebGL contexts and the 2D canvas in
+  those to composite far fewer pixels.
 */
 
-/** @type {ReadonlyArray<'full'|'bar'|'strip'>} */
+/** @type {ReadonlyArray<'full'|'bar'|'strip'|'wallpaper'>} */
 const DISPLAY_MODES = ['full', 'bar', 'strip', 'wallpaper'];
 
 /** Height of the taskbar strip, in CSS pixels. */
@@ -876,87 +874,89 @@ function shellInsets() {
 }
 
 /**
- * Resize the overlay into a display mode and tell the renderer to match.
- * @param {'full'|'bar'|'strip'} mode
+ * Switch display mode on the ONE window, without ever rebuilding it.
+ *
+ * The old version reopened the window to enter wallpaper, because it thought a
+ * transparent window could not be a wallpaper. It can (measured: it composites
+ * over the real Windows wallpaper), so wallpaper is now a reparent toggle on
+ * the same window — and that is the whole fix for "switching loses my song".
+ * The renderer, the playing track, the audio capture and any open panel all
+ * live on, because nothing is destroyed.
+ *
+ * Wallpaper can still fail to *attach* — the WorkerW technique is undocumented
+ * and depends on Explorer being in a state this recognises — so a failure
+ * falls back to the fullscreen overlay and says why.
+ *
+ * @param {'full'|'bar'|'strip'|'wallpaper'} mode
  */
 function applyDisplayMode(mode) {
   let next = DISPLAY_MODES.includes(mode) ? mode : 'full';
-
-  /*
-    Wallpaper mode is the one switch that cannot be done by resizing. The window
-    has to be opaque and not topmost, and `transparent` is fixed when a
-    BrowserWindow is constructed — so entering or leaving it rebuilds the
-    window. Everything that survives a rebuild already does: the settings, the
-    caches and the learned maps all live in main.
-
-    It can also simply fail. The WorkerW technique is undocumented and depends
-    on Explorer being in a state this can recognise, so a failure falls back to
-    the fullscreen overlay and says why, rather than leaving a window parented
-    nowhere.
-  */
-  const leavingWallpaper = displayMode === 'wallpaper' && next !== 'wallpaper';
-  const enteringWallpaper = next === 'wallpaper' && displayMode !== 'wallpaper';
-
-  if (enteringWallpaper && !wallpaper.isAvailable()) {
-    console.warn('[wallpaper]', wallpaper.unavailableReason());
-    next = 'full';
+  if (!win || win.isDestroyed()) {
+    displayMode = next;
+    settings.set('displayMode', next);
+    return;
   }
 
-  if ((enteringWallpaper || leavingWallpaper) && win && !win.isDestroyed()) {
-    const wantWallpaper = next === 'wallpaper';
-    if (leavingWallpaper) wallpaper.detach(win.getNativeWindowHandle());
+  const enteringWallpaper = next === 'wallpaper' && displayMode !== 'wallpaper';
+  const leavingWallpaper = displayMode === 'wallpaper' && next !== 'wallpaper';
 
-    const old = win;
-    win = createWindow(wantWallpaper);
-    old.destroy();
-
-    /*
-      Tell the NEW renderer what mode it is in, once it can hear it.
-
-      The `send` at the end of this function goes out before the rebuilt window
-      has loaded, so it lands nowhere — measured: the size chip still read
-      "Full" in wallpaper mode, and because the renderer's own `displayMode`
-      was still 'full' it discarded every forwarded pointer event. Wallpaper
-      mode looked like it had simply failed.
-    */
-    win.webContents.once('did-finish-load', () => send('display-mode', { mode: displayMode, insets: shellInsets() }));
-
-    if (!wantWallpaper) stopPointerForwarding();
-    if (wantWallpaper) {
-      win.once('ready-to-show', () => {
-        const res = wallpaper.attach(win.getNativeWindowHandle());
-        if (!res.ok) {
-          console.warn('[wallpaper]', res.reason);
-          /* Recurse once through 'full', which rebuilds the window transparent
-             and topmost again. Guarded by displayMode already being
-             'wallpaper', so this cannot loop. */
-          applyDisplayMode('full');
-          return;
-        }
+  if (enteringWallpaper) {
+    if (!wallpaper.isAvailable()) {
+      console.warn('[wallpaper]', wallpaper.unavailableReason());
+      next = 'full';
+    } else {
+      /* A topmost window will not stay parented under the desktop, so that has
+         to go before the reparent. The bounds are set first too: the child is
+         laid out against its new parent, and giving it the full display up
+         front avoids a one-frame flash at the wrong size. */
+      win.setAlwaysOnTop(false);
+      win.setBounds(screen.getPrimaryDisplay().bounds);
+      const res = wallpaper.attach(win.getNativeWindowHandle());
+      if (!res.ok) {
+        console.warn('[wallpaper]', res.reason);
+        win.setAlwaysOnTop(true, 'screen-saver');
+        next = 'full';
+      } else {
         // Clicks do not reach a child of the desktop; forward them ourselves.
         startPointerForwarding();
-      });
+      }
     }
+  } else if (leavingWallpaper) {
+    stopPointerForwarding();
+    // Harmless if already detached by a surface; restores WS_POPUP and topmost.
+    wallpaper.detach(win.getNativeWindowHandle());
+    wallpaperSurfaced = false;
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
 
   displayMode = next;
   settings.set('displayMode', next);
-  if (!win || win.isDestroyed()) return;
 
   win.setBounds(boundsForMode(next));
 
   /*
-    The strip is click-through, the others are not.
-
-    A thin bar pinned along the bottom edge sits exactly where taskbar buttons
-    and window edges are, so an opaque one would eat clicks meant for other
-    apps all day — which is the difference between something you leave on and
-    something you close. `forward: true` keeps hover working so the app can
-    still react to the pointer without consuming the click.
+    The strip is click-through, the others are not. A thin bar pinned along the
+    bottom edge sits where taskbar buttons and window edges are, so an opaque
+    one would eat clicks meant for other apps. `forward: true` keeps hover
+    working so the app still reacts to the pointer without consuming the click.
   */
   win.setIgnoreMouseEvents(next === 'strip', { forward: true });
 
   send('display-mode', { mode: next, insets: shellInsets() });
+}
+
+/**
+ * Toggle wallpaper mode on or off, returning to the fullscreen overlay.
+ *
+ * This is the user-facing control now: the size chip and Ctrl+Alt+M flip
+ * between the overlay and the desktop rather than cycling four modes, because
+ * the compact bar and strip were half-finished looks nobody asked to land on
+ * by accident. They remain reachable through `set-display-mode` for anyone who
+ * wants them; they are just off the main path.
+ */
+function toggleWallpaper() {
+  applyDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
 }
 
 /* ------------------------------------------------- wallpaper mouse forwarding */
@@ -1030,6 +1030,46 @@ function startPointerForwarding() {
 }
 
 /**
+ * Temporarily surface the wallpaper window as a real interactive overlay.
+ *
+ * Forwarding synthesizes clicks and hover, but a desktop child gets no wheel,
+ * no drag and no real focus — so the preset browser and the library, which
+ * scroll, were unusable in wallpaper mode. The fix is not to forward yet more
+ * event types by hand (wheel needs a global hook, which this deliberately
+ * avoids), but to briefly lift the whole window to the foreground while a panel
+ * is open: then every kind of mouse input works because it is a normal window
+ * again. It settles back behind the icons when the panel closes.
+ *
+ * The window is never rebuilt, so the playing song and the panel's own state
+ * survive the surface-and-settle exactly as they survive the mode toggle.
+ *
+ * @param {boolean} on
+ */
+let wallpaperSurfaced = false;
+function setWallpaperInteractive(on) {
+  if (!win || win.isDestroyed() || displayMode !== 'wallpaper') return;
+  if (on === wallpaperSurfaced) return;
+  wallpaperSurfaced = on;
+
+  if (on) {
+    stopPointerForwarding();
+    wallpaper.detach(win.getNativeWindowHandle());
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } else {
+    win.setAlwaysOnTop(false);
+    const res = wallpaper.attach(win.getNativeWindowHandle());
+    if (res.ok) {
+      startPointerForwarding();
+    } else {
+      // Could not settle back; staying a normal overlay beats vanishing.
+      console.warn('[wallpaper] re-attach failed:', res.reason);
+      win.setAlwaysOnTop(true, 'screen-saver');
+      wallpaperSurfaced = true;
+    }
+  }
+}
+
+/**
  * Tell the renderer whether it is on screen.
  *
  * This matters more than it looks. `backgroundThrottling` is deliberately off
@@ -1059,13 +1099,10 @@ function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Alt+Right', () => setOffsetMs(activeOffsetMs() + 100));
   globalShortcut.register('CommandOrControl+Alt+0', () => setOffsetMs(0));
   globalShortcut.register('CommandOrControl+Alt+H', toggleWindow);
-  // Cycle fullscreen → floating bar → taskbar strip. A hotkey as well as a chip
-  // because the strip is click-through and the bar has no room for the HUD, so
-  // in two of the three modes the chip is not reachable.
-  globalShortcut.register('CommandOrControl+Alt+M', () => {
-    const i = DISPLAY_MODES.indexOf(displayMode);
-    applyDisplayMode(DISPLAY_MODES[(i + 1) % DISPLAY_MODES.length]);
-  });
+  // Overlay ⇄ desktop wallpaper. A hotkey as well as a chip because in
+  // wallpaper mode the chip is reached only through forwarded input, and a
+  // global key is the reliable way back if that ever misbehaves.
+  globalShortcut.register('CommandOrControl+Alt+M', toggleWallpaper);
 }
 
 app.whenReady().then(() => {
@@ -1080,6 +1117,25 @@ app.whenReady().then(() => {
 
   win = createWindow();
   registerShortcuts();
+
+  /*
+    When every cloud provider fails, offer the local-CLI fallback — but only
+    if the user has an installed CLI and has not already decided. Failure-driven
+    (not a startup nag) because that is the moment it is actually useful, and
+    once per session so a run of failures does not stack cards.
+  */
+  let offeredCliThisSession = false;
+  setAllFailedHook(() => {
+    if (offeredCliThisSession) return;
+    const decided = localcli.consent();
+    if (decided.consented || decided.id === 'declined') return;
+    localcli.detect().then((clis) => {
+      const installed = clis.filter((c) => c.installed);
+      if (installed.length === 0) return; // nothing to offer; stay quiet
+      offeredCliThisSession = true;
+      send('localcli-offer', { detected: clis });
+    }).catch(() => { /* detection failed; no offer */ });
+  });
 
   /* The overlay has no window chrome and hides on a hotkey, so once it is
      running nothing on screen says it exists. The tray fixes that and gives
@@ -1164,6 +1220,22 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('get-display-mode', () => ({ mode: displayMode, modes: DISPLAY_MODES }));
 
+  /* The renderer asks to surface while a scrollable panel is open in wallpaper
+     mode, so wheel/drag/focus work; it settles back on close. See
+     setWallpaperInteractive. */
+  ipcMain.handle('wallpaper-interact', (_e, on) => {
+    setWallpaperInteractive(Boolean(on));
+    return { status: 'ok' };
+  });
+
+  /* Local developer-CLI fallback for the AI features. See localcli.js. */
+  ipcMain.handle('localcli-detect', () => localcli.detect());
+  ipcMain.handle('localcli-status', () => localcli.consent());
+  ipcMain.handle('localcli-consent', (_e, id) => {
+    localcli.setConsent(id || null);
+    return localcli.consent();
+  });
+
   /* Background work, forwarded from the renderer's job map. Only the jobs in
      tray.js's NOTIFY_ON_DONE raise an OS notification when they finish. */
   ipcMain.handle('report-jobs', (_e, payload) => {
@@ -1229,6 +1301,8 @@ app.whenReady().then(() => {
   ipcMain.handle('get-prefs', () => ({
     script: settings.get('script', 'latin'),
     showTranslation: settings.get('showTranslation', true),
+    // So the renderer can show a friendly "what's new" card once after an update.
+    appVersion: app.getVersion(),
   }));
 
   ipcMain.handle('set-script', async (_e, script) => {
