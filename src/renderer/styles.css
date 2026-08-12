@@ -226,7 +226,54 @@ body.is-playing .np-icon i:nth-child(3) { animation-delay: 300ms; }
   color: var(--ink-dim);
   text-shadow: var(--shadow);
   text-align: right;
+  /* Keep clear of the always-on language toggles in the corner. */
+  padding-right: 6rem;
 }
+
+/* Always-visible language toggles, top-right. Unlike the HUD chips these never
+   hide, so the two most-used controls are always one click away. */
+.quick-toggles {
+  position: fixed;
+  top: 1.6vh;
+  right: 3vw;
+  z-index: 6;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.qt {
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  min-width: 2.1rem;
+  padding: 0.4rem 0.55rem;
+  color: var(--ink-mid);
+  background: color-mix(in srgb, #000 42%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.qt:hover {
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.qt[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--accent-live, var(--accent, #e94560));
+  background: color-mix(in srgb, var(--accent, #e94560) 22%, transparent);
+}
+
+.qt[disabled] {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The strip is a 54px click-through line — no room for corner toggles. */
+.mode-strip .quick-toggles { display: none; }
 
 /* ---- Apple Music-style scrolling column ---- */
 
@@ -710,6 +757,64 @@ body.lang-devanagari .word--active {
   .nudge { animation: none; }
 }
 
+/* ---- Display-size menu ---- */
+.mode-menu {
+  position: fixed;
+  right: 3vw;
+  bottom: 8vh;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem;
+  min-width: 15rem;
+  background: color-mix(in srgb, #05060c 92%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.mode-menu[hidden] { display: none; }
+
+.mode-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--ink-mid);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+}
+
+.mode-menu__item small {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--ink-dim);
+}
+
+.mode-menu__glyph { width: 1.2rem; text-align: center; }
+
+.mode-menu__item:hover,
+.mode-menu__item:focus-visible {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  outline: none;
+}
+
+.mode-menu__item[aria-checked="true"] {
+  color: var(--ink);
+  border-color: var(--accent-live, var(--accent, #e94560));
+  background: color-mix(in srgb, var(--accent, #e94560) 16%, transparent);
+}
+
 /* ---- Wallpaper mode: keep the controls out from under the shell ---- */
 /*
   The window fills the whole display in wallpaper mode so the visuals run edge
@@ -767,6 +872,13 @@ body.mode-wallpaper .poster {
   font-size: 0.72rem;
   color: var(--ink-dim);
   align-self: center;
+}
+
+/* The verified CLI stands out as the safe pick. */
+.chip--recommended {
+  color: var(--ink);
+  border-color: var(--accent-live, var(--accent, #e94560));
+  background: color-mix(in srgb, var(--accent, #e94560) 20%, transparent);
 }
 
 /* ---- Update surfaces ---- */
@@ -1088,8 +1200,10 @@ body.keybox-open .hud {
   left: 3vw;
   bottom: 8vh;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
+  max-width: min(34rem, 60vw);
   padding: 0.7rem 0.9rem;
   background: color-mix(in srgb, #000 62%, transparent);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -1127,6 +1241,24 @@ body.keybox-open .hud {
   font-size: 0.72rem;
   color: var(--ink-dim);
   min-width: 8rem;
+}
+
+/* Local-AI picker inside the key panel: its own row below the API key. */
+.keybox__local {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.keybox__cli {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
 }
 
 /* Pre-sync panel — a taller variant of the key panel with a paste area. */

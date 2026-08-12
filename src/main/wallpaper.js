@@ -36,7 +36,13 @@ const HWND_NULL = null;
 /** Progman's "spawn a WorkerW" message. Undocumented, and the whole basis. */
 const WM_SPAWN_WORKER = 0x052c;
 
-const SMTO_NORMAL = 0x0000;
+/*
+  SMTO_ABORTIFHUNG returns immediately if Progman is not pumping messages,
+  instead of waiting out the whole timeout. Without it, entering desktop mode
+  blocked the UI thread for up to 3s (three sends × a 1s timeout) whenever the
+  shell was momentarily busy — which is what "switching modes is slow" was.
+*/
+const SMTO_ABORTIFHUNG = 0x0002;
 
 /*
   Window style bits.
@@ -62,8 +68,12 @@ const SWP_FRAMECHANGED = 0x0020;
 const HWND_TOP = 0;
 const HWND_TOPMOST = -1;
 
-/** Give Progman a second to answer; it is a message pump, not a network. */
-const SPAWN_TIMEOUT_MS = 1000;
+/*
+  Progman answers this in well under a millisecond when it is pumping; the
+  timeout is only a ceiling for when it is not. 250ms is plenty of headroom and,
+  paired with SMTO_ABORTIFHUNG, keeps the desktop switch from stalling the UI.
+*/
+const SPAWN_TIMEOUT_MS = 250;
 
 /** @type {object|null} lazily-bound user32 functions */
 let user32 = null;
@@ -246,7 +256,7 @@ function collectWorkers() {
   const out = [null];
   for (const [wParam, lParam] of [[0, 0], [0x000d, 0x0001], [0x000d, 0x0000]]) {
     user32.SendMessageTimeoutW(
-      progman, WM_SPAWN_WORKER, wParam, lParam, SMTO_NORMAL, SPAWN_TIMEOUT_MS, out,
+      progman, WM_SPAWN_WORKER, wParam, lParam, SMTO_ABORTIFHUNG, SPAWN_TIMEOUT_MS, out,
     );
   }
 

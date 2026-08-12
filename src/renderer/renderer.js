@@ -27,6 +27,8 @@ const els = {
   progressFill: document.getElementById('hud-progress-fill'),
   scriptBtn: document.getElementById('btn-script'),
   translateBtn: document.getElementById('btn-translate'),
+  ttScript: document.getElementById('tt-script'),
+  ttTranslate: document.getElementById('tt-translate'),
   backdropBtn: document.getElementById('btn-backdrop'),
   presetBtn: document.getElementById('btn-preset'),
   lyricsBtn: document.getElementById('btn-lyrics'),
@@ -3887,6 +3889,7 @@ function applyScript() {
   cues = useDeva ? cuesDevanagari : cuesLatin;
   document.body.classList.toggle('lang-devanagari', Boolean(useDeva));
   els.scriptBtn.setAttribute('aria-pressed', String(script === 'devanagari'));
+  if (els.ttScript) els.ttScript.setAttribute('aria-pressed', String(script === 'devanagari'));
   buildColumn();
 }
 
@@ -3894,6 +3897,13 @@ function refreshButtons() {
   els.scriptBtn.disabled = cuesLatin.length === 0 || (!cuesDevanagari && !transliterationAvailable);
   els.translateBtn.setAttribute('aria-pressed', String(showTranslation && Boolean(cuesEnglish)));
   els.translateBtn.disabled = cuesLatin.length === 0 || (!cuesEnglish && !translationAvailable);
+
+  // Mirror onto the always-visible top-right toggles.
+  if (els.ttScript) els.ttScript.disabled = els.scriptBtn.disabled;
+  if (els.ttTranslate) {
+    els.ttTranslate.disabled = els.translateBtn.disabled;
+    els.ttTranslate.setAttribute('aria-pressed', els.translateBtn.getAttribute('aria-pressed') || 'false');
+  }
 
   /*
     Say why, when there is a why. A translation that exists but cannot be lined
@@ -4216,6 +4226,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.24.0': [
+    '<b>Language toggles are top-right now</b> — script (अ) and translation (EN) are always visible, no more reaching into the bottom bar.',
+    '<b>A display-size menu</b> — click the size chip to pick fullscreen, a bar, a strip, or desktop, instead of cycling.',
+    '<b>Fixed the coloured rectangles</b> some screens showed, and updates now install without a wizard.',
+    '<b>Clearer local-AI picker</b> — the tool that actually works is marked, when the cloud is unavailable.',
+  ],
   '0.23.0': [
     '<b>Karaoke word fill</b> — the word being sung now lights up left-to-right in time, instead of all at once.',
     '<b>The visuals match the mood</b> — a calm song moves gently, a driving one harder, not just a different colour.',
@@ -4416,16 +4432,23 @@ function showLocalcliOffer(detected) {
 
   if (installed.length > 0) {
     if (els.localcliText) {
-      els.localcliText.textContent = 'Cloud AI is unavailable. Use a tool you already have?';
+      els.localcliText.textContent = 'Cloud AI is unavailable. Pick a tool you have installed to use instead:';
     }
-    for (const c of installed) {
+    // Verified first, so the one that definitely works is the obvious choice.
+    const ordered = [...installed].sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+    for (const c of ordered) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chip';
-      btn.textContent = `Use ${c.label}${c.unverified ? ' (beta)' : ''}`;
-      btn.title = c.unverified
-        ? 'Its non-interactive mode is unverified — may not work'
-        : `Run ${c.label} locally for lyric AI`;
+      // A clear badge on each: what works vs what is best-effort.
+      const badge = c.verified ? ' ✓' : (c.unverified ? ' · experimental' : ' · best-effort');
+      btn.textContent = `${c.label}${badge}`;
+      btn.title = c.verified
+        ? `${c.label} is verified working — recommended`
+        : c.unverified
+          ? `${c.label}'s non-interactive mode is unverified — may not work`
+          : `${c.label} should work but is not fully verified`;
+      if (c.verified) btn.classList.add('chip--recommended');
       btn.addEventListener('click', async () => {
         await window.player.localcliConsent(c.id);
         closeLocalcliCard();
@@ -4900,15 +4923,59 @@ window.player.onTranslation((payload) => {
   the renderer's job is to look right at that size and to stop paying for what
   is no longer visible.
 */
-/** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
-/* The chip is a single toggle now: overlay ⇄ desktop. It reads as the action
-   it will take, not the state it is in — "Desktop" when clicking sends it to
-   the wallpaper, "Overlay" when clicking brings it back. */
-const DISPLAY_MODE_LABELS = { full: '▨ Desktop', bar: '▨ Desktop', strip: '▨ Desktop', wallpaper: '▭ Overlay' };
+/*
+  The size chip opens a menu instead of cycling. Cycling four modes with one
+  chip meant you could not jump to the one you wanted and could land on a
+  half-finished one by accident; a menu is predictable — every mode is a
+  labelled click and the current one is marked. The chip label reflects the
+  current mode so the corner still says what you are in.
+*/
+const DISPLAY_MODE_LABELS = {
+  full: '▭ Size', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop',
+};
+const modeMenu = document.getElementById('mode-menu');
+
+function markModeMenu() {
+  if (!modeMenu) return;
+  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
+    item.setAttribute('aria-checked', String(item.dataset.mode === displayMode));
+  }
+}
+
+function openModeMenu() {
+  if (!modeMenu) return;
+  markModeMenu();
+  modeMenu.hidden = false;
+  document.body.classList.add('show-cursor');
+  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'true');
+}
+
+function closeModeMenu() {
+  if (!modeMenu) return;
+  modeMenu.hidden = true;
+  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'false');
+}
 
 if (els.modeBtn) {
-  els.modeBtn.addEventListener('click', () => {
-    window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
+  els.modeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (modeMenu && modeMenu.hidden) openModeMenu(); else closeModeMenu();
+  });
+}
+
+if (modeMenu) {
+  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
+    item.addEventListener('click', () => {
+      window.player.setDisplayMode(item.dataset.mode);
+      closeModeMenu();
+    });
+  }
+  // Click anywhere else, or Esc, closes it.
+  document.addEventListener('click', (e) => {
+    if (!modeMenu.hidden && !modeMenu.contains(e.target) && e.target !== els.modeBtn) closeModeMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modeMenu.hidden) closeModeMenu();
   });
 }
 
@@ -4920,6 +4987,10 @@ if (els.modeBtn) {
 if (els.ccEarlier) els.ccEarlier.addEventListener('click', () => els.syncEarlierBtn.click());
 if (els.ccLater) els.ccLater.addEventListener('click', () => els.syncLaterBtn.click());
 if (els.ccTranslate) els.ccTranslate.addEventListener('click', () => els.translateBtn.click());
+
+// The always-visible top-right toggles drive the same handlers as the HUD chips.
+if (els.ttScript) els.ttScript.addEventListener('click', () => els.scriptBtn.click());
+if (els.ttTranslate) els.ttTranslate.addEventListener('click', () => els.translateBtn.click());
 
 /* --------------------------------------------- wallpaper pointer forwarding */
 /*
@@ -5023,7 +5094,8 @@ window.player.onDisplayMode(({ mode, insets }) => {
   root.setProperty('--shell-left', `${inset.left || 0}px`);
   root.setProperty('--shell-right', `${inset.right || 0}px`);
 
-  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Full';
+  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Size';
+  markModeMenu();
   document.body.classList.toggle('mode-bar', displayMode === 'bar');
   document.body.classList.toggle('mode-strip', displayMode === 'strip');
   /* Wallpaper draws the full layout — it IS the desktop, so there is as much
@@ -5374,11 +5446,60 @@ els.keyBtn.addEventListener('click', async () => {
     document.body.classList.add('keybox-open');
     const provider = await refreshProviderChip();
     els.keyStatus.textContent = provider ? `active: ${provider}` : 'no provider configured';
+    populateLocalCliPicker();
     els.keyInput.focus();
   } else {
     closeKeybox();
   }
 });
+
+/**
+ * Fill the key panel's "Local AI" picker with the installed CLIs, on demand —
+ * so a CLI can be chosen any time, not only after a cloud request has failed.
+ * The current choice is marked, and picking one (or "off") is saved immediately.
+ */
+async function populateLocalCliPicker() {
+  const box = document.getElementById('keybox-cli');
+  if (!box || !window.player.localcliDetect) return;
+  box.textContent = 'checking…';
+  let detected = [];
+  let chosen = null;
+  try {
+    detected = await window.player.localcliDetect();
+    const status = await window.player.localcliStatus();
+    chosen = status && status.consented ? status.id : null;
+  } catch { /* leave empty */ }
+
+  const installed = (detected || []).filter((c) => c.installed);
+  box.textContent = '';
+
+  if (installed.length === 0) {
+    const hint = document.createElement('span');
+    hint.className = 'localcli__hint';
+    hint.textContent = 'No local AI CLI found. Install Claude, Gemini or Ollama to use one.';
+    box.appendChild(hint);
+    return;
+  }
+
+  const ordered = [...installed].sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+  // An explicit "off" so the cloud-only user can turn a prior choice back off.
+  const options = [{ id: null, label: 'Off (cloud only)' }, ...ordered];
+  for (const c of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip';
+    const badge = c.id === null ? '' : (c.verified ? ' ✓' : (c.unverified ? ' · experimental' : ' · best-effort'));
+    btn.textContent = `${c.label}${badge}`;
+    btn.setAttribute('aria-pressed', String((c.id || null) === (chosen || null)));
+    if (c.verified) btn.classList.add('chip--recommended');
+    btn.addEventListener('click', async () => {
+      await window.player.localcliConsent(c.id);
+      populateLocalCliPicker();
+      els.keyStatus.textContent = c.id ? `local AI: ${c.label}` : 'local AI off';
+    });
+    box.appendChild(btn);
+  }
+}
 
 async function saveApiKey() {
   const value = els.keyInput.value.trim();
