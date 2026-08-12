@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Lyric Overlay",
-  "version": "0.27.3",
+  "version": "0.27.4",
   "identifier": "com.dhruv.lyricoverlay",
   "build": {
     "frontendDist": "../src/renderer",
