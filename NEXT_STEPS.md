@@ -31,6 +31,39 @@ is missing, why it was left, and what the first move is.
 
 ---
 
+## The "best release" plan — karaoke-grade sync (#3) + visual depth (#4)
+
+The chosen direction for the next few releases. 0.23.0 shipped the first,
+verifiable piece (the karaoke word wipe). The rest, in honest cost order:
+
+**Karaoke-grade sync (#3):**
+1. **Real word-level timing where a source has it.** The wipe currently runs on
+   an estimate (syllable-weighted division of the line). LRCLIB's enhanced-LRC
+   extension carries true per-word stamps but a survey found zero entries using
+   it; the aligner (`wordalign.js`) produces real stamps from Whisper and IS
+   wired, but the record→align→cache→replay cycle has never been watched end to
+   end. First move: one full play with `♫` on, watch a word-synced replay.
+2. **Vocal isolation (Demucs) before transcription.** The real accuracy ceiling
+   for songs with no lyrics. Heavy: a ~150MB+ model, minutes of CPU, and it
+   CANNOT be shipped without an install-and-transcribe run to verify — building
+   it blind is how transcription dies for everyone. Do it as an optional pack
+   (the same machinery the ONNX-runtime split needs), never bundled.
+
+**Visual depth (#4):**
+3. **More 2D layers onto the GPU.** The galaxy, parametric curves and
+   constellation are the remaining per-frame CPU cost; moving them into the
+   swirl shader cuts CPU and allows far higher particle counts. Medium risk,
+   all local, verifiable by draw-cost profiling.
+4. **Per-mood visual profiles.** The sentiment pass already computes energy and
+   a mood; today only the palette uses it. Let energy drive the motion floor and
+   mood bias the curated preset pool. Blocked on a working LLM/sentiment
+   provider to verify — the local-CLI fallback (0.22.0) now unblocks it.
+5. **Polished beat-synced preset transitions.** The MilkDrop cycle cuts on
+   drops; a short cross-fade timed to the beat would read as designed rather
+   than abrupt. Low risk.
+
+---
+
 ## Where 0.22.0 landed
 
 **Shipped in 0.22.0 — the "make desktop mode real" release:**

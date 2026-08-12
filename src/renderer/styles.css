@@ -394,8 +394,8 @@ body.lyrics-hidden .translation {
     90deg,
     #ffffff 0%,
     #ffffff calc(var(--fill) * 100%),
-    color-mix(in srgb, var(--accent-live) 70%, #ffffff) calc(var(--fill) * 100% + 1.5%),
-    color-mix(in srgb, var(--accent-live) 55%, rgba(255, 255, 255, 0.55)) 100%
+    color-mix(in srgb, var(--accent-live) 85%, #ffffff) calc(var(--fill) * 100% + 1%),
+    color-mix(in srgb, var(--accent-live) 60%, rgba(255, 255, 255, 0.28)) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;

@@ -2,6 +2,24 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.23.0 — 2026-08-12
+
+### Added
+
+- **Karaoke-grade word fill.** The word being sung now wipes left→right across
+  itself over its own duration — bright where it has been sung, dim where it
+  has not, with a glowing edge at the front — instead of the old all-at-once
+  highlight. Driven per frame from the word's timing (real where a source
+  provided it, syllable-weighted estimate otherwise), quantised so it costs one
+  style write on one element per frame. Verified on a real synced track.
+
+### Notes
+
+- This is the first half of the "karaoke-grade sync" and "visual depth" work.
+  The heavier pieces — real word-level timing from a source, vocal isolation for
+  cleaner transcription, and more of the 2D layers moved onto the GPU — are
+  scoped in NEXT_STEPS.md and land across the next releases.
+
 ## 0.22.0 — 2026-08-12
 
 The release that made desktop mode actually usable, and made switching modes
