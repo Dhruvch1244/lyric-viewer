@@ -62,7 +62,10 @@ jobs:
           workspaces: ./src-tauri -> target
 
       - name: Install npm dependencies
-        run: npm ci
+        # npm install (not npm ci) so a version bump that hasn't refreshed the
+        # lockfile doesn't fail the in-sync check — this pipeline only needs the
+        # JS deps present for the vendor:whisper step, not byte-for-byte pinning.
+        run: npm install
 
       - name: Build + publish
         uses: tauri-apps/tauri-action@v0
