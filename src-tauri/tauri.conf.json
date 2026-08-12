@@ -4,7 +4,8 @@
   "version": "0.26.0",
   "identifier": "com.dhruv.lyricoverlay",
   "build": {
-    "frontendDist": "../src/renderer"
+    "frontendDist": "../src/renderer",
+    "beforeBuildCommand": "npm run vendor:whisper"
   },
   "app": {
     "withGlobalTauri": true,

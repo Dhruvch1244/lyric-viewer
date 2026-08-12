@@ -13,7 +13,7 @@
     "vendor:presets": "node scripts/vendor-presets.js",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "npm run vendor:whisper && tauri build",
+    "tauri:build": "tauri build",
     "vendor:whisper": "node scripts/vendor-whisper.js"
   },
   "license": "MIT",
