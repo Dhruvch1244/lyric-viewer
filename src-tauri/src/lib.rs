@@ -9,6 +9,8 @@
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
 mod lyrics;
+#[cfg(windows)]
+mod wallpaper;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -394,14 +396,48 @@ fn get_display_mode(state: State<Mutex<Prefs>>) -> String {
     state.lock().unwrap().display_mode.clone()
 }
 
+/// The overlay's native window handle as a raw isize, for the wallpaper FFI.
+#[cfg(windows)]
+fn window_hwnd(app: &AppHandle) -> Option<isize> {
+    app.get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|h| h.0 as isize)
+}
+
+/// Enter or leave wallpaper mode as the display mode changes. Reparenting the
+/// overlay behind the desktop icons is the whole feature; on any failure it
+/// stays a normal overlay (the attach/detach return Err rather than panic).
+#[cfg(windows)]
+fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
+    let Some(hwnd) = window_hwnd(app) else { return };
+    if new_mode == "wallpaper" && old_mode != "wallpaper" {
+        if let Err(e) = wallpaper::attach(hwnd) {
+            eprintln!("[wallpaper] attach failed: {e}");
+        }
+    } else if new_mode != "wallpaper" && old_mode == "wallpaper" {
+        if let Err(e) = wallpaper::detach(hwnd) {
+            eprintln!("[wallpaper] detach failed: {e}");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_wallpaper(_app: &AppHandle, _old_mode: &str, _new_mode: &str) {}
+
 #[tauri::command]
 fn set_display_mode(mode: String, state: State<Mutex<Prefs>>, app: AppHandle) {
-    {
+    let old_mode = {
         let mut p = state.lock().unwrap();
+        let old = p.display_mode.clone();
         p.display_mode = mode.clone();
         save_prefs(&app, &p);
-    }
-    size_overlay(&app, &mode);
+        old
+    };
+    // Wallpaper wants the full monitor; bar/strip resize; leaving wallpaper
+    // detaches first so the window is a normal top-level again before resizing.
+    apply_wallpaper(&app, &old_mode, &mode);
+    let size_mode = if mode == "wallpaper" { "full" } else { &mode };
+    size_overlay(&app, size_mode);
     let _ = app.emit("display-mode", json!({ "mode": mode, "insets": {} }));
 }
 
@@ -486,7 +522,20 @@ pub fn run() {
             size_overlay(&handle, &mode);
 
             // Begin streaming "now playing" from Windows.
-            start_smtc(handle);
+            start_smtc(handle.clone());
+
+            // Restore a persisted wallpaper mode after the window has painted a
+            // frame, on the main thread (reparenting touches the UI window).
+            if mode == "wallpaper" {
+                let h2 = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    let h3 = h2.clone();
+                    let _ = h2.run_on_main_thread(move || {
+                        apply_wallpaper(&h3, "full", "wallpaper");
+                    });
+                });
+            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(

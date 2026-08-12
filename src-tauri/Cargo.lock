@@ -1800,6 +1800,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-log",
  "ureq",
+ "windows",
 ]
 
 [[package]]
