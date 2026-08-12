@@ -202,6 +202,11 @@ let pulse = 0;
 let baseEnergy = 0.35;
 /** Current song mood label, for the status line. */
 let currentMood = null;
+/**
+ * The visual profile derived from the song's mood + energy — motion character,
+ * not just palette. Neutral until the sentiment pass lands. See mood.js.
+ */
+let moodProfile = { key: 'neutral', motion: 1, turbulence: 1, flicker: 1, warmth: 0 };
 
 /* ---- build-up / drop engine (no audio yet — inferred from lyric gaps) ---- */
 /** 0..1 ramp while an instrumental gap approaches its next lyric. */
@@ -868,11 +873,33 @@ function paintWords(positionMs) {
     const state = positionMs >= w.endMs ? WORD_SUNG
       : positionMs >= w.startMs ? WORD_SINGING
         : WORD_PENDING;
-    if (state === w.state) continue;
-    w.state = state;
-    const cl = w.el.classList;
-    cl.toggle('word--active', state === WORD_SINGING);
-    cl.toggle('word--sung', state === WORD_SUNG);
+
+    if (state !== w.state) {
+      w.state = state;
+      const cl = w.el.classList;
+      cl.toggle('word--active', state === WORD_SINGING);
+      cl.toggle('word--sung', state === WORD_SUNG);
+      // Leaving the active state: clear the fill so a re-entry starts clean and
+      // a sung word is not left mid-wipe.
+      if (state !== WORD_SINGING) w.el.style.removeProperty('--fill');
+    }
+
+    /*
+      Karaoke-grade fill. The active word is wiped left→right over its own
+      duration, the way karaoke has always coloured the syllable being sung —
+      not the old all-at-once highlight. This is the ONE per-frame style write
+      in the lyric loop, on a single element, and it is quantised to ~40 steps
+      so a word only re-paints when the wipe visibly advances.
+    */
+    if (state === WORD_SINGING) {
+      const dur = w.endMs - w.startMs;
+      const p = dur > 0 ? (positionMs - w.startMs) / dur : 1;
+      const step = Math.max(0, Math.min(1, Math.round(p * 40) / 40));
+      if (step !== w.fill) {
+        w.fill = step;
+        w.el.style.setProperty('--fill', String(step));
+      }
+    }
   }
 }
 
@@ -2365,6 +2392,22 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
     drop: dropFlash * kick,
     beat: beatFlash * kick,
     bass: bass * kick,
+    /*
+      Deep-space starfield, rendered on the GPU inside the swirl shader — a new
+      depth layer that costs the CPU nothing, where the old star/galaxy layers
+      cost one draw call per point. Kept subtle and lifted by energy so it reads
+      as depth behind the liquid, and pulled back hard for a solo/bare look that
+      wants the field and nothing else. (The phyllotaxis galaxy on the 2D canvas
+      is untouched; porting that faithfully is the larger remaining half of the
+      GPU-layer move — see NEXT_STEPS.)
+    */
+    stars: (style && style.bare) ? 0 : Math.min(1, 0.4 + life * 0.45),
+    /*
+      The phyllotaxis galaxy, now drawn on the GPU. Only for looks that asked
+      for it (scene.galaxy) — the same gate the CPU version had — so nothing
+      changes about WHICH presets show it, only where it is computed.
+    */
+    galaxy: scene.galaxy ? 1 : 0,
     // Per-preset character, so the field changes with the look instead of
     // staying identical underneath every one of them.
     style,
@@ -2963,8 +3006,16 @@ function drawBackdrop(now) {
     // Sentiment energy raises the constant floor of motion, so high-energy songs
     // stay visibly more alive than mellow ones even between lyric lines. Build-up
     // and drop add a temporary surge on top.
-    const life = Math.min(1, intensity + ambient + baseEnergy * 0.45 + buildup * 0.5);
-    const motion = 1 + baseEnergy * 1.4 + buildup * 1.6 + dropFlash * 1.2;
+    /*
+      The mood profile shapes the CHARACTER of the motion on top of energy — a
+      calm song churns less and a driving one more, even at the same energy.
+      Applied as a gentle multiplier (clamped 0.4..2 in mood.js) so it colours
+      the feel without ever stalling the field or running it away. Build-up and
+      drop surges are left un-multiplied: a drop should hit hard regardless of
+      the song's baseline mood.
+    */
+    const life = Math.min(1, (intensity + ambient + baseEnergy * 0.45) * moodProfile.motion + buildup * 0.5);
+    const motion = 1 + (baseEnergy * 1.4) * moodProfile.motion + buildup * 1.6 + dropFlash * 1.2;
     const accent = (palette && palette[3]) || '#e94560';
 
     // Per-frame dt (backdrop loop is independent of the lyric frame loop).
@@ -3390,7 +3441,12 @@ function drawBackdrop(now) {
     // mode drops it entirely.
     // The 260-point galaxy is the heaviest always-on layer; auto-drop it when the
     // frame rate sags (in addition to Lite mode) so weak GPUs recover toward 60.
-    if (scene.galaxy) drawGalaxy(now, w, h, life);
+    // The galaxy runs on the GPU inside the swirl shader when that path is
+    // available (see swirl.js); only fall back to the CPU fillRect version when
+    // it is not, so the two never draw at once.
+    const gpuGalaxy = swirlOn && window.SwirlField
+      && window.SwirlField.hasGalaxy && window.SwirlField.hasGalaxy();
+    if (scene.galaxy && !gpuGalaxy) drawGalaxy(now, w, h, life);
     // Behind the curves and the web, so anything else in the look sits inside
     // the tunnel rather than being swallowed by it.
     if (scene.wormhole) drawWormhole(w, h, dt, life);
@@ -3568,7 +3624,10 @@ function drawBackdrop(now) {
     // a brief additive veil. A per-frame random keeps it a genuine flicker rather
     // than a smooth fade, punching the "moment" hard on drops.
     if (flicker > 0.02) {
-      const strobe = flicker * (0.5 + Math.random() * 0.5);
+      // Mood shapes how hard the screen strobes: a calm song barely flickers, a
+      // dark or driving one leans in. Applied at the point of use so the flicker
+      // state still decays normally.
+      const strobe = flicker * moodProfile.flicker * (0.5 + Math.random() * 0.5);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.5, strobe * 0.5);
       ctx.fillStyle = Math.random() < 0.5 ? '#ffffff' : accentLive;
@@ -4157,6 +4216,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.23.0': [
+    '<b>Karaoke word fill</b> — the word being sung now lights up left-to-right in time, instead of all at once.',
+    '<b>The visuals match the mood</b> — a calm song moves gently, a driving one harder, not just a different colour.',
+    '<b>A deep-space starfield</b> drifts behind the field now, rendered on the GPU.',
+    '<b>MilkDrop presets stick</b> — a preset you pick no longer snaps back to the default.',
+  ],
   '0.22.0': [
     '<b>Desktop mode is one toggle now</b> — the size chip (or Ctrl+Alt+M) flips between the overlay and living on your desktop, behind your icons.',
     '<b>Switching keeps your song playing</b> — no more restart when you flip modes.',
@@ -4586,6 +4651,7 @@ window.player.onTrack((track) => {
   // Reset mood/energy; the sentiment analysis (if available) upgrades this soon.
   baseEnergy = typeof track.energy === 'number' ? track.energy : 0.35;
   currentMood = null;
+  applyMoodProfile(); // back to neutral until this track's mood lands
   buildup = 0;
   dropFlash = 0;
 
@@ -4716,8 +4782,22 @@ window.player.onMood((data) => {
   }
   if (typeof data.energy === 'number') baseEnergy = data.energy;
   currentMood = data.mood || null;
+  applyMoodProfile();
   if (currentMood) setStatus(currentMood);
 });
+
+/**
+ * Derive the visual profile from the current mood + energy and expose its key
+ * to CSS. The renderer folds `moodProfile.motion` / `.flicker` into the motion
+ * it already computes each frame; the `data-mood` attribute lets the stylesheet
+ * tune anything CSS owns (glow weight, wash) per character.
+ */
+function applyMoodProfile() {
+  moodProfile = window.MoodProfile
+    ? window.MoodProfile.profileFor(currentMood, baseEnergy)
+    : moodProfile;
+  document.body.dataset.mood = moodProfile.key;
+}
 
 window.player.onLyrics((payload) => {
   if (!isForCurrentTrack(payload.track)) return;
@@ -6414,3 +6494,4 @@ window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
+applyMoodProfile(); // sets body[data-mood="neutral"] so CSS always has a value
