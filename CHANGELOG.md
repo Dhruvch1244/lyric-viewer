@@ -2,6 +2,29 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.27.0 — 2026-08-12
+
+Punchier reactivity, a smoother capture flow, and cross-platform groundwork.
+
+### Added
+
+- **The backdrop hits harder on the beat.** Each kick now thumps the whole
+  field inward and fires a shockwave ring from the centre, with a brighter
+  per-kick flash and bigger build-up/drop swings — the visuals lean into the
+  drops instead of just shimmering through them.
+- **No more "Choose what to share" pop-up.** Enabling audio capture (♫) used to
+  show the browser's screen-share picker every time; it now selects the source
+  automatically, so capture just starts.
+- **Cross-platform build pipeline.** A CI workflow builds and signs the app for
+  Windows, macOS and Linux on a release tag. The Windows-only features (now-
+  playing detection, wallpaper mode) don't have their macOS/Linux equivalents
+  yet — the visuals, lyrics, artwork and translation work everywhere.
+
+### Changed
+
+- **Faster, tighter build.** The release binary is compiled with link-time
+  optimisation and stripped symbols.
+
 ## 0.26.0 — 2026-08-12 — Tauri rebuild
 
 The whole app moved off Electron onto **Tauri**. Same overlay, same visuals — a

@@ -4263,6 +4263,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.27.0': [
+    '<b>The visuals hit harder on the beat</b> — every kick thumps the field and sends a shockwave from the centre, with bigger drops.',
+    '<b>No more share pop-up</b> — turning on audio (♫) just starts, no "choose what to share" dialog.',
+    '<b>Snappier build</b> — compiled with link-time optimisation.',
+    '<b>Groundwork for Mac & Linux</b> — the app now builds for all three from one pipeline.',
+  ],
   '0.26.0': [
     '<b>The app is a fraction of the size</b> — rebuilt on Tauri, so the download went from ~116 MB to ~30 MB. Same visuals, same overlay.',
     '<b>Everything still works</b> — lyrics, cover art, wallpaper mode, translation, the dancers — all reimplemented natively.',
