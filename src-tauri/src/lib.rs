@@ -840,8 +840,48 @@ fn milkdrop_thumb_clear(app: AppHandle) -> bool {
     presets::thumbs_clear(&app)
 }
 
+fn keys_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("keys.json"))
+}
+
+/// Load any API keys saved via the 🔑 panel into the process environment, so
+/// llm.rs (which reads env) picks them up alongside real environment variables.
+fn load_api_keys(app: &AppHandle) {
+    let Some(path) = keys_path(app) else { return };
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Ok(map) = serde_json::from_str::<serde_json::Map<String, Value>>(&text) else { return };
+    for (k, v) in map {
+        if let Some(s) = v.as_str() {
+            if std::env::var(&k).is_err() {
+                std::env::set_var(&k, s);
+            }
+        }
+    }
+}
+
+/// Persist an API key from the 🔑 panel and apply it immediately.
 #[tauri::command]
-fn set_api_key(_name: String, _value: String) {}
+fn set_api_key(name: String, value: String, app: AppHandle) {
+    if name.is_empty() {
+        return;
+    }
+    std::env::set_var(&name, &value);
+    if let Some(path) = keys_path(&app) {
+        let mut map = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Map<String, Value>>(&t).ok())
+            .unwrap_or_default();
+        if value.is_empty() {
+            map.remove(&name);
+        } else {
+            map.insert(name, Value::String(value));
+        }
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, serde_json::to_string_pretty(&map).unwrap_or_default());
+    }
+}
 
 #[tauri::command]
 fn save_beatmap(_payload: Value) {}
@@ -1033,7 +1073,8 @@ pub fn run() {
             app.manage(Mutex::new(CurTrack::default()));
             app.manage(UpdateStore(Mutex::new(json!({ "available": false }))));
 
-            // Check for a newer signed release shortly after boot.
+            // Apply any keys saved via the 🔑 panel, then check for an update.
+            load_api_keys(&handle);
             check_for_update(handle.clone());
 
             // Fill the primary monitor at the remembered display mode.
