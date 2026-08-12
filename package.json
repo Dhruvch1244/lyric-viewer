@@ -10,7 +10,10 @@
     "package": "electron-packager . LyricPlayer --platform=win32 --arch=x64 --out=dist --overwrite --asar=false --app-copyright=\"Lyric Player\" --ignore=\"^/dist\" --ignore=\"^/\\.gitignore\"",
     "dist:win": "electron-builder --win --x64",
     "release:assets": "node scripts/release-assets.js",
-    "vendor:presets": "node scripts/vendor-presets.js"
+    "vendor:presets": "node scripts/vendor-presets.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "license": "MIT",
   "private": true,
@@ -72,12 +75,15 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.2.0",
+    "@tauri-apps/cli": "^2.11.4",
     "electron": "^43.3.0",
     "electron-builder": "^26.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@huggingface/transformers": "^4.2.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "butterchurn": "^2.6.7",
     "butterchurn-presets": "^2.4.7",
     "electron-updater": "^6.8.9",

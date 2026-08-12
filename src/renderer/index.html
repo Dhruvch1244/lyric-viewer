@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self';" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; connect-src 'self' ipc: http://ipc.localhost;" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -352,6 +352,9 @@
     <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles
          themselves are loaded by milkdrop.html, not here — this page must not
          have them, and must not have eval. -->
+    <!-- Tauri backing for window.player. MUST load before player.js/renderer.js,
+         which assume window.player already exists (Electron set it in preload). -->
+    <script src="tauri-shim.js"></script>
     <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>
