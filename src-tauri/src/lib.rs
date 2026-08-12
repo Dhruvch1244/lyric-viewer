@@ -918,6 +918,21 @@ fn save_heatmap(_payload: Value) {}
 #[tauri::command]
 fn report_jobs(_payload: Value) {}
 
+/// Auto-transcription (Whisper) is the one remaining feature: in Electron it ran
+/// through onnxruntime-node in the main process; the chosen Tauri path runs it
+/// in the webview via transformers.js (WASM/WebGPU), which is a later phase.
+/// Until then, report it cleanly so the record→transcribe UI resolves instead of
+/// waiting on a promise that never settles.
+#[tauri::command]
+fn transcribe_audio(app: AppHandle, payload: Value) -> Value {
+    let track = payload.get("track").cloned().unwrap_or(Value::Null);
+    let _ = app.emit(
+        "transcribe-progress",
+        json!({ "track": track, "stage": "error", "message": "transcription is not available yet in this build" }),
+    );
+    json!({ "status": "unavailable" })
+}
+
 #[tauri::command]
 fn wallpaper_interact(_on: bool) {}
 
@@ -1161,6 +1176,7 @@ pub fn run() {
             read_local_file,
             set_local_track,
             end_local_playback,
+            transcribe_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
