@@ -5,6 +5,10 @@ out/
 *.log
 .DS_Store
 
+# Vendored Whisper runtime (transformers.js web + ort WASM) — large binaries
+# copied from node_modules by scripts/vendor-whisper.js, not authored here.
+src/renderer/vendor/transformers/
+
 # Machine-specific Claude Code local settings
 .claude/settings.local.json
 

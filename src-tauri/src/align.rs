@@ -1,0 +1,213 @@
+//! Force-align known lyric text to a transcription's timings.
+//!
+//! A Rust port of `align.js`. LRCLIB has *plain* lyrics for far more songs than
+//! synced ones, and Whisper knows WHEN a line was sung better than WHAT its
+//! words were. Combined: take the words from the real lyrics and the clock from
+//! the transcription. Needleman-Wunsch global alignment over the two line
+//! sequences (token-overlap similarity); unmatched lines interpolate between the
+//! anchors around them, so one mondegreen doesn't desync everything after it.
+
+use crate::lyrics::{token_similarity, Cue};
+
+const MATCH_FLOOR: f64 = 0.34;
+const GAP_PENALTY: f64 = -0.45;
+const DEFAULT_LINE_MS: i64 = 2600;
+
+/// Split a plain-lyrics document into display lines: drop blanks and bracketed
+/// section headers ("[Chorus]", "(Verse 2)").
+pub fn split_plain_lyrics(plain: &str) -> Vec<String> {
+    plain
+        .split('\n')
+        .map(|l| l.trim().to_string())
+        .filter(|l| {
+            if l.is_empty() {
+                return false;
+            }
+            let bytes = l.as_bytes();
+            let bracketed = (bytes[0] == b'[' || bytes[0] == b'(')
+                && (bytes[bytes.len() - 1] == b']' || bytes[bytes.len() - 1] == b')');
+            !bracketed
+        })
+        .collect()
+}
+
+/// Needleman-Wunsch alignment of correct lines against transcribed cues.
+/// Returns, for each line, the index of the cue it matched (or None).
+fn align_sequences(lines: &[String], cues: &[Cue]) -> Vec<Option<usize>> {
+    let n = lines.len();
+    let m = cues.len();
+    let mut score = vec![vec![0.0_f64; m + 1]; n + 1];
+    // 0 = diagonal (match), 1 = up (line skipped), 2 = left (cue skipped)
+    let mut back = vec![vec![0u8; m + 1]; n + 1];
+
+    for i in 1..=n {
+        score[i][0] = score[i - 1][0] + GAP_PENALTY;
+        back[i][0] = 1;
+    }
+    for j in 1..=m {
+        score[0][j] = score[0][j - 1] + GAP_PENALTY;
+        back[0][j] = 2;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let sim = token_similarity(&lines[i - 1], &cues[j - 1].text);
+            let diag = score[i - 1][j - 1] + (sim - MATCH_FLOOR);
+            let up = score[i - 1][j] + GAP_PENALTY;
+            let left = score[i][j - 1] + GAP_PENALTY;
+            let mut best = diag;
+            let mut dir = 0u8;
+            if up > best {
+                best = up;
+                dir = 1;
+            }
+            if left > best {
+                best = left;
+                dir = 2;
+            }
+            score[i][j] = best;
+            back[i][j] = dir;
+        }
+    }
+
+    let mut matches = vec![None; n];
+    let mut i = n;
+    let mut j = m;
+    while i > 0 && j > 0 {
+        match back[i][j] {
+            0 => {
+                if token_similarity(&lines[i - 1], &cues[j - 1].text) >= MATCH_FLOOR {
+                    matches[i - 1] = Some(j - 1);
+                }
+                i -= 1;
+                j -= 1;
+            }
+            1 => i -= 1,
+            _ => j -= 1,
+        }
+    }
+    matches
+}
+
+/// Produce synced cues from correct lyric lines + transcribed timings.
+/// Returns (cues, coverage) — coverage is the fraction of lines that anchored
+/// directly; low coverage means the caller should prefer the raw transcription.
+pub fn align_lyrics(lines: &[String], cues: &[Cue], duration_ms: i64) -> (Vec<Cue>, f64) {
+    let clean: Vec<String> = lines.iter().filter(|l| !l.trim().is_empty()).cloned().collect();
+    if clean.is_empty() || cues.is_empty() {
+        return (Vec::new(), 0.0);
+    }
+
+    let matches = align_sequences(&clean, cues);
+    let anchors = matches.iter().filter(|x| x.is_some()).count();
+
+    let mut times: Vec<Option<i64>> = vec![None; clean.len()];
+    for (i, m) in matches.iter().enumerate() {
+        if let Some(idx) = m {
+            times[i] = Some(cues[*idx].time_ms);
+        }
+    }
+
+    let first_anchor = times.iter().position(|t| t.is_some());
+    let Some(first_anchor) = first_anchor else {
+        // Nothing matched: spread evenly across the track.
+        let span = if duration_ms > 0 { duration_ms } else { clean.len() as i64 * DEFAULT_LINE_MS };
+        let step = span as f64 / (clean.len() as f64 + 1.0);
+        let out = clean
+            .iter()
+            .enumerate()
+            .map(|(i, text)| Cue { time_ms: (step * (i as f64 + 1.0)).round() as i64, text: text.clone(), end_ms: None })
+            .collect();
+        return (out, 0.0);
+    };
+
+    // Lead-in: back off from the first anchor.
+    for i in (0..first_anchor).rev() {
+        times[i] = Some((times[i + 1].unwrap() - DEFAULT_LINE_MS).max(0));
+    }
+    // Middle + tail: interpolate between anchors.
+    let mut i = first_anchor + 1;
+    while i < clean.len() {
+        if times[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let prev = times[i - 1].unwrap();
+        let mut next = None;
+        for k in (i + 1)..clean.len() {
+            if times[k].is_some() {
+                next = Some(k);
+                break;
+            }
+        }
+        match next {
+            None => {
+                let end = if duration_ms > prev { duration_ms } else { prev + (clean.len() - i) as i64 * DEFAULT_LINE_MS };
+                let step = (end - prev) as f64 / (clean.len() - i + 1) as f64;
+                for (off, k) in (i..clean.len()).enumerate() {
+                    times[k] = Some(prev + (step * (off as f64 + 1.0)).round() as i64);
+                }
+                break;
+            }
+            Some(nx) => {
+                let step = (times[nx].unwrap() - prev) as f64 / (nx - i + 1) as f64;
+                for (off, k) in (i..nx).enumerate() {
+                    times[k] = Some(prev + (step * (off as f64 + 1.0)).round() as i64);
+                }
+                i = nx;
+            }
+        }
+    }
+
+    // Enforce strictly increasing times.
+    let mut out = Vec::with_capacity(clean.len());
+    let mut last = -1i64;
+    for (i, text) in clean.iter().enumerate() {
+        let mut t = times[i].unwrap_or(0).max(0);
+        if t <= last {
+            t = last + 1;
+        }
+        last = t;
+        out.push(Cue { time_ms: t, text: text.clone(), end_ms: None });
+    }
+    (out, anchors as f64 / clean.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cue(t: i64, s: &str) -> Cue {
+        Cue { time_ms: t, text: s.into(), end_ms: None }
+    }
+
+    #[test]
+    fn split_drops_blanks_and_section_headers() {
+        let plain = "[Verse 1]\nfirst line\n\n(Chorus)\nsecond line";
+        assert_eq!(split_plain_lyrics(plain), vec!["first line", "second line"]);
+    }
+
+    #[test]
+    fn align_anchors_real_words_onto_transcribed_timing() {
+        let lines = vec!["hello world".to_string(), "goodbye now".to_string()];
+        // Transcription mishears "goodbye" but the timing is right.
+        let cues = vec![cue(1000, "hello world"), cue(5000, "good bye now")];
+        let (out, coverage) = align_lyrics(&lines, &cues, 10_000);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].text, "hello world"); // real word, transcribed time
+        assert_eq!(out[0].time_ms, 1000);
+        assert_eq!(out[1].text, "goodbye now"); // the CORRECT spelling wins
+        assert!(coverage > 0.0);
+        // Strictly increasing.
+        assert!(out[1].time_ms > out[0].time_ms);
+    }
+
+    #[test]
+    fn align_with_no_matches_spreads_evenly() {
+        let lines = vec!["aaa".to_string(), "bbb".to_string(), "ccc".to_string()];
+        let cues = vec![cue(0, "zzz"), cue(9000, "yyy")];
+        let (out, coverage) = align_lyrics(&lines, &cues, 12_000);
+        assert_eq!(out.len(), 3);
+        assert_eq!(coverage, 0.0);
+        assert!(out[0].time_ms < out[1].time_ms && out[1].time_ms < out[2].time_ms);
+    }
+}
