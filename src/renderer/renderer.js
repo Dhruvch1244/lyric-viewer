@@ -2402,6 +2402,12 @@ function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
       GPU-layer move — see NEXT_STEPS.)
     */
     stars: (style && style.bare) ? 0 : Math.min(1, 0.4 + life * 0.45),
+    /*
+      The phyllotaxis galaxy, now drawn on the GPU. Only for looks that asked
+      for it (scene.galaxy) — the same gate the CPU version had — so nothing
+      changes about WHICH presets show it, only where it is computed.
+    */
+    galaxy: scene.galaxy ? 1 : 0,
     // Per-preset character, so the field changes with the look instead of
     // staying identical underneath every one of them.
     style,
@@ -3435,7 +3441,12 @@ function drawBackdrop(now) {
     // mode drops it entirely.
     // The 260-point galaxy is the heaviest always-on layer; auto-drop it when the
     // frame rate sags (in addition to Lite mode) so weak GPUs recover toward 60.
-    if (scene.galaxy) drawGalaxy(now, w, h, life);
+    // The galaxy runs on the GPU inside the swirl shader when that path is
+    // available (see swirl.js); only fall back to the CPU fillRect version when
+    // it is not, so the two never draw at once.
+    const gpuGalaxy = swirlOn && window.SwirlField
+      && window.SwirlField.hasGalaxy && window.SwirlField.hasGalaxy();
+    if (scene.galaxy && !gpuGalaxy) drawGalaxy(now, w, h, life);
     // Behind the curves and the web, so anything else in the look sits inside
     // the tunnel rather than being swallowed by it.
     if (scene.wormhole) drawWormhole(w, h, dt, life);

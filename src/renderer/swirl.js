@@ -255,12 +255,85 @@ void main() {
 }
 `;
 
+  /*
+    The phyllotaxis galaxy, as a GPU point pass.
+
+    This is the 260-point Fibonacci spiral that used to be drawn on the 2D
+    canvas — one fillRect per point per frame. As discrete points it cannot go
+    in the fragment shader (a per-pixel loop over 260 points is hundreds of
+    millions of iterations a frame), so it is a SECOND program drawing GL_POINTS
+    from a VBO seeded once with each point's (angle, radius). The spin, spread,
+    tilt, twinkle and beat-swell are all computed on the GPU from the same
+    uniforms the field uses, so the CPU uploads nothing per frame and this scales
+    to any point count for free.
+
+    It is optional: if this program fails to build, the field still renders and
+    the caller keeps the CPU galaxy. See `galaxyReady`.
+  */
+  const GALAXY_VERT = `#version 300 es
+layout(location = 0) in vec2 a_pt;   // (angle radians, radius 0..1)
+uniform vec2  u_res;
+uniform float u_time;                 // seconds
+uniform float u_life;
+uniform float u_beat;
+out float v_rad;
+out float v_phase;
+void main() {
+  // Match the CPU look: spin = now*0.00006 (ms) + beat*0.05; now*0.00006/ms is
+  // 0.06 per second, so u_time (seconds) * 0.06.
+  float ang = a_pt.x + u_time * 0.06 + u_beat * 0.05;
+  float spread = min(u_res.x, u_res.y) * (0.42 + u_life * 0.10 + u_beat * 0.04);
+  float r = a_pt.y * spread;
+  vec2 centre = vec2(u_res.x * 0.5, u_res.y * 0.44);
+  vec2 pos = centre + vec2(cos(ang) * r, sin(ang) * r * 0.72); // tilt → disc
+  vec2 clip = (pos / u_res) * 2.0 - 1.0;
+  clip.y = -clip.y;                    // canvas y is down; clip y is up
+  gl_Position = vec4(clip, 0.0, 1.0);
+  gl_PointSize = 2.0 + a_pt.y * 6.0 + u_beat * 5.0;
+  v_rad = a_pt.y;
+  v_phase = a_pt.x;                    // per-point twinkle seed
+}
+`;
+
+  const GALAXY_FRAG = `#version 300 es
+precision highp float;
+in float v_rad;
+in float v_phase;
+uniform vec3  u_pal2;
+uniform vec3  u_pal3;
+uniform float u_time;
+uniform float u_life;
+uniform float u_beat;
+uniform float u_galaxy;               // intensity, 0 = off
+out vec4 fragColor;
+void main() {
+  // Soft round sprite from the point's own coords.
+  float d = length(gl_PointCoord - 0.5);
+  float soft = smoothstep(0.5, 0.0, d);
+  float tw = 0.5 + 0.5 * sin(u_time * 2.0 + v_phase * 30.0);
+  float a = (soft * ((0.10 + u_life * 0.16) * tw + u_beat * 0.12)) * u_galaxy;
+  vec3 col = mix(u_pal2, u_pal3, v_rad);   // hue ramp by radius, like the buckets
+  fragColor = vec4(col, a);
+}
+`;
+
   /** @type {WebGL2RenderingContext|null} */ let gl = null;
   /** @type {HTMLCanvasElement|null} */ let cv = null;
   /** @type {WebGLProgram|null} */ let prog = null;
   let active = false;
   let octaves = 5;
   const u = {};
+
+  /** The field's own VAO, re-bound each render so the galaxy pass can borrow GL. */
+  let fieldVao = null;
+
+  /* The galaxy point pass. Null/false until built; a build failure leaves the
+     field untouched and the caller falls back to the CPU galaxy. */
+  let galaxyProg = null;
+  let galaxyVao = null;
+  let galaxyReady = false;
+  let galaxyCount = 0;
+  const gu = {};
 
   /* Reused scratch so render() allocates nothing per frame. */
   const rgb = [
@@ -345,6 +418,7 @@ void main() {
 
     // Fullscreen triangle pair.
     const vao = gl.createVertexArray();
+    fieldVao = vao;
     gl.bindVertexArray(vao);
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -364,12 +438,67 @@ void main() {
     }
 
     // The layer is composited by the browser over the page, so no blending
-    // inside GL is needed — the alpha channel we write is the layer opacity.
+    // inside GL is needed for the FIELD — the alpha channel we write is the
+    // layer opacity. The galaxy pass toggles blending on for itself.
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
 
+    // Optional galaxy point pass. Its own try/catch: a failure here must not
+    // take the field down with it.
+    buildGalaxy();
+
     active = true;
     return true;
+  }
+
+  /**
+   * Build the galaxy point program + VBO. Sets `galaxyReady`; on any failure it
+   * stays false and the field is unaffected.
+   */
+  function buildGalaxy() {
+    try {
+      const gvs = compile(gl.VERTEX_SHADER, GALAXY_VERT);
+      const gfs = compile(gl.FRAGMENT_SHADER, GALAXY_FRAG);
+      if (!gvs || !gfs) return;
+      galaxyProg = gl.createProgram();
+      gl.attachShader(galaxyProg, gvs);
+      gl.attachShader(galaxyProg, gfs);
+      gl.linkProgram(galaxyProg);
+      if (!gl.getProgramParameter(galaxyProg, gl.LINK_STATUS)) {
+        console.warn('[swirl] galaxy link failed:', gl.getProgramInfoLog(galaxyProg));
+        return;
+      }
+      gl.deleteShader(gvs);
+      gl.deleteShader(gfs);
+
+      // Seed the phyllotaxis spiral once: point i at angle i·137.507° and
+      // radius √(i/count), the same golden-angle packing the CPU used.
+      const count = 260;
+      const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+      const data = new Float32Array(count * 2);
+      for (let i = 0; i < count; i += 1) {
+        data[i * 2] = i * GOLDEN;
+        data[i * 2 + 1] = Math.sqrt(i / count);
+      }
+      galaxyCount = count;
+
+      galaxyVao = gl.createVertexArray();
+      gl.bindVertexArray(galaxyVao);
+      const gbuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, gbuf);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+
+      for (const name of ['u_res', 'u_time', 'u_life', 'u_beat', 'u_pal2', 'u_pal3', 'u_galaxy']) {
+        gu[name] = gl.getUniformLocation(galaxyProg, name);
+      }
+      galaxyReady = true;
+    } catch (err) {
+      console.warn('[swirl] galaxy pass unavailable:', err && err.message);
+      galaxyReady = false;
+    }
   }
 
   /**
@@ -409,6 +538,12 @@ void main() {
     if (!active || !gl) return;
     const s = state || {};
 
+    // Make the field the current program + VAO every frame: the galaxy pass
+    // below switches both, so the field can no longer assume they persist from
+    // init the way it used to.
+    gl.useProgram(prog);
+    gl.bindVertexArray(fieldVao);
+
     // Palette uploads only when it actually changes (per-track, not per-frame).
     const pal = s.palette && s.palette.length >= 4
       ? s.palette
@@ -440,7 +575,37 @@ void main() {
     gl.uniform1i(u.u_octaves, octaves);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    /*
+      The phyllotaxis galaxy, drawn additively on top of the field. Uploads only
+      the handful of uniforms that change; the 260 point positions live in the
+      VBO and never move. rgb[2]/rgb[3] hold the current palette (refreshed above
+      on a change), so the point colours track the song.
+    */
+    const galaxy = s.galaxy || 0;
+    if (galaxyReady && galaxy > 0.001) {
+      gl.useProgram(galaxyProg);
+      gl.bindVertexArray(galaxyVao);
+      gl.uniform2f(gu.u_res, cv.width, cv.height);
+      gl.uniform1f(gu.u_time, (s.timeMs || 0) / 1000);
+      gl.uniform1f(gu.u_life, s.life || 0);
+      gl.uniform1f(gu.u_beat, s.beat || 0);
+      gl.uniform3fv(gu.u_pal2, rgb[2]);
+      gl.uniform3fv(gu.u_pal3, rgb[3]);
+      gl.uniform1f(gu.u_galaxy, galaxy);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);   // additive, like the CPU 'lighter'
+      gl.drawArrays(gl.POINTS, 0, galaxyCount);
+      gl.disable(gl.BLEND);
+    }
   }
 
-  window.SwirlField = { init, resize, render, setQuality, isActive: () => active };
+  /** Whether the GPU galaxy pass is available (else the caller draws the CPU one). */
+  function hasGalaxy() {
+    return galaxyReady;
+  }
+
+  window.SwirlField = {
+    init, resize, render, setQuality, hasGalaxy, isActive: () => active,
+  };
 })();
