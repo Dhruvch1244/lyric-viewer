@@ -133,8 +133,10 @@ pub fn clean_artist(raw: &str) -> String {
     }
 }
 
-/// Score one LRCLIB candidate. Requires syncedLyrics. Negative = reject.
-fn score_candidate(candidate: &Value, track: &Track) -> f64 {
+/// Score one candidate (LRCLIB-shaped: trackName/artistName/albumName/duration/
+/// syncedLyrics). Requires syncedLyrics. Negative = reject. Shared by the
+/// NetEase and Kugou sources so all three agree what "a good match" means.
+pub fn score_candidate(candidate: &Value, track: &Track) -> f64 {
     if candidate.get("syncedLyrics").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
         return -1.0;
     }

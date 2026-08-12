@@ -10,9 +10,11 @@
 
 mod artwork;
 mod attribute;
+mod kugou;
 mod llm;
 mod lyrics;
 mod mood;
+mod netease;
 mod translate;
 #[cfg(windows)]
 mod wallpaper;
@@ -308,7 +310,12 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
         );
 
         let track = lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
-        match lyrics::fetch_synced(&track) {
+        // LRCLIB first, then NetEase, then Kugou — each only runs when the
+        // previous missed, so a song LRCLIB knows costs one request.
+        let found = lyrics::fetch_synced(&track)
+            .or_else(|| netease::fetch_synced(&track))
+            .or_else(|| kugou::fetch_synced(&track));
+        match found {
             Some((cues, source)) => {
                 let cue_texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
                 let payload = json!({
