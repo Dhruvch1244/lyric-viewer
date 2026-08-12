@@ -47,6 +47,8 @@ const ADAPTERS = [
     cmd: 'claude',
     install: 'npm install -g @anthropic-ai/claude-code',
     // `-p` is print / non-interactive: read stdin, print the reply, exit.
+    // Verified end to end: returns and parses JSON.
+    verified: true,
     command: () => ({ file: 'claude', args: ['-p'] }),
   },
   {
@@ -54,7 +56,16 @@ const ADAPTERS = [
     label: 'Gemini CLI',
     cmd: 'gemini',
     install: 'npm install -g @google/gemini-cli',
-    command: () => ({ file: 'gemini', args: ['-p'] }),
+    /*
+      NOT `-p`: that flag REQUIRES the prompt as its value ("not enough
+      arguments following: -p"), and our prompts are multi-line JSON that cannot
+      be passed as a Windows command-line argument — cmd.exe (which shell:true
+      routes through, needed for the .cmd shim) caps args near 8KB and mangles
+      newlines and quotes. So it is run bare and fed the prompt on stdin, and
+      relies on Gemini reading piped (non-TTY) input. Best-effort: if a build
+      insists on interactive mode it times out and the chain moves on.
+    */
+    command: () => ({ file: 'gemini', args: [] }),
   },
   {
     id: 'ollama',
@@ -72,7 +83,7 @@ const ADAPTERS = [
     cmd: 'gh',
     install: 'gh extension install github/gh-models',
     // Copilot's own CLI only suggests shell commands; the gh-models extension
-    // is the one that runs a chat model non-interactively.
+    // is the one that runs a chat model non-interactively, reading stdin.
     needsModel: 'gh',
     command: (model) => ({ file: 'gh', args: ['models', 'run', model || 'openai/gpt-4o-mini'] }),
   },
@@ -82,9 +93,9 @@ const ADAPTERS = [
     cmd: 'antigravity',
     install: 'https://antigravity.google/',
     // Antigravity is primarily an IDE; its non-interactive contract is not
-    // documented, so this is a best guess and is marked unverified in the UI.
+    // documented, so this is a best guess and is marked experimental in the UI.
     unverified: true,
-    command: () => ({ file: 'antigravity', args: ['-p'] }),
+    command: () => ({ file: 'antigravity', args: [] }),
   },
 ];
 
@@ -159,6 +170,7 @@ async function detect() {
     installed: await onPath(a.cmd),
     install: a.install,
     unverified: Boolean(a.unverified),
+    verified: Boolean(a.verified),
   })));
   return results;
 }

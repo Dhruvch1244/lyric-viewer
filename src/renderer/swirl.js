@@ -451,11 +451,23 @@ void main() {
     return true;
   }
 
+  /*
+    GL_POINTS point-sprites render as untextured SQUARES under ANGLE (the
+    Direct3D backend Electron uses on Windows) on many drivers — gl_PointCoord
+    and large gl_PointSize are the historically flaky bits. On the reporting
+    machine the galaxy points came out as coloured rectangles across the screen.
+    So the GPU galaxy is OFF until it is reimplemented as instanced quads (which
+    do not depend on point-sprite support); the CPU galaxy is the fallback and
+    is what draws in the meantime. Flip this to re-enable after that rework.
+  */
+  const GALAXY_GPU_ENABLED = false;
+
   /**
    * Build the galaxy point program + VBO. Sets `galaxyReady`; on any failure it
    * stays false and the field is unaffected.
    */
   function buildGalaxy() {
+    if (!GALAXY_GPU_ENABLED) return;
     try {
       const gvs = compile(gl.VERTEX_SHADER, GALAXY_VERT);
       const gfs = compile(gl.FRAGMENT_SHADER, GALAXY_FRAG);

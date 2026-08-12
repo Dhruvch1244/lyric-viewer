@@ -2,6 +2,45 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.24.0 — 2026-08-12
+
+Bug fixes and UX, from real-use feedback on 0.23.0.
+
+### Fixed
+
+- **Coloured rectangles across the screen.** The GPU galaxy added in 0.23.0
+  drew as `GL_POINTS`, and point-sprites render as untextured squares under
+  ANGLE (the Direct3D backend Electron uses on Windows) on many drivers. The
+  GPU galaxy is turned off and the CPU galaxy — which drew correctly for many
+  releases — is back. (The GPU port will return reimplemented as instanced
+  quads, which don't depend on point-sprite support.)
+
+- **The Gemini CLI fallback failed with "not enough arguments".** Its `-p` flag
+  needs the prompt as its value, but the app's prompts are multi-line JSON that
+  cannot be passed as a Windows command-line argument. Gemini is now fed the
+  prompt on stdin like the others. Claude remains the verified one.
+
+- **Updates apply silently now.** The installer is one-click, so auto-update no
+  longer runs a wizard you had to click through — it downloads and installs on
+  restart without interaction.
+
+### Changed
+
+- **Language toggles moved to the top-right, always visible.** Script (अ) and
+  English translation (EN) were in the bottom HUD, which hides until you move
+  the mouse — the two most-used controls were the hardest to reach. They now sit
+  in the top-right corner, always on, one click away.
+
+- **Display size is a menu, not a cycle.** The size chip opens a menu —
+  Fullscreen, Floating bar, Taskbar strip, Desktop — each a labelled click with
+  the current one marked, instead of cycling through four modes and hoping.
+  Compact modes are reachable again. `Ctrl+Alt+M` still quick-toggles the
+  desktop.
+
+- **The local-AI picker is clearer.** When it offers a CLI, the verified one
+  (Claude) is listed first and marked ✓; the others are labelled best-effort or
+  experimental, so you can tell what will actually work.
+
 ## 0.23.0 — 2026-08-12
 
 ### Added

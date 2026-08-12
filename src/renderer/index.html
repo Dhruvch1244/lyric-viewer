@@ -35,6 +35,14 @@
         <span id="np-artist" class="np-artist"></span>
       </div>
       <div id="status" class="status" role="status"></div>
+      <!-- Always-visible language toggles, top-right. Script and translation are
+           the two controls reached most often, and hunting for them in the
+           bottom HUD (which is hidden until the mouse moves) was the friction.
+           These stay put and just drive the real HUD chips. -->
+      <div id="quick-toggles" class="quick-toggles">
+        <button id="tt-script" class="qt" type="button" title="Script — Latin / Devanagari">अ</button>
+        <button id="tt-translate" class="qt" type="button" title="English translation">EN</button>
+      </div>
       <!-- The active lyric, for the compact modes only. The scrolling column
            has no small version, so in a 54px strip this one line IS the app.
            Its own element rather than reusing #status, which carries app
@@ -105,7 +113,7 @@
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
-        <button id="btn-mode" class="chip" type="button" title="Live on your desktop, behind the icons (Ctrl+Alt+M)">▨ Desktop</button>
+        <button id="btn-mode" class="chip" type="button" title="Choose display size (Ctrl+Alt+M toggles desktop)" aria-haspopup="true" aria-expanded="false">▭ Size</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
@@ -114,6 +122,25 @@
         <span id="hud-bpm" class="chip chip--muted" title="Measured tempo (needs ♫ audio capture)" hidden></span>
         <span id="hud-work" class="chip chip--work" title="Background work in progress" hidden></span>
         <span id="hud-source" class="chip chip--muted" title="Where the current lyrics loaded from" hidden></span>
+      </div>
+
+      <!-- Display-size menu. A cycle-through-four chip meant landing on a
+           half-finished mode by accident and gave no way to jump straight to
+           the one you wanted. A menu is predictable: every mode is one labelled
+           click, and the current one is marked. -->
+      <div id="mode-menu" class="mode-menu" hidden role="menu" aria-label="Display size">
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="full">
+          <span class="mode-menu__glyph">▭</span> Fullscreen<small>the whole screen</small>
+        </button>
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="bar">
+          <span class="mode-menu__glyph">▬</span> Floating bar<small>a small always-on line</small>
+        </button>
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="strip">
+          <span class="mode-menu__glyph">▁</span> Taskbar strip<small>click-through, along the bottom</small>
+        </button>
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="wallpaper">
+          <span class="mode-menu__glyph">▨</span> Desktop<small>behind your icons</small>
+        </button>
       </div>
 
       <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user
