@@ -40,7 +40,16 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "signCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/signpath-sign.ps1 %1"
+      "signCommand": {
+        "cmd": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "$s = if ($env:LYRIC_SIGN_SCRIPT) { $env:LYRIC_SIGN_SCRIPT } else { 'scripts/signpath-sign.ps1' }; & $s '%1'"
+        ]
+      }
     }
   },
   "plugins": {
