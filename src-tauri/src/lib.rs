@@ -1,16 +1,439 @@
+//! Lyric Overlay — Tauri backend.
+//!
+//! This is the Rust replacement for the Electron main process. It owns the
+//! things the webview cannot do itself: the transparent always-on-top overlay
+//! window, SMTC "now playing" detection, persisted preferences, and (in later
+//! phases) wallpaper mode, the updater and the tray.
+//!
+//! The renderer talks to it through `window.player` (see tauri-shim.js), which
+//! maps onto the `#[tauri::command]` functions and the events emitted here.
+
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// The PowerShell 5.1 SMTC poller, embedded so it needs no resource-path
+/// resolution and works identically in `tauri dev` and a bundled install. It is
+/// written to a temp file at startup and spawned from there.
+const SMTC_POLL_PS1: &str = include_str!("../../src/main/smtc-poll.ps1");
+
+// ---------------------------------------------------------------- preferences
+
+/// Persisted user preferences. Field names map to the camelCase the renderer
+/// reads (see `get_prefs`/`get_offset`/`get_transcribe_config`).
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct Prefs {
+    script: String,
+    show_translation: bool,
+    offset_ms: i64,
+    transcribe_enabled: bool,
+    transcribe_language: String,
+    transcribe_model: String,
+    display_mode: String,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs {
+            script: "latin".into(),
+            show_translation: true,
+            offset_ms: 0,
+            transcribe_enabled: true,
+            transcribe_language: String::new(),
+            transcribe_model: String::new(),
+            display_mode: "full".into(),
+        }
+    }
+}
+
+fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("settings.json"))
+}
+
+fn load_prefs(app: &AppHandle) -> Prefs {
+    settings_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_prefs(app: &AppHandle, prefs: &Prefs) {
+    if let Some(p) = settings_path(app) {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(s) = serde_json::to_string_pretty(prefs) {
+            let _ = std::fs::write(p, s);
+        }
+    }
+}
+
+// ------------------------------------------------------------- SMTC watcher
+
+/// One SMTC sample as emitted by smtc-poll.ps1.
+#[derive(Deserialize)]
+struct SmtcMessage {
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    session: Option<SmtcSession>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SmtcSession {
+    #[serde(default)]
+    source_app: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    position_ms: i64,
+    #[serde(default)]
+    end_ms: i64,
+    #[serde(default)]
+    staleness_ms: i64,
+}
+
+/// Best-effort current position, projecting past SMTC's stale `positionMs` while
+/// playing — mirrors `estimatePositionMs` in the old smtc.js.
+fn estimate_position(s: &SmtcSession) -> i64 {
+    if s.status != "Playing" {
+        return s.position_ms;
+    }
+    let staleness = if s.staleness_ms >= 0 && s.staleness_ms < 30_000 {
+        s.staleness_ms
+    } else {
+        0
+    };
+    let projected = s.position_ms + staleness;
+    if s.end_ms > 0 {
+        projected.min(s.end_ms)
+    } else {
+        projected
+    }
+}
+
+/// Spawn the PowerShell poller and stream SMTC state to the webview as
+/// `track` / `tick` / `idle` events. Runs on its own thread for the app's life.
+fn start_smtc(app: AppHandle) {
+    // Materialise the embedded script so PowerShell has a real file to run.
+    let script_path = std::env::temp_dir().join("lyric-overlay-smtc-poll.ps1");
+    if let Err(err) = std::fs::write(&script_path, SMTC_POLL_PS1) {
+        eprintln!("[smtc] could not write poller script: {err}");
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&script_path)
+        .args(["-IntervalMs", "250"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+        // Don't flash a console window (the app is windows_subsystem = "windows").
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("[smtc] failed to spawn powershell: {err}");
+                return;
+            }
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mut current_key: Option<String> = None;
+        for line in BufReader::new(stdout).lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let msg: SmtcMessage = match serde_json::from_str(trimmed) {
+                Ok(m) => m,
+                Err(_) => continue, // ignore banner/noise lines
+            };
+            if !msg.ok {
+                if let Some(e) = msg.error {
+                    eprintln!("[smtc] {e}");
+                }
+                continue;
+            }
+
+            match msg.session {
+                None => {
+                    if current_key.is_some() {
+                        current_key = None;
+                        let _ = app.emit("idle", ());
+                    }
+                }
+                Some(s) => {
+                    let title = s.title.clone().unwrap_or_default();
+                    let artist = s.artist.clone().unwrap_or_default();
+                    let key = format!("{artist} {title}");
+                    if current_key.as_deref() != Some(&key) {
+                        current_key = Some(key);
+                        let _ = app.emit(
+                            "track",
+                            json!({
+                                "title": title,
+                                "artist": artist,
+                                "album": s.album.clone().unwrap_or_default(),
+                                "sourceApp": s.source_app,
+                                "durationMs": s.end_ms,
+                            }),
+                        );
+                    }
+                    let _ = app.emit(
+                        "tick",
+                        json!({
+                            "status": s.status,
+                            "positionMs": estimate_position(&s),
+                            "durationMs": s.end_ms,
+                        }),
+                    );
+                }
+            }
+        }
+    });
+}
+
+// ------------------------------------------------------------- window sizing
+
+/// Size the overlay to fill the primary monitor — the fullscreen transparent
+/// overlay the app expects. Display-mode variants (bar/strip) resize from here.
+fn size_overlay(app: &AppHandle, mode: &str) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let monitor = match win.primary_monitor() {
+        Ok(Some(m)) => m,
+        _ => return,
+    };
+    let size = *monitor.size();
+    let pos = *monitor.position();
+
+    let (w, h, y) = match mode {
+        // A thin bar across the top.
+        "bar" => (size.width, 140u32.min(size.height), pos.y),
+        // A taskbar-height strip pinned to the bottom.
+        "strip" => {
+            let strip_h = 96u32.min(size.height);
+            (size.width, strip_h, pos.y + size.height as i32 - strip_h as i32)
+        }
+        // full (and wallpaper, until that phase lands): the whole monitor.
+        _ => (size.width, size.height, pos.y),
+    };
+
+    let _ = win.set_position(tauri::PhysicalPosition::new(pos.x, y));
+    let _ = win.set_size(tauri::PhysicalSize::new(w, h));
+}
+
+// ----------------------------------------------------------------- commands
+
+#[tauri::command]
+fn get_prefs(state: State<Mutex<Prefs>>) -> Value {
+    let p = state.lock().unwrap();
+    json!({
+        "script": p.script,
+        "showTranslation": p.show_translation,
+        "appVersion": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+#[tauri::command]
+fn get_offset(state: State<Mutex<Prefs>>) -> Value {
+    json!({ "offsetMs": state.lock().unwrap().offset_ms })
+}
+
+#[tauri::command]
+fn set_offset(value_ms: i64, state: State<Mutex<Prefs>>, app: AppHandle) -> i64 {
+    {
+        let mut p = state.lock().unwrap();
+        p.offset_ms = value_ms;
+        save_prefs(&app, &p);
+    }
+    let _ = app.emit("offset", json!({ "offsetMs": value_ms }));
+    value_ms
+}
+
+#[tauri::command]
+fn set_script(script: String, state: State<Mutex<Prefs>>, app: AppHandle) {
+    let mut p = state.lock().unwrap();
+    p.script = script;
+    save_prefs(&app, &p);
+}
+
+#[tauri::command]
+fn set_show_translation(show: bool, state: State<Mutex<Prefs>>, app: AppHandle) {
+    let mut p = state.lock().unwrap();
+    p.show_translation = show;
+    save_prefs(&app, &p);
+}
+
+#[tauri::command]
+fn get_display_mode(state: State<Mutex<Prefs>>) -> String {
+    state.lock().unwrap().display_mode.clone()
+}
+
+#[tauri::command]
+fn set_display_mode(mode: String, state: State<Mutex<Prefs>>, app: AppHandle) {
+    {
+        let mut p = state.lock().unwrap();
+        p.display_mode = mode.clone();
+        save_prefs(&app, &p);
+    }
+    size_overlay(&app, &mode);
+    let _ = app.emit("display-mode", json!({ "mode": mode, "insets": {} }));
+}
+
+#[tauri::command]
+fn get_transcribe_config(state: State<Mutex<Prefs>>) -> Value {
+    let p = state.lock().unwrap();
+    json!({
+        "enabled": p.transcribe_enabled,
+        "language": p.transcribe_language,
+        "model": p.transcribe_model,
+    })
+}
+
+#[tauri::command]
+fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle) {
+    let mut p = state.lock().unwrap();
+    if let Some(v) = cfg.get("enabled").and_then(|v| v.as_bool()) {
+        p.transcribe_enabled = v;
+    }
+    if let Some(v) = cfg.get("language").and_then(|v| v.as_str()) {
+        p.transcribe_language = v.to_string();
+    }
+    if let Some(v) = cfg.get("model").and_then(|v| v.as_str()) {
+        p.transcribe_model = v.to_string();
+    }
+    save_prefs(&app, &p);
+}
+
+// --- commands whose backends land in later phases. Real signatures so the
+//     shim never falls back; benign values until the port fills them in.
+
+#[tauri::command]
+fn get_provider_status() -> Value {
+    json!({ "provider": null })
+}
+
+#[tauri::command]
+fn get_update_state() -> Value {
+    json!({ "available": false })
+}
+
+#[tauri::command]
+fn list_synced() -> Value {
+    json!([])
+}
+
+#[tauri::command]
+fn milkdrop_catalogue() -> Value {
+    json!([])
+}
+
+#[tauri::command]
+fn set_api_key(_name: String, _value: String) {}
+
+#[tauri::command]
+fn save_beatmap(_payload: Value) {}
+
+#[tauri::command]
+fn save_heatmap(_payload: Value) {}
+
+#[tauri::command]
+fn report_jobs(_payload: Value) {}
+
+#[tauri::command]
+fn wallpaper_interact(_on: bool) {}
+
+#[tauri::command]
+fn end_local_playback() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    tauri::Builder::default()
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            // Load persisted prefs into shared state.
+            let prefs = load_prefs(&handle);
+            let mode = prefs.display_mode.clone();
+            app.manage(Mutex::new(prefs));
+
+            // Fill the primary monitor at the remembered display mode.
+            size_overlay(&handle, &mode);
+
+            // Begin streaming "now playing" from Windows.
+            start_smtc(handle);
+
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_prefs,
+            get_offset,
+            set_offset,
+            set_script,
+            set_show_translation,
+            get_display_mode,
+            set_display_mode,
+            get_transcribe_config,
+            set_transcribe_config,
+            get_provider_status,
+            get_update_state,
+            list_synced,
+            milkdrop_catalogue,
+            set_api_key,
+            save_beatmap,
+            save_heatmap,
+            report_jobs,
+            wallpaper_interact,
+            end_local_playback,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
