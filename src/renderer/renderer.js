@@ -4261,6 +4261,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.26.0': [
+    '<b>The app is a fraction of the size</b> — rebuilt on Tauri, so the download went from ~116 MB to ~30 MB. Same visuals, same overlay.',
+    '<b>Everything still works</b> — lyrics, cover art, wallpaper mode, translation, the dancers — all reimplemented natively.',
+    '<b>Auto-transcription runs in-app now</b> — the speech model downloads once on first use, no separate runtime.',
+    '<b>Lighter on your machine</b> — no bundled browser; it uses the Windows WebView that is already there.',
+  ],
   '0.25.0': [
     '<b>More songs get synced lyrics</b> — when only plain words exist, the app finds them and times them to the music from audio, instead of showing nothing.',
     '<b>Smoother preset changes</b> — drops cross-fade across the beat now, landing the new look with the music.',

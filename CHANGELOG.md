@@ -2,6 +2,31 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.26.0 — 2026-08-12 — Tauri rebuild
+
+The whole app moved off Electron onto **Tauri**. Same overlay, same visuals — a
+fraction of the size.
+
+### Changed
+
+- **The installer is ~30 MB instead of ~116 MB.** The app now uses the Windows
+  system WebView2 runtime instead of bundling a full copy of Chromium. The
+  visual layer (the WebGL swirl, the galaxy, MilkDrop, the lyric column) is
+  unchanged — it is the same web renderer, just hosted by Tauri.
+- **The backend is now Rust.** SMTC "now playing" detection, the three synced
+  lyric sources (LRCLIB, NetEase, Kugou), cover art, the LLM features
+  (translation, per-line attribution, mood, transliteration), wallpaper mode,
+  the tray, global hotkeys, local-file playback, the MilkDrop catalogue, the
+  updater and key storage were all reimplemented natively.
+
+### Notes
+
+- **Auto-transcription (Whisper) now runs in the app itself** via WebAssembly,
+  so there is no separate 22 MB native runtime in the installer — the speech
+  model downloads on first use and is cached.
+- Existing 0.25.0 installs do not auto-migrate (the two builds use different
+  update mechanisms); install 0.26.0 fresh to move to the Tauri build.
+
 ## 0.25.0 — 2026-08-12
 
 Smoother transitions, a faster track start, and wider synced-lyric coverage.
