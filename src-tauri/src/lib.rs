@@ -8,6 +8,8 @@
 //! The renderer talks to it through `window.player` (see tauri-shim.js), which
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
+mod lyrics;
+
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -217,6 +219,8 @@ fn start_smtc(app: AppHandle) {
                                 "durationMs": s.end_ms,
                             }),
                         );
+                        // Kick off the lyric lookup for the new song.
+                        resolve_lyrics(app.clone(), title.clone(), artist.clone(), s.end_ms);
                     }
                     let _ = app.emit(
                         "tick",
@@ -227,6 +231,86 @@ fn start_smtc(app: AppHandle) {
                         }),
                     );
                 }
+            }
+        }
+    });
+}
+
+// ------------------------------------------------------------- lyric lookup
+
+/// Filename-safe cache key for a track (djb2 hash of normalised artist+title).
+fn track_key(artist: &str, title: &str) -> String {
+    let base = format!("{}|{}", artist.to_lowercase().trim(), title.to_lowercase().trim());
+    let mut hash: u64 = 5381;
+    for b in base.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    format!("{hash:016x}")
+}
+
+fn lyrics_cache_path(app: &AppHandle, key: &str) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?.join("lyrics");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join(format!("{key}.json")))
+}
+
+/// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song
+/// heard before replays instantly and offline. Runs on its own thread so the
+/// network call never stalls SMTC position ticks.
+fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i64) {
+    std::thread::spawn(move || {
+        let key = track_key(&artist, &title);
+
+        // Disk cache hit → replay immediately, offline.
+        if let Some(path) = lyrics_cache_path(&app, &key) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                    let mut payload = cached;
+                    payload["track"] = json!({ "title": title, "artist": artist });
+                    payload["origin"] = json!("disk");
+                    let _ = app.emit("lyrics", payload);
+                    return;
+                }
+            }
+        }
+
+        let _ = app.emit(
+            "lyrics",
+            json!({ "track": { "title": title, "artist": artist }, "cues": [], "status": "searching" }),
+        );
+
+        let track = lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
+        match lyrics::fetch_synced(&track) {
+            Some((cues, source)) => {
+                let payload = json!({
+                    "cues": cues,
+                    "cuesDevanagari": Value::Null,
+                    "cuesEnglish": Value::Null,
+                    "source": source,
+                    "status": "ok",
+                    "indic": false,
+                    "hasWordTimings": false,
+                    "transliterationAvailable": false,
+                    "translationAvailable": false,
+                });
+                // Persist the raw result (without the per-emit track/origin fields).
+                if let Some(path) = lyrics_cache_path(&app, &key) {
+                    let _ = std::fs::write(&path, serde_json::to_string(&payload).unwrap_or_default());
+                }
+                let mut out = payload;
+                out["track"] = json!({ "title": title, "artist": artist });
+                out["origin"] = json!("network");
+                let _ = app.emit("lyrics", out);
+            }
+            None => {
+                let _ = app.emit(
+                    "lyrics",
+                    json!({
+                        "track": { "title": title, "artist": artist },
+                        "cues": [], "status": "not-found", "indic": false,
+                        "plainAvailable": false, "origin": "network",
+                    }),
+                );
             }
         }
     });
