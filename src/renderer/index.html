@@ -2,8 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- 'wasm-unsafe-eval' lets onnxruntime-web compile the Whisper WASM without
+         granting full eval; connect-src allows the model download from HuggingFace
+         (the model is cached by the webview after the first fetch); worker-src
+         allows the ort worker. Everything else stays locked down. -->
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; connect-src 'self' ipc: http://ipc.localhost;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co;" />
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -355,6 +359,9 @@
     <!-- Tauri backing for window.player. MUST load before player.js/renderer.js,
          which assume window.player already exists (Electron set it in preload). -->
     <script src="tauri-shim.js"></script>
+    <!-- Webview Whisper (transformers.js/WASM). Lazy — nothing loads until a song
+         actually needs transcribing. -->
+    <script src="whisper.js"></script>
     <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>

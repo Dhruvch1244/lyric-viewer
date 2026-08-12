@@ -124,7 +124,36 @@
     presyncList: (text) => call('presync_list', { text }),
     listSynced: () => call('list_synced', {}, []),
 
-    transcribeAudio: (payload) => call('transcribe_audio', { payload }),
+    /*
+      Transcription runs in the webview now (see whisper.js): Whisper turns the
+      recorded PCM into cues here, then the backend aligns them to the real plain
+      lyrics and caches the result. Progress is relayed through the backend so it
+      reaches the renderer's existing onTranscribeProgress handler. The PCM never
+      crosses IPC — only the small cue list does.
+    */
+    transcribeAudio: async (payload) => {
+      const track = payload && payload.track;
+      const report = (data) => invoke('report_transcribe_progress', { data: Object.assign({ track }, data) }).catch(() => {});
+      try {
+        if (!window.Whisper) {
+          await report({ stage: 'error', message: 'speech engine unavailable' });
+          return { status: 'error' };
+        }
+        await report({ stage: 'starting' });
+        const cues = await window.Whisper.transcribe(payload.pcm, {
+          language: payload.language,
+          onProgress: (p) => report(p),
+        });
+        if (!cues || cues.length === 0) {
+          await report({ stage: 'empty' });
+          return { status: 'empty' };
+        }
+        return await invoke('finalize_transcription', { payload: { track, cues, language: payload.language } });
+      } catch (err) {
+        await report({ stage: 'error', message: String((err && err.message) || err) });
+        return { status: 'error' };
+      }
+    },
     getTranscribeConfig: () => call('get_transcribe_config', {}, { enabled: true, language: '', model: '' }),
     setTranscribeConfig: (cfg) => call('set_transcribe_config', { cfg }),
   };
