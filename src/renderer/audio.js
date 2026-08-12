@@ -361,7 +361,7 @@
       kick = Math.min(1, rise * 4.5);
       lastKickAt = now;
     }
-    env.kick = Math.max(env.kick * 0.72, kick);   // decay + latch on hits
+    env.kick = Math.max(env.kick * 0.66, kick);   // snappier decay = tighter thump
 
     // Build-up: highs rising while the bass is ducked (the classic filtered riser).
     // Accumulate while that condition holds; bleed away otherwise.

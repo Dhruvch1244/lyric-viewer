@@ -3202,10 +3202,12 @@ function drawBackdrop(now) {
     // full drop moment (flash, confetti, hue jump, dancer multiplication).
     if (audioActive) {
       intensity = Math.max(intensity, Math.min(1, audioEnv.level * 1.6));
-      if (audioEnv.kick > 0.12) {
-        beatFlash = Math.max(beatFlash, audioEnv.kick);
-        pulse = Math.max(pulse, 0.5 + audioEnv.kick);
-        if (audioEnv.kick > 0.45) spawnRipple(audioEnv.kick);
+      if (audioEnv.kick > 0.10) {
+        // Snap to a solid flash even on a modest kick, so every thump lands
+        // visibly instead of scaling faintly with a hot-mastered bass band.
+        beatFlash = Math.max(beatFlash, Math.min(1.15, 0.55 + audioEnv.kick * 0.6));
+        pulse = Math.max(pulse, 0.7 + audioEnv.kick * 1.2);   // harder body punch
+        if (audioEnv.kick > 0.4) spawnRipple(audioEnv.kick * 1.15);
         if (window.Tempo) window.Tempo.note(now);   // feed the tempo estimator
       }
       buildup = Math.max(buildup, audioEnv.build);
