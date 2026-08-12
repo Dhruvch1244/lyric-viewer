@@ -1,0 +1,81 @@
+name: release
+
+# Build + publish the Tauri app for Windows, macOS and Linux whenever a v* tag
+# is pushed. tauri-action compiles each platform on its own runner, signs the
+# updater artifacts, and uploads everything (installers + latest.json) to a
+# GitHub release. Whisper is vendored automatically via the beforeBuildCommand
+# in tauri.conf.json.
+#
+# NOTE on parity: the Windows-only features (SMTC now-playing, wallpaper mode,
+# the WASAPI-bound bits) are cfg-gated, so the macOS/Linux builds compile and
+# run — they just don't have those OS integrations yet (MediaRemote / MPRIS /
+# desktop-wallpaper equivalents are a follow-on). The visuals, lyrics, artwork
+# and LLM features work everywhere.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build + publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing. Add these two as repo secrets (the private key is at
+          # ~/.tauri/lyric-overlay.key on the dev machine; the password is empty).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Lyric Overlay ${{ github.ref_name }}'
+          releaseBody: 'See CHANGELOG.md for details.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
