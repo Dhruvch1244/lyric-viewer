@@ -13,6 +13,13 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   provided it, syllable-weighted estimate otherwise), quantised so it costs one
   style write on one element per frame. Verified on a real synced track.
 
+- **Per-mood visual profiles.** The song's mood and energy now shape *how* the
+  visuals move, not just their colour: a calm song churns and strobes less, a
+  driving or dark one more, at the same energy. The mood is classified into a
+  character (calm / energetic / dark / bright / neutral) and folded into the
+  motion the field already computes; drops still hit hard regardless. Unblockable
+  end to end now via the local-CLI sentiment path.
+
 ### Notes
 
 - This is the first half of the "karaoke-grade sync" and "visual depth" work.
