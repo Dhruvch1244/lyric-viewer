@@ -1,7 +1,17 @@
 # Next steps
 
-Current as of **v0.21.0**. Written to be picked up cold — each item says what
+Current as of **v0.22.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
+
+> **0.22.0's lesson: a feature can be "verified" and still ship broken if the
+> harness never exercised the state that breaks it.** Wallpaper mode passed
+> every 0.21.0 check, then in real use lost the song on every switch (the window
+> was rebuilt), came back invisible (z-order), couldn't scroll (no wheel
+> forwarding), and reverted a picked preset (the FPS governor bounced the engine
+> and the re-entry wiped the choice). None of those states — a *switch* with a
+> song playing, a *panel* open in wallpaper, an *engine bounce* — were in the
+> harness. When something is reported broken that "tests pass" for, the test is
+> missing a state, not wrong.
 
 > **0.21.0's lesson, on top of the one below: ask the system what happened,
 > don't read it off a return value.** `SetParent` reports failure by returning
@@ -18,6 +28,31 @@ is missing, why it was left, and what the first move is.
 > call at all, and 5× the expense. `scratchpad/profile.js` (DevTools profiler,
 > self time per function) is the tool that found it; call counts alone will
 > mislead you again.
+
+---
+
+## Where 0.22.0 landed
+
+**Shipped in 0.22.0 — the "make desktop mode real" release:**
+
+1. **Switching modes keeps the song playing.** The window is created once and
+   never rebuilt; wallpaper is a reparent toggle on it. Everything the renderer
+   holds — playback, lyrics, capture, open panels — survives a switch.
+2. **Leaving desktop mode is visible again** — the window is raised to topmost
+   in the same native step that detaches it (was returning behind everything).
+3. **Desktop-mode panels are usable** — opening one surfaces the window to the
+   front for real wheel/drag/focus, then settles it back on close.
+4. **One overlay + a desktop toggle**, not a four-mode cycle. bar/strip remain
+   reachable via `set-display-mode`, off the main path.
+5. **MilkDrop opens on a curated preset**, and a picked preset no longer reverts
+   when the FPS governor bounces the engine.
+6. **Friendly "what's new" card** after an update, once per version.
+7. **Local developer-CLI fallback** (Claude/Gemini/Ollama/gh/Antigravity) when
+   every cloud provider fails — consent-gated, verified with `claude -p`.
+
+**Still unverified end to end:** per-line attribution against a live model. It
+now *can* run via the local CLI — pick Claude in the fallback card and play a
+multi-artist track — but no full attribution pass has been watched complete.
 
 ---
 
