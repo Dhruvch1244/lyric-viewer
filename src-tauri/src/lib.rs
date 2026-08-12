@@ -30,6 +30,11 @@ use std::sync::Mutex;
 /// down so its "no session" idle doesn't clear a locally-playing track.
 static LOCAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// True while the overlay is reparented behind the desktop. Gates the pointer-
+/// forwarding loop, which is the only way a window under the icons gets clicks.
+#[cfg(windows)]
+static WALLPAPER_ATTACHED: AtomicBool = AtomicBool::new(false);
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -620,15 +625,42 @@ fn window_hwnd(app: &AppHandle) -> Option<isize> {
 fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
     let Some(hwnd) = window_hwnd(app) else { return };
     if new_mode == "wallpaper" && old_mode != "wallpaper" {
-        if let Err(e) = wallpaper::attach(hwnd) {
-            eprintln!("[wallpaper] attach failed: {e}");
+        match wallpaper::attach(hwnd) {
+            Ok(()) => WALLPAPER_ATTACHED.store(true, Ordering::Relaxed),
+            Err(e) => eprintln!("[wallpaper] attach failed: {e}"),
         }
     } else if new_mode != "wallpaper" && old_mode == "wallpaper" {
+        WALLPAPER_ATTACHED.store(false, Ordering::Relaxed);
         if let Err(e) = wallpaper::detach(hwnd) {
             eprintln!("[wallpaper] detach failed: {e}");
         }
     }
 }
+
+/// Forward the real cursor to the renderer while in wallpaper mode. A window
+/// under the desktop icons receives no clicks — Windows routes them to the
+/// desktop — so we poll the cursor + left button at 30Hz and let the renderer
+/// synthesise the events (see onWallpaperPointer). Only while attached, and only
+/// when the cursor is over the desktop (not another app's window).
+#[cfg(windows)]
+fn start_pointer_forwarding(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(33));
+        if !WALLPAPER_ATTACHED.load(Ordering::Relaxed) {
+            continue;
+        }
+        let Some(hwnd) = window_hwnd(&app) else { continue };
+        let Some((x, y)) = wallpaper::cursor_pos() else { continue };
+        if !wallpaper::is_cursor_over_desktop(hwnd, x, y) {
+            continue;
+        }
+        let (_down, pressed) = wallpaper::mouse_state();
+        let _ = app.emit("wallpaper-pointer", json!({ "x": x, "y": y, "clicked": pressed }));
+    });
+}
+
+#[cfg(not(windows))]
+fn start_pointer_forwarding(_app: AppHandle) {}
 
 #[cfg(not(windows))]
 fn apply_wallpaper(_app: &AppHandle, _old_mode: &str, _new_mode: &str) {}
@@ -1123,6 +1155,9 @@ pub fn run() {
 
             // Begin streaming "now playing" from Windows.
             start_smtc(handle.clone());
+
+            // Forward the cursor to the renderer when in wallpaper mode.
+            start_pointer_forwarding(handle.clone());
 
             // Restore a persisted wallpaper mode after the window has painted a
             // frame, on the main thread (reparenting touches the UI window).

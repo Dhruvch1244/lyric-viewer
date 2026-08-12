@@ -17,7 +17,9 @@ use std::ffi::c_void;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetParent, GetWindowLongPtrW, GetWindowRect, SendMessageTimeoutW,
     SetParent, SetWindowLongPtrW, SetWindowPos, WindowFromPoint, GWL_STYLE, HWND_TOP, HWND_TOPMOST,
@@ -190,8 +192,20 @@ pub fn attach(raw: isize) -> Result<(), String> {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         )
         .map_err(|e| format!("SetWindowPos failed: {e}"))?;
+
+        // Force a full repaint of our window AND the WebView2 child inside it.
+        // Without this a region can keep showing the real wallpaper until the
+        // next paint the reparent didn't invalidate.
+        let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
     Ok(())
+}
+
+/// Current cursor position in screen pixels, for pointer forwarding.
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    let mut p = POINT::default();
+    unsafe { GetCursorPos(&mut p).ok()? };
+    Some((p.x, p.y))
 }
 
 /// Return our window to the desktop's top level, raised to topmost so it is not
