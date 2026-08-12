@@ -21,14 +21,14 @@
 (function () {
   const T = window.__TAURI__;
   if (!T) {
-    // Not running under Tauri (e.g. opened in a plain browser for a quick look).
-    // Provide an inert stub so nothing throws; nothing will update, which is the
-    // honest outcome outside the host.
-    console.warn('[tauri-shim] window.__TAURI__ missing — running inert.');
+    // Not running under Tauri — this is the Electron build (whose preload has
+    // already installed window.player) or a plain browser. Leave window.player
+    // untouched; installing our inert version would clobber Electron's real one.
+    return;
   }
 
-  const invoke = T ? T.core.invoke : () => Promise.reject(new Error('no tauri'));
-  const listen = T ? T.event.listen : () => Promise.resolve(() => {});
+  const invoke = T.core.invoke;
+  const listen = T.event.listen;
 
   /**
    * Subscribe a renderer callback to a backend event. The renderer's callbacks
