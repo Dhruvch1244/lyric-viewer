@@ -2260,7 +2260,13 @@ function applyEngine(preset, now, dt, w, h) {
     milkdropChosen = null;
     milkdropWanted = preset.milkdrop;
   }
-  const want = pinned || milkdropChosen || milkdropWanted;
+  /* A visual look names its own starting preset, but several of those were
+     among the duds; fall back to the curated default so MilkDrop never opens on
+     a bad one. A named preset that IS present is still honoured. */
+  const seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted))
+    ? milkdropWanted
+    : milkdropDefault();
+  const want = pinned || milkdropChosen || seed;
 
   if (want && want !== milkdropName && now - lastMilkdropSwitchAt > 500) {
     // An explicit choice cuts; an automatic one blends.
@@ -2286,10 +2292,7 @@ function applyEngine(preset, now, dt, w, h) {
        Liked presets, when there are any, are the only ones the cycle draws
        from — the fastest way to make 1754 looks feel curated is to let someone
        curate them. */
-    const liked = mdpFavourites.size
-      ? milkdropAllowed().filter((n) => mdpFavourites.has(n))
-      : [];
-    const all = liked.length > 1 ? liked : milkdropAllowed();
+    const all = milkdropCyclePool();
     if (all.length > 1) {
       const i = all.indexOf(milkdropName);
       // Recorded as the new intent, not just loaded — otherwise the block above
@@ -4665,13 +4668,14 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /** The chip cycles the same three modes the Ctrl+Alt+M hotkey does. */
-const DISPLAY_MODE_LABELS = { full: '▭ Full', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop' };
+/* The chip is a single toggle now: overlay ⇄ desktop. It reads as the action
+   it will take, not the state it is in — "Desktop" when clicking sends it to
+   the wallpaper, "Overlay" when clicking brings it back. */
+const DISPLAY_MODE_LABELS = { full: '▨ Desktop', bar: '▨ Desktop', strip: '▨ Desktop', wallpaper: '▭ Overlay' };
 
 if (els.modeBtn) {
   els.modeBtn.addEventListener('click', () => {
-    const order = ['full', 'bar', 'strip', 'wallpaper'];
-    const next = order[(order.indexOf(displayMode) + 1) % order.length];
-    window.player.setDisplayMode(next);
+    window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
   });
 }
 
@@ -4736,6 +4740,38 @@ if (window.player.onWallpaperPointer) {
   });
 }
 
+/*
+  Surface the wallpaper window while a scrollable panel is open.
+
+  Forwarded input covers clicks and hover but not the wheel, so the preset
+  browser and the library — which scroll — could be opened in wallpaper mode
+  but not used. Rather than forward yet more event types (wheel needs a global
+  hook the main process deliberately avoids), the window briefly lifts to the
+  foreground while a panel is open and settles back behind the desktop when it
+  closes. Main does the lifting; this just tells it when a panel is up.
+
+  A MutationObserver on the panels' `hidden` attribute keeps it in step no
+  matter which of the many open/close paths fired, without hooking each one.
+*/
+const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync]
+  .filter(Boolean);
+
+function anyPanelOpen() {
+  return WALLPAPER_PANELS.some((el) => !el.hidden);
+}
+
+function syncWallpaperInteract() {
+  if (!window.player.wallpaperInteract) return;
+  window.player.wallpaperInteract(displayMode === 'wallpaper' && anyPanelOpen());
+}
+
+if (WALLPAPER_PANELS.length) {
+  const panelObserver = new MutationObserver(syncWallpaperInteract);
+  for (const el of WALLPAPER_PANELS) {
+    panelObserver.observe(el, { attributes: true, attributeFilter: ['hidden'] });
+  }
+}
+
 window.player.onDisplayMode(({ mode, insets }) => {
   displayMode = mode || 'full';
 
@@ -4762,6 +4798,10 @@ window.player.onDisplayMode(({ mode, insets }) => {
      that tears the GPU surfaces out of the page. */
   document.body.classList.toggle('mode-wallpaper', displayMode === 'wallpaper');
   document.body.classList.toggle('mode-compact', isCompact());
+
+  /* Leaving wallpaper with a panel still open must not leave the window stuck
+     surfaced; re-evaluate against the new mode. */
+  syncWallpaperInteract();
 
   if (isCompact()) {
     /*
@@ -5525,6 +5565,58 @@ function milkdropAllowed() {
   // Never hand back nothing: someone who hides everything gets the catalogue
   // back rather than a frozen visual.
   return kept.length > 0 ? kept : all;
+}
+
+/*
+  A hand-picked shortlist of presets that reliably look good.
+
+  The catalogue is 1754 presets contributed over twenty years, and a large
+  share of them are dim, broken on this renderer, or just ugly — so opening
+  MilkDrop on a *random* one, or cycling the whole set on the beat, lands on a
+  dud more often than not. That is what "the default MilkDrop sucks" was.
+
+  These are verified present in the shipped corpus (see the curated check in
+  scripts) and chosen for being bright, legible under lyrics, and stable. They
+  are the pool the automatic paths draw from until the user has liked some of
+  their own; the browser still offers all 1754.
+*/
+const MILKDROP_CURATED = [
+  'Cope - Cartune (extrusion machine) [fixed]',
+  'Geiss - Artifact Plasma',
+  'Flexi - Julia fractal',
+  'Rovastar - VooV′s Organic Light',
+  'Flexi + fiShbRaiN - operation fatcap II',
+  'Aderrasi - Kevlar Tunnel',
+  'Geiss - Artifact Plasma 2',
+  '$$$ Royal - Mashup (169)',
+  'martin - mandelbox explorer - high speed demo version',
+  'Flexi - alien fish pond',
+];
+
+/**
+ * The pool the dice and the beat-synced cycle draw from.
+ *
+ * Favourites first, once there are enough to cycle. Otherwise the curated
+ * shortlist (minus anything hidden), so the automatic look is a good one rather
+ * than a roll of the 1754-sided die. Falls through to the whole allowed set
+ * only if the curated names somehow are not in this corpus.
+ *
+ * @returns {string[]}
+ */
+function milkdropCyclePool() {
+  const allowed = milkdropAllowed();
+  const liked = allowed.filter((n) => mdpFavourites.has(n));
+  if (liked.length > 1) return liked;
+
+  const allowedSet = new Set(allowed);
+  const curated = MILKDROP_CURATED.filter((n) => allowedSet.has(n));
+  return curated.length > 0 ? curated : allowed;
+}
+
+/** The preset to open MilkDrop on when nothing is pinned or chosen. */
+function milkdropDefault() {
+  const pool = milkdropCyclePool();
+  return pool.length ? pool[0] : null;
 }
 
 /** Per-track MilkDrop preset pins, keyed like every other per-track override. */

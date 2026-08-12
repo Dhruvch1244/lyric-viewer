@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('player', {
   onDisplayMode: (cb) => ipcRenderer.on('display-mode', (_e, data) => cb(data)),
   setDisplayMode: (mode) => ipcRenderer.invoke('set-display-mode', mode),
   getDisplayMode: () => ipcRenderer.invoke('get-display-mode'),
+  /* Ask to surface the wallpaper window while a scrollable panel is open, so
+     wheel/drag/focus work; false settles it back behind the desktop. */
+  wallpaperInteract: (on) => ipcRenderer.invoke('wallpaper-interact', on),
 
   /** Every MilkDrop preset name the installed app holds. */
   milkdropCatalogue: () => ipcRenderer.invoke('milkdrop-catalogue'),
