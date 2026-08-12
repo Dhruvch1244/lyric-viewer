@@ -17,12 +17,18 @@ mod mood;
 mod netease;
 mod presets;
 mod translate;
+mod transliterate;
 #[cfg(windows)]
 mod wallpaper;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+/// True while the app is playing a local file itself. The SMTC watcher stands
+/// down so its "no session" idle doesn't clear a locally-playing track.
+static LOCAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -204,6 +210,11 @@ fn start_smtc(app: AppHandle) {
             if trimmed.is_empty() {
                 continue;
             }
+            // While a local file is playing, ignore SMTC entirely — otherwise its
+            // "no session" idle would clear the track the app is playing itself.
+            if LOCAL_ACTIVE.load(Ordering::Relaxed) {
+                continue;
+            }
             let msg: SmtcMessage = match serde_json::from_str(trimmed) {
                 Ok(m) => m,
                 Err(_) => continue, // ignore banner/noise lines
@@ -297,6 +308,7 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                     payload["track"] = json!({ "title": title, "artist": artist });
                     payload["origin"] = json!("disk");
                     payload["translationAvailable"] = json!(llm::is_available());
+                    payload["transliterationAvailable"] = json!(llm::is_available());
                     let _ = app.emit("lyrics", payload);
                     resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), cached_mood);
                     resolve_attribution(&app, &title, &artist, &key, cue_texts, cached_attr);
@@ -327,7 +339,7 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                     "status": "ok",
                     "indic": false,
                     "hasWordTimings": false,
-                    "transliterationAvailable": false,
+                    "transliterationAvailable": llm::is_available(),
                     "translationAvailable": llm::is_available(),
                 });
                 // Persist the raw result (without the per-emit track/origin fields).
@@ -527,10 +539,56 @@ fn set_offset(value_ms: i64, state: State<Mutex<Prefs>>, app: AppHandle) -> i64 
 }
 
 #[tauri::command]
-fn set_script(script: String, state: State<Mutex<Prefs>>, app: AppHandle) {
-    let mut p = state.lock().unwrap();
-    p.script = script;
-    save_prefs(&app, &p);
+fn set_script(
+    script: String,
+    state: State<Mutex<Prefs>>,
+    cur: State<Mutex<CurTrack>>,
+    app: AppHandle,
+) -> Value {
+    {
+        let mut p = state.lock().unwrap();
+        p.script = script.clone();
+        save_prefs(&app, &p);
+    }
+    if script != "devanagari" {
+        return json!({ "status": "ok" });
+    }
+    // Switching to Devanagari: transliterate the current track's cued lyrics
+    // (cache-first), the same on-demand path the renderer's अ button expects.
+    let key = cur.lock().unwrap().key.clone();
+    if key.is_empty() {
+        return json!({ "status": "error", "message": "nothing playing" });
+    }
+    if !llm::is_available() {
+        return json!({ "status": "error", "message": "no LLM provider configured" });
+    }
+    let Some(path) = lyrics_cache_path(&app, &key) else {
+        return json!({ "status": "error", "message": "no cache" });
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return json!({ "status": "error", "message": "lyrics not cached" });
+    };
+    let Ok(mut cached) = serde_json::from_str::<Value>(&text) else {
+        return json!({ "status": "error", "message": "cache unreadable" });
+    };
+    if let Some(deva) = cached.get("cuesDevanagari") {
+        if deva.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            return json!({ "status": "ok", "cues": deva });
+        }
+    }
+    let cues: Vec<lyrics::Cue> = cached
+        .get("cues")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    match transliterate::to_devanagari(&cues) {
+        Some(deva) => {
+            let val = serde_json::to_value(&deva).unwrap_or(Value::Null);
+            cached["cuesDevanagari"] = val.clone();
+            let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+            json!({ "status": "ok", "cues": val })
+        }
+        None => json!({ "status": "error", "message": "transliteration failed" }),
+    }
 }
 
 #[tauri::command]
@@ -753,8 +811,86 @@ fn report_jobs(_payload: Value) {}
 #[tauri::command]
 fn wallpaper_interact(_on: bool) {}
 
+/// The renderer is about to play a local file: announce it as the track (so
+/// lyrics + art load) and stand the SMTC watcher down.
 #[tauri::command]
-fn end_local_playback() {}
+fn set_local_track(track: Value, app: AppHandle) {
+    LOCAL_ACTIVE.store(true, Ordering::Relaxed);
+    let title = track.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let artist = track.get("artist").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let duration = track.get("durationMs").and_then(|v| v.as_i64()).unwrap_or(0);
+    let _ = app.emit(
+        "track",
+        json!({ "title": title, "artist": artist, "album": "", "sourceApp": "local", "durationMs": duration }),
+    );
+    resolve_lyrics(app.clone(), title.clone(), artist.clone(), duration);
+    resolve_artwork(app.clone(), title, artist, duration);
+}
+
+#[tauri::command]
+fn end_local_playback(app: AppHandle) {
+    LOCAL_ACTIVE.store(false, Ordering::Relaxed);
+    let _ = app.emit("idle", ());
+}
+
+/// Audio file extensions the pickers and folder scan accept.
+const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma"];
+
+/// One queue item from a file path: {localPath, title (filename stem), artist}.
+fn local_item(path: &std::path::Path) -> Value {
+    let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    json!({ "localPath": path.to_string_lossy(), "title": title, "artist": "" })
+}
+
+#[tauri::command]
+fn open_local_files(app: AppHandle) -> Value {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("Audio", AUDIO_EXTS)
+        .blocking_pick_files();
+    match picked {
+        Some(paths) => json!(paths
+            .into_iter()
+            .filter_map(|p| p.into_path().ok())
+            .map(|p| local_item(&p))
+            .collect::<Vec<_>>()),
+        None => json!([]),
+    }
+}
+
+#[tauri::command]
+fn open_local_folder(app: AppHandle) -> Value {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+        return json!([]);
+    };
+    let Ok(dir) = folder.into_path() else { return json!([]) };
+    let mut items = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut paths: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| AUDIO_EXTS.contains(&e.to_lowercase().as_str()))
+                    .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        items = paths.iter().map(|p| local_item(p)).collect();
+    }
+    json!(items)
+}
+
+/// Read a local file's raw bytes. Returned as a binary Response, which the
+/// webview receives as an ArrayBuffer for `new Blob([raw])` playback + decode.
+#[tauri::command]
+fn read_local_file(file_path: String) -> tauri::ipc::Response {
+    let bytes = std::fs::read(&file_path).unwrap_or_default();
+    tauri::ipc::Response::new(bytes)
+}
 
 /// Show the overlay if hidden, hide it if shown; tell the renderer either way
 /// so its render loop parks/resumes (see the onVisibility handler).
@@ -838,6 +974,7 @@ fn register_hotkeys(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = build_tray(&handle);
@@ -901,6 +1038,10 @@ pub fn run() {
             save_heatmap,
             report_jobs,
             wallpaper_interact,
+            open_local_files,
+            open_local_folder,
+            read_local_file,
+            set_local_track,
             end_local_playback,
         ])
         .run(tauri::generate_context!())
