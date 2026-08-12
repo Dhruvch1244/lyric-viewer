@@ -9,9 +9,11 @@
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
 mod artwork;
+mod attribute;
 mod llm;
 mod lyrics;
 mod mood;
+mod translate;
 #[cfg(windows)]
 mod wallpaper;
 
@@ -56,6 +58,15 @@ impl Default for Prefs {
             display_mode: "full".into(),
         }
     }
+}
+
+/// The track currently playing, so commands like translation can find its
+/// cached cues. Set as each `track` is resolved.
+#[derive(Clone, Default)]
+struct CurTrack {
+    title: String,
+    artist: String,
+    key: String,
 }
 
 fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -267,17 +278,25 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
     std::thread::spawn(move || {
         let key = track_key(&artist, &title);
 
+        // Remember what's playing so translation/other commands can find its cues.
+        if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
+            *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
+        }
+
         // Disk cache hit → replay immediately, offline.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(cached) = serde_json::from_str::<Value>(&text) {
                     let cue_texts = cue_texts_of(&cached);
                     let cached_mood = cached.get("mood").cloned();
+                    let cached_attr = cached.get("attribution").cloned();
                     let mut payload = cached;
                     payload["track"] = json!({ "title": title, "artist": artist });
                     payload["origin"] = json!("disk");
+                    payload["translationAvailable"] = json!(llm::is_available());
                     let _ = app.emit("lyrics", payload);
-                    resolve_mood(&app, &title, &artist, &key, cue_texts, cached_mood);
+                    resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), cached_mood);
+                    resolve_attribution(&app, &title, &artist, &key, cue_texts, cached_attr);
                     return;
                 }
             }
@@ -301,7 +320,7 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                     "indic": false,
                     "hasWordTimings": false,
                     "transliterationAvailable": false,
-                    "translationAvailable": false,
+                    "translationAvailable": llm::is_available(),
                 });
                 // Persist the raw result (without the per-emit track/origin fields).
                 if let Some(path) = lyrics_cache_path(&app, &key) {
@@ -311,8 +330,10 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                 out["track"] = json!({ "title": title, "artist": artist });
                 out["origin"] = json!("network");
                 let _ = app.emit("lyrics", out);
-                // Upgrade the hash palette to a mood-driven one (LLM, cached).
-                resolve_mood(&app, &title, &artist, &key, cue_texts, None);
+                // Upgrade the hash palette to a mood-driven one, and work out who
+                // sings which line (both LLM, both cached, no-ops without a key).
+                resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), None);
+                resolve_attribution(&app, &title, &artist, &key, cue_texts, None);
             }
             None => {
                 let _ = app.emit(
@@ -377,6 +398,44 @@ fn resolve_mood(
         let mut payload = mood_val;
         payload["track"] = json!({ "title": title, "artist": artist });
         let _ = app.emit("mood", payload);
+    });
+}
+
+/// Emit per-line singer attribution. A cached answer emits immediately;
+/// otherwise the LLM works it out once (multi-artist tracks only), the result
+/// is merged into the lyrics cache, and it is emitted. No-op without a provider.
+fn resolve_attribution(
+    app: &AppHandle,
+    title: &str,
+    artist: &str,
+    key: &str,
+    cue_texts: Vec<String>,
+    cached: Option<Value>,
+) {
+    if let Some(a) = cached {
+        let mut payload = a;
+        payload["track"] = json!({ "title": title, "artist": artist });
+        let _ = app.emit("attribution", payload);
+        return;
+    }
+    let app = app.clone();
+    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
+    std::thread::spawn(move || {
+        let Some((artists, singers)) = attribute::attribute_lines(&cue_texts, &title, &artist) else {
+            return;
+        };
+        let attr = json!({ "artists": artists, "singers": singers });
+        if let Some(path) = lyrics_cache_path(&app, &key) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
+                    cached["attribution"] = attr.clone();
+                    let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+                }
+            }
+        }
+        let mut payload = attr;
+        payload["track"] = json!({ "title": title, "artist": artist });
+        let _ = app.emit("attribution", payload);
     });
 }
 
@@ -548,6 +607,54 @@ fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle)
     save_prefs(&app, &p);
 }
 
+/// Translate the current track's cached lyrics to English (LLM). Returns the
+/// cues directly (the renderer awaits this) and caches them for next time.
+#[tauri::command]
+fn request_translation(app: AppHandle, state: State<Mutex<CurTrack>>) -> Value {
+    let cur = state.lock().unwrap().clone();
+    if cur.key.is_empty() {
+        return json!({ "status": "error", "message": "nothing playing" });
+    }
+    if !llm::is_available() {
+        return json!({ "status": "error", "message": "no LLM provider configured" });
+    }
+    let Some(path) = lyrics_cache_path(&app, &cur.key) else {
+        return json!({ "status": "error", "message": "no cache dir" });
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return json!({ "status": "error", "message": "lyrics not cached yet" });
+    };
+    let Ok(mut cached) = serde_json::from_str::<Value>(&text) else {
+        return json!({ "status": "error", "message": "cache unreadable" });
+    };
+
+    // Already translated in a prior session — return it, no second request.
+    if let Some(en) = cached.get("cuesEnglish") {
+        if en.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            return json!({ "status": "ok", "cues": en, "language": cached.get("language").cloned().unwrap_or(json!("unknown")) });
+        }
+    }
+
+    let cues: Vec<lyrics::Cue> = cached
+        .get("cues")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    if cues.is_empty() {
+        return json!({ "status": "error", "message": "no lyrics to translate" });
+    }
+
+    match translate::to_english(&cues) {
+        Some((language, en_cues)) => {
+            let en_val = serde_json::to_value(&en_cues).unwrap_or(Value::Null);
+            cached["cuesEnglish"] = en_val.clone();
+            cached["language"] = json!(language);
+            let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+            json!({ "status": "ok", "cues": en_val, "language": language })
+        }
+        None => json!({ "status": "error", "message": "translation failed" }),
+    }
+}
+
 // --- commands whose backends land in later phases. Real signatures so the
 //     shim never falls back; benign values until the port fills them in.
 
@@ -599,6 +706,7 @@ pub fn run() {
             let prefs = load_prefs(&handle);
             let mode = prefs.display_mode.clone();
             app.manage(Mutex::new(prefs));
+            app.manage(Mutex::new(CurTrack::default()));
 
             // Fill the primary monitor at the remembered display mode.
             size_overlay(&handle, &mode);
@@ -638,6 +746,7 @@ pub fn run() {
             set_display_mode,
             get_transcribe_config,
             set_transcribe_config,
+            request_translation,
             get_provider_status,
             get_update_state,
             list_synced,

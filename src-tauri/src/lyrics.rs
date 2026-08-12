@@ -10,7 +10,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const LRCLIB_SEARCH: &str = "https://lrclib.net/api/search";
@@ -23,13 +23,14 @@ pub struct Track {
     pub duration_ms: i64,
 }
 
-/// One timestamped lyric line. Serialises to the shape the renderer expects.
-#[derive(Serialize, Clone)]
+/// One timestamped lyric line. Serialises to the shape the renderer expects,
+/// and deserialises back from a cached `lyrics` payload.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Cue {
     #[serde(rename = "timeMs")]
     pub time_ms: i64,
     pub text: String,
-    #[serde(rename = "endMs", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "endMs", default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<i64>,
 }
 
