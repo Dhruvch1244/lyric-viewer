@@ -2,6 +2,15 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.27.1 — 2026-08-13
+
+- **macOS and Linux builds.** The release pipeline now produces installers for
+  all three platforms (the bundle target was Windows-only before). On macOS/Linux
+  the now-playing detection and wallpaper mode are not wired yet; the visuals,
+  lyrics, artwork and translation work.
+- **Audio-capture picker.** Further work to skip the "Choose what to share"
+  dialog when enabling `♫` capture.
+
 ## 0.27.0 — 2026-08-12
 
 Punchier reactivity, a smoother capture flow, and cross-platform groundwork.

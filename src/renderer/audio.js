@@ -72,8 +72,15 @@
     let stream;
     try {
       // video:true is required for the loopback audio path; we stop the video
-      // track immediately and only keep the audio.
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      // track immediately and only keep the audio. `systemAudio: 'include'`
+      // asks Chromium to include the desktop's system audio explicitly (the
+      // "share system audio" toggle), which pairs with the auto-select browser
+      // arg that skips the picker — so capture starts with sound and no dialog.
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+        systemAudio: 'include',
+      });
     } catch (err) {
       console.warn('[audio] capture unavailable:', err && err.message);
       return false;

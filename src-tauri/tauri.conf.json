@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Lyric Overlay",
-  "version": "0.27.0",
+  "version": "0.27.1",
   "identifier": "com.dhruv.lyricoverlay",
   "build": {
     "frontendDist": "../src/renderer",
@@ -21,7 +21,8 @@
         "width": 1280,
         "height": 800,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --auto-select-desktop-capture-source=Screen"
       }
     ],
     "security": {
@@ -30,7 +31,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

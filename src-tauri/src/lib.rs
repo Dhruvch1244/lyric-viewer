@@ -1304,19 +1304,10 @@ fn register_hotkeys(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Kill the "Choose what to share" picker for loopback audio. This Chromium
-    // flag makes getDisplayMedia auto-select a full-screen source (whose video
-    // we discard, keeping only the system audio) instead of prompting — the
-    // Tauri equivalent of Electron's setDisplayMediaRequestHandler. Set before
-    // the webview is created; WebView2 reads it at startup. Keeps the Web Audio
-    // graph (and MilkDrop's reactivity) exactly as it is.
-    #[cfg(windows)]
-    {
-        let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-        let flag = "--auto-select-desktop-capture-source=Entire screen";
-        let combined = if existing.is_empty() { flag.to_string() } else { format!("{existing} {flag}") };
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", combined);
-    }
+    // The getDisplayMedia share-picker bypass for loopback audio is set via the
+    // window's `additionalBrowserArgs` in tauri.conf.json — that is the path wry
+    // actually passes to WebView2 (the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env
+    // var is ignored once wry sets args through the API).
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
