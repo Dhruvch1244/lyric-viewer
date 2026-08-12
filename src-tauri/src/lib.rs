@@ -332,6 +332,8 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
             Some((cues, source)) => {
                 let cue_texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
                 let payload = json!({
+                    "title": title,
+                    "artist": artist,
                     "cues": cues,
                     "cuesDevanagari": Value::Null,
                     "cuesEnglish": Value::Null,
@@ -810,9 +812,33 @@ fn update_action(action: String, app: AppHandle) {
     }
 }
 
+/// Every song with cached synced lyrics, for the library panel. Reads the
+/// title/artist persisted alongside each cached lyric.
 #[tauri::command]
-fn list_synced() -> Value {
-    json!([])
+fn list_synced(app: AppHandle) -> Value {
+    let Some(dir) = app.path().app_config_dir().ok().map(|d| d.join("lyrics")) else {
+        return json!([]);
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return json!([]) };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        let has_cues = v.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+        if title.is_empty() || !has_cues {
+            continue;
+        }
+        out.push(json!({
+            "title": title,
+            "artist": v.get("artist").and_then(|a| a.as_str()).unwrap_or(""),
+            "source": v.get("source"),
+        }));
+    }
+    out.sort_by(|a, b| {
+        a["title"].as_str().unwrap_or("").to_lowercase().cmp(&b["title"].as_str().unwrap_or("").to_lowercase())
+    });
+    json!(out)
 }
 
 #[tauri::command]
