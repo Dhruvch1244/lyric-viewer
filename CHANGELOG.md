@@ -22,10 +22,15 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 - **A GPU starfield.** A deep-space layer of sparse, twinkling stars now drifts
   behind the swirl field — rendered inside the shader, so it costs the CPU
-  nothing where the old star layers cost a draw per point. The first step of
-  moving the 2D layers onto the GPU; the phyllotaxis galaxy port is still to
-  come. A shader that fails to compile degrades to the 2D wash rather than
-  breaking anything, and this one was verified compiling and visible.
+  nothing where the old star layers cost a draw per point. A shader that fails
+  to compile degrades to the 2D wash rather than breaking anything.
+
+- **The phyllotaxis galaxy runs on the GPU.** The 260-point Fibonacci spiral —
+  the heaviest always-on 2D layer, one draw per point — is now a GL_POINTS pass
+  inside the swirl's WebGL context, its positions in a VBO and its motion
+  computed in the shader. Same golden-angle look, the CPU freed of it. It falls
+  back to the old CPU version if the GPU pass cannot build, and the two never
+  draw at once. Together these are the "2D layers onto the GPU" work landing.
 
 ### Notes
 
