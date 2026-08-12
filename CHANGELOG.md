@@ -2,7 +2,7 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
-## 0.27.1 — 2026-08-13
+## 0.27.2 — 2026-08-13
 
 - **macOS and Linux builds.** The release pipeline now produces installers for
   all three platforms (the bundle target was Windows-only before). On macOS/Linux
