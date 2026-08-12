@@ -27,6 +27,13 @@ stop throwing your song away.
   window to the front so everything works — scroll, drag, clicks — and it
   settles back behind your icons when you close it.
 
+- **A picked MilkDrop preset reverted to the original.** You'd choose a preset,
+  it would show, then a second or two later snap back. The FPS governor swaps
+  MilkDrop for a cheap fallback whenever the frame rate dips below 24 — and
+  MilkDrop dips often — and swapping back was wiping your choice and reloading
+  the look's default. Your pick now survives that bounce; only changing the look
+  itself clears it.
+
 ### Changed
 
 - **One mode, plus a desktop toggle.** The size chip and `Ctrl+Alt+M` now simply

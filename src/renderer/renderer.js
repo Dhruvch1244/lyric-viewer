@@ -2196,6 +2196,41 @@ function applySwirlScale(now) {
  * @param {string} accentLive accent for this frame
  */
 /**
+ * Which MilkDrop preset should be showing for this visual look — the ONE place
+ * that decides, so the engine-init path and the steady-state path cannot
+ * disagree.
+ *
+ * Precedence: a pin (this song, persisted) beats a session choice (a click or
+ * the dice) beats the look's own starting preset, falling back to a curated
+ * default so a look never opens on a dud.
+ *
+ * THE BUG THIS FIXES. A session choice must survive an *engine bounce*. The
+ * FPS governor swaps MilkDrop for the cheap swirl preset whenever the frame
+ * rate dips below 24 — which happens constantly, because MilkDrop is
+ * GPU-heavy — and swaps back when it recovers. The old init path cleared
+ * `milkdropChosen` on every such re-entry, so a preset you picked reverted to
+ * the look's seed a second or two later, for no reason you could see. The reset
+ * now happens ONLY when the visual look itself changes (a different `preset.id`),
+ * not when the same look's engine restarts.
+ *
+ * @param {object} preset the visual look being rendered
+ * @returns {string|null} the preset name to show
+ */
+function milkdropTargetFor(preset) {
+  if (preset.id !== milkdropSeededFor) {
+    // A genuinely new look: its starting point is the new intent, and any
+    // session choice belonged to the previous look.
+    milkdropSeededFor = preset.id;
+    milkdropChosen = null;
+    milkdropWanted = preset.milkdrop;
+  }
+  const seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted))
+    ? milkdropWanted
+    : milkdropDefault();
+  return pinnedMilkdrop() || milkdropChosen || seed;
+}
+
+/**
  * Put the right engine on screen, and draw it if it is the MilkDrop one.
  *
  * The swirl field is rendered further down the backdrop loop, where it can be
@@ -2221,14 +2256,11 @@ function applyEngine(preset, now, dt, w, h) {
       window.MilkDrop.init(els.milkdrop);
       window.MilkDrop.resize(w, h);
       milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
-      // A preset pinned to this song outranks the preset's own starting point —
-      // that is the whole reason for pinning one.
       // Cut rather than blend on the way in: there is nothing to blend FROM,
-      // and a fade from black reads as the app being slow to start.
-      milkdropSeededFor = preset.id;
-      milkdropChosen = null;
-      milkdropWanted = preset.milkdrop;
-      milkdropName = window.MilkDrop.loadPreset(pinnedMilkdrop() || milkdropWanted, 0);
+      // and a fade from black reads as the app being slow to start. The target
+      // respects a pin and a session choice — see milkdropTargetFor for why
+      // that matters here specifically.
+      milkdropName = window.MilkDrop.loadPreset(milkdropTargetFor(preset), 0);
       lastMilkdropSwitchAt = now;
     } else {
       window.MilkDrop.destroy();
@@ -2248,33 +2280,8 @@ function applyEngine(preset, now, dt, w, h) {
   */
   if (!window.MilkDrop.isSupported()) return;
 
-  /*
-    ONE place decides which preset should be showing, and it is `milkdropWanted`.
-
-    Getting this wrong is easy and was: the first version compared the live
-    preset against `preset.milkdrop` every frame, so anything that changed the
-    preset by another route — a click in the browser, the dice, the beat-synced
-    cycle — was reverted on the very next frame. Browsing the catalogue was
-    impossible unless you pinned first, which rather defeats browsing.
-
-    Precedence: a pin (this song, persisted) beats a session choice (a click or
-    the dice) beats the visual preset's own starting point.
-  */
   const pinned = pinnedMilkdrop();
-  if (preset.id !== milkdropSeededFor) {
-    // The visual preset itself changed (MilkDrop → MilkDrop II), so its
-    // starting point is the new intent and any session choice is stale.
-    milkdropSeededFor = preset.id;
-    milkdropChosen = null;
-    milkdropWanted = preset.milkdrop;
-  }
-  /* A visual look names its own starting preset, but several of those were
-     among the duds; fall back to the curated default so MilkDrop never opens on
-     a bad one. A named preset that IS present is still honoured. */
-  const seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted))
-    ? milkdropWanted
-    : milkdropDefault();
-  const want = pinned || milkdropChosen || seed;
+  const want = milkdropTargetFor(preset);
 
   if (want && want !== milkdropName && now - lastMilkdropSwitchAt > 500) {
     // An explicit choice cuts; an automatic one blends.
