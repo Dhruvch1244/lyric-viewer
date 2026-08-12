@@ -454,6 +454,37 @@ async function presyncOne(track) {
 }
 
 /**
+ * Fetch *plain* (unsynced) lyrics for a track, cache-first.
+ *
+ * LRCLIB's plain catalogue is far larger than its synced one, so a song with no
+ * synced entry very often still has the real words available. Those words are
+ * useless for scrolling on their own, but Whisper's timings align them into
+ * properly synced lyrics with the *correct* text (see align.js) — a far better
+ * result than a raw transcription. Caching the plain text on the llmCache entry
+ * means the transcription pass reuses it instead of re-fetching, and it survives
+ * a restart so a later play (with ♫ on) can sync it offline.
+ *
+ * @param {{title:string, artist:string, durationMs:number}} track
+ * @returns {Promise<{plain:string, source:object}|null>}
+ */
+async function getPlainLyricsFor(track) {
+  const key = trackKey(track);
+  const cached = llmCache.get(key);
+  if (cached && typeof cached.plainLyrics === 'string' && cached.plainLyrics.trim()) {
+    return { plain: cached.plainLyrics, source: cached.plainSource || { name: 'lrclib-plain' } };
+  }
+  const fetched = await fetchPlainLyrics(track);
+  if (!fetched) return null;
+  llmCache.merge(key, {
+    title: track.title || null,
+    artist: track.artist || null,
+    plainLyrics: fetched.plain,
+    plainSource: fetched.source,
+  });
+  return fetched;
+}
+
+/**
  * Resolve lyrics for a track and kick off translation when it looks Indic.
  * @param {{title: string, artist: string, durationMs: number}} track
  */
@@ -570,9 +601,25 @@ async function loadLyricsFor(track) {
   }
 
   if (!result) {
+    /*
+      No synced source has it. Before reporting a flat miss, check whether the
+      real words exist as PLAIN lyrics — LRCLIB carries them for far more songs
+      than it has synced. Finding them changes the story from "no lyrics" to
+      "words known, only the timing is missing", which the align path fills in
+      from a Whisper pass while the song plays (see the transcribe handler). We
+      also cache them here so that pass reuses them instead of re-fetching.
+    */
+    let plainAvailable = false;
+    try {
+      const plain = await getPlainLyricsFor(track);
+      plainAvailable = Boolean(plain);
+    } catch { /* best effort — a plain miss is still just "not-found" */ }
+    if (token !== lookupToken) return;
+
     const payload = {
       cues: [], cuesDevanagari: null, cuesEnglish: null,
       source: null, status: 'not-found', indic: false,
+      plainAvailable,
     };
     lyricCache.set(key, payload);
     send('lyrics', { track, ...payload, origin: 'network' });
@@ -1643,7 +1690,9 @@ app.whenReady().then(() => {
       */
       let usedSource = 'whisper';
       try {
-        const plain = await fetchPlainLyrics(track);
+        // Cache-first: a synced miss for this track already fetched and stored
+        // the plain lyrics, so this is usually a disk hit rather than a request.
+        const plain = await getPlainLyricsFor(track);
         if (plain) {
           const lines = splitPlainLyrics(plain.plain);
           const aligned = alignLyrics(lines, result.cues, { durationMs: track.durationMs });
