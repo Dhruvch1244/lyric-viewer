@@ -2,6 +2,13 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.27.3 — 2026-08-13
+
+- **Fixed audio capture failing to start.** The picker-bypass experiment in
+  0.27.2 made the capture request reject outright ("audio capture unavailable");
+  reverted to the working request. Enabling `♫` shows the source picker and then
+  captures — a native, picker-free path is in progress.
+
 ## 0.27.2 — 2026-08-13
 
 - **macOS and Linux builds.** The release pipeline now produces installers for

@@ -72,15 +72,10 @@
     let stream;
     try {
       // video:true is required for the loopback audio path; we stop the video
-      // track immediately and only keep the audio. `systemAudio: 'include'`
-      // asks Chromium to include the desktop's system audio explicitly (the
-      // "share system audio" toggle), which pairs with the auto-select browser
-      // arg that skips the picker — so capture starts with sound and no dialog.
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true,
-        systemAudio: 'include',
-      });
+      // track immediately and only keep the audio. Plain constraints only — the
+      // `systemAudio`/auto-select experiment made WebView2 reject the request
+      // outright ("capture unavailable"); native WASAPI is the no-picker path.
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     } catch (err) {
       console.warn('[audio] capture unavailable:', err && err.message);
       return false;
