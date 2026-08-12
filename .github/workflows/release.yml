@@ -100,14 +100,16 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: SignPath diagnostics on failure (Windows)
-        # Only runs if the build failed; surfaces why the sign hook could not run
-        # (wrong path, missing module, missing token) without re-triggering a build.
+        # Only runs if the build failed. Tauri captures the sign hook's output, so
+        # the real error lives in signpath-sign.log — print it here.
         if: ${{ failure() && matrix.platform == 'windows-latest' }}
         shell: powershell
         run: |
-          Write-Host "GITHUB_WORKSPACE  = $env:GITHUB_WORKSPACE"
-          Write-Host "LYRIC_SIGN_SCRIPT = $env:LYRIC_SIGN_SCRIPT"
-          Write-Host "script exists?    = $(Test-Path $env:LYRIC_SIGN_SCRIPT)"
+          $script = "$env:GITHUB_WORKSPACE\scripts\signpath-sign.ps1"
+          Write-Host "sign script exists?     = $(Test-Path $script)"
           Write-Host "SIGNPATH_API_TOKEN set? = $([bool]$env:SIGNPATH_API_TOKEN)"
           Write-Host "SignPath module:"
           Get-Module -ListAvailable SignPath | Select-Object Name, Version, ModuleBase
+          $log = "$env:GITHUB_WORKSPACE\signpath-sign.log"
+          Write-Host "----- signpath-sign.log -----"
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written - the hook never started)" }
