@@ -88,6 +88,9 @@ jobs:
           # Authenticode signing via SignPath (Windows only; ignored elsewhere).
           # Regenerate the token in SignPath if it is ever exposed in cleartext.
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          # Absolute path to the sign hook so it resolves regardless of the
+          # working directory Tauri runs bundle.windows.signCommand from.
+          LYRIC_SIGN_SCRIPT: ${{ github.workspace }}\scripts\signpath-sign.ps1
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Lyric Overlay ${{ github.ref_name }}'
@@ -95,3 +98,16 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: SignPath diagnostics on failure (Windows)
+        # Only runs if the build failed; surfaces why the sign hook could not run
+        # (wrong path, missing module, missing token) without re-triggering a build.
+        if: ${{ failure() && matrix.platform == 'windows-latest' }}
+        shell: powershell
+        run: |
+          Write-Host "GITHUB_WORKSPACE  = $env:GITHUB_WORKSPACE"
+          Write-Host "LYRIC_SIGN_SCRIPT = $env:LYRIC_SIGN_SCRIPT"
+          Write-Host "script exists?    = $(Test-Path $env:LYRIC_SIGN_SCRIPT)"
+          Write-Host "SIGNPATH_API_TOKEN set? = $([bool]$env:SIGNPATH_API_TOKEN)"
+          Write-Host "SignPath module:"
+          Get-Module -ListAvailable SignPath | Select-Object Name, Version, ModuleBase
