@@ -4,9 +4,13 @@
     SignPath Authenticode signing hook for Tauri's bundle.windows.signCommand.
 
 .DESCRIPTION
-    Tauri invokes this once per Windows artifact (the app .exe, the NSIS setup
-    .exe, the WiX .msi) with the artifact path as %1. We submit the file to
-    SignPath, wait for the signed result, and overwrite the original IN PLACE.
+    Tauri invokes this once per Windows artifact (the app .exe and the NSIS
+    setup .exe) with the artifact path as %1. We submit the file to SignPath,
+    wait for the signed result, and overwrite the original IN PLACE.
+
+    Note: the .msi target is intentionally not built. SignPath's self-signed
+    policy signs PE files but rejects the MSI (structured storage), and the
+    NSIS .exe is the primary installer.
 
     In-place is deliberate: Tauri computes the minisign updater signature (.sig)
     AFTER signCommand returns, so it must hash the *signed* bytes. Signing a copy

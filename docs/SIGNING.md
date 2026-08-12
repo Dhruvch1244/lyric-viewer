@@ -12,6 +12,11 @@ a blank/unsigned binary.
 
 ## How it works
 
+Only the NSIS `.exe` installer is built for Windows — the `.msi` target is
+dropped because SignPath's self-signed policy signs PE files but rejects the MSI
+(structured storage), and dropping it also avoids the flaky WiX toolchain
+download in CI.
+
 Signing is wired through Tauri's `bundle.windows.signCommand`, **not** a separate
 post-build step. This ordering is deliberate:
 
