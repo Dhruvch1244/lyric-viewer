@@ -573,21 +573,53 @@ fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
 #[cfg(not(windows))]
 fn apply_wallpaper(_app: &AppHandle, _old_mode: &str, _new_mode: &str) {}
 
-#[tauri::command]
-fn set_display_mode(mode: String, state: State<Mutex<Prefs>>, app: AppHandle) {
-    let old_mode = {
-        let mut p = state.lock().unwrap();
-        let old = p.display_mode.clone();
-        p.display_mode = mode.clone();
-        save_prefs(&app, &p);
-        old
+/// Apply a display mode: persist it, enter/leave wallpaper, resize, and tell the
+/// renderer. Shared by the command and the Ctrl+Alt+M hotkey.
+fn set_mode(app: &AppHandle, mode: &str) {
+    let old_mode = match app.try_state::<Mutex<Prefs>>() {
+        Some(st) => {
+            let mut p = st.lock().unwrap();
+            let old = p.display_mode.clone();
+            p.display_mode = mode.to_string();
+            save_prefs(app, &p);
+            old
+        }
+        None => String::new(),
     };
     // Wallpaper wants the full monitor; bar/strip resize; leaving wallpaper
     // detaches first so the window is a normal top-level again before resizing.
-    apply_wallpaper(&app, &old_mode, &mode);
-    let size_mode = if mode == "wallpaper" { "full" } else { &mode };
-    size_overlay(&app, size_mode);
+    apply_wallpaper(app, &old_mode, mode);
+    let size_mode = if mode == "wallpaper" { "full" } else { mode };
+    size_overlay(app, size_mode);
     let _ = app.emit("display-mode", json!({ "mode": mode, "insets": {} }));
+}
+
+#[tauri::command]
+fn set_display_mode(mode: String, app: AppHandle) {
+    set_mode(&app, &mode);
+}
+
+/// Ctrl+Alt+M: flip between the overlay and living on the desktop.
+fn toggle_wallpaper(app: &AppHandle) {
+    let current = app
+        .try_state::<Mutex<Prefs>>()
+        .map(|st| st.lock().unwrap().display_mode.clone())
+        .unwrap_or_default();
+    let next = if current == "wallpaper" { "full" } else { "wallpaper" };
+    set_mode(app, next);
+}
+
+/// Nudge (delta != 0) or set (absolute) the sync offset, persist, and mirror it
+/// to the renderer's offset chip. Backs the Ctrl+Alt+Left/Right/0 hotkeys.
+fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) {
+    let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
+    let value = {
+        let mut p = st.lock().unwrap();
+        p.offset_ms = absolute.unwrap_or(p.offset_ms + delta);
+        save_prefs(app, &p);
+        p.offset_ms
+    };
+    let _ = app.emit("offset", json!({ "offsetMs": value }));
 }
 
 #[tauri::command]
@@ -769,12 +801,47 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Register the global hotkeys: Ctrl+Alt+Left/Right/0 nudge the sync offset,
+/// Ctrl+Alt+H shows/hides the overlay, Ctrl+Alt+M flips wallpaper mode.
+fn register_hotkeys(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    let ctrl_alt = Modifiers::CONTROL | Modifiers::ALT;
+    let plugin = tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(move |app, shortcut, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            if !shortcut.mods.contains(ctrl_alt) {
+                return;
+            }
+            match shortcut.key {
+                Code::ArrowLeft => change_offset(app, -100, None),
+                Code::ArrowRight => change_offset(app, 100, None),
+                Code::Digit0 => change_offset(app, 0, Some(0)),
+                Code::KeyH => toggle_overlay(app),
+                Code::KeyM => toggle_wallpaper(app),
+                _ => {}
+            }
+        })
+        .build();
+
+    if app.plugin(plugin).is_err() {
+        return;
+    }
+    let gs = app.global_shortcut();
+    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH, Code::KeyM] {
+        let _ = gs.register(Shortcut::new(Some(ctrl_alt), code));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = build_tray(&handle);
+            register_hotkeys(&handle);
 
             // Load persisted prefs into shared state.
             let prefs = load_prefs(&handle);
