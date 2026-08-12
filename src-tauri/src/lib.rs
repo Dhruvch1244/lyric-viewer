@@ -9,6 +9,7 @@
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
 mod align;
+mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
@@ -1201,6 +1202,23 @@ fn end_local_playback(app: AppHandle) {
     let _ = app.emit("idle", ());
 }
 
+/// Decode + measure a local file natively (off the UI thread), returning the
+/// per-window energy envelopes + bass onsets the renderer feeds into the heat
+/// map and tempo estimator — so a local song's shape is known on the first play
+/// with no Web Audio decode stalling the opening frames.
+#[tauri::command]
+fn analyze_local_file(path: String) -> Value {
+    let (samples, sample_rate) = match analysis::decode_to_mono(&path) {
+        Some(pair) => pair,
+        None => return json!({ "ok": false }),
+    };
+    let a = analysis::analyse_samples(&samples, sample_rate);
+    let mut out = serde_json::to_value(&a).unwrap_or(json!({}));
+    out["ok"] = json!(true);
+    out["durationMs"] = json!((samples.len() as f64 / sample_rate as f64) * 1000.0);
+    out
+}
+
 /// Audio file extensions the pickers and folder scan accept.
 const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma"];
 
@@ -1439,6 +1457,7 @@ pub fn run() {
             read_local_file,
             set_local_track,
             end_local_playback,
+            analyze_local_file,
             transcribe_audio,
             report_transcribe_progress,
             finalize_transcription,

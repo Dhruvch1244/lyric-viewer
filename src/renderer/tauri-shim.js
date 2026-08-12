@@ -120,6 +120,9 @@
     openLocalFiles: () => call('open_local_files', {}, []),
     openLocalFolder: () => call('open_local_folder', {}, []),
     readLocalFile: (filePath) => call('read_local_file', { filePath }),
+    /* Native per-song analysis (symphonia decode + envelope/onset DSP) so the
+       renderer doesn't decode + crunch the whole track on the UI thread. */
+    analyzeLocalFile: (path) => call('analyze_local_file', { path }, { ok: false }),
     setLocalTrack: (track) => call('set_local_track', { track }),
     endLocalPlayback: () => call('end_local_playback', {}),
 
