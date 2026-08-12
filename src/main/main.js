@@ -1273,6 +1273,8 @@ app.whenReady().then(() => {
   ipcMain.handle('get-prefs', () => ({
     script: settings.get('script', 'latin'),
     showTranslation: settings.get('showTranslation', true),
+    // So the renderer can show a friendly "what's new" card once after an update.
+    appVersion: app.getVersion(),
   }));
 
   ipcMain.handle('set-script', async (_e, script) => {

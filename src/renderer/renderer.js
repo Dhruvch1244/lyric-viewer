@@ -77,6 +77,10 @@ const els = {
   posterClose: document.getElementById('poster-close'),
   welcome: document.getElementById('welcome'),
   welcomeClose: document.getElementById('welcome-close'),
+  whatsnew: document.getElementById('whatsnew'),
+  whatsnewList: document.getElementById('whatsnew-list'),
+  whatsnewVersion: document.getElementById('whatsnew-version'),
+  whatsnewClose: document.getElementById('whatsnew-close'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -4125,11 +4129,83 @@ function maybeShowWelcome() {
 
 if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 
+/*
+  What's new, after an update.
+
+  A returning user does not need the chips explained again — they want to know
+  what changed. So the first-run welcome and this are separate: welcome shows
+  once ever, this shows once per new version. Kept warm and short on purpose;
+  a changelog nobody reads is worse than a sentence they do.
+
+  Highlights are per version. Add the newest at the top; anything without an
+  entry simply shows a friendly generic line rather than nothing.
+*/
+const SEEN_VERSION_KEY = 'seenVersion';
+
+/** App version, filled from main once get-prefs resolves. */
+let appVersion = null;
+
+const WHATS_NEW = {
+  '0.22.0': [
+    '<b>Desktop mode is one toggle now</b> — the size chip (or Ctrl+Alt+M) flips between the overlay and living on your desktop, behind your icons.',
+    '<b>Switching keeps your song playing</b> — no more restart when you flip modes.',
+    '<b>Desktop mode is fully usable</b> — open the library or preset browser and it comes to the front so you can scroll and click; it settles back when you close it.',
+    '<b>MilkDrop opens on a good preset</b> now, not a random dud — and you can still browse all 1754.',
+  ],
+};
+
+function friendlyHighlights(version) {
+  return WHATS_NEW[version] || ['A handful of fixes and polish. Thanks for updating!'];
+}
+
+function closeWhatsNew(version) {
+  if (els.whatsnew) els.whatsnew.hidden = true;
+  try { localStorage.setItem(SEEN_VERSION_KEY, version || ''); } catch { /* ignore */ }
+}
+
+/**
+ * Decide between the first-run welcome and the what's-new card, and show the
+ * right one. First-ever run gets the welcome; a version bump gets what's new;
+ * an unchanged version gets neither.
+ *
+ * @param {string} version app version from main
+ */
+function showWelcomeOrWhatsNew(version) {
+  let seenWelcome = false;
+  let seenVersion = null;
+  try {
+    seenWelcome = localStorage.getItem(WELCOME_KEY) === '1';
+    seenVersion = localStorage.getItem(SEEN_VERSION_KEY);
+  } catch { /* storage unavailable — fall through to the welcome */ }
+
+  if (!seenWelcome) {
+    // Brand new install: the chips need naming before anything else.
+    maybeShowWelcome();
+    try { localStorage.setItem(SEEN_VERSION_KEY, version || ''); } catch { /* ignore */ }
+    return;
+  }
+
+  if (version && seenVersion !== version && els.whatsnew && els.whatsnewList) {
+    if (els.whatsnewVersion) els.whatsnewVersion.textContent = `in ${version}`;
+    els.whatsnewList.replaceChildren(...friendlyHighlights(version).map((html) => {
+      const li = document.createElement('li');
+      li.innerHTML = html; // trusted, in-app copy — never network content
+      return li;
+    }));
+    els.whatsnew.hidden = false;
+  }
+}
+
+if (els.whatsnewClose) {
+  els.whatsnewClose.addEventListener('click', () => closeWhatsNew(appVersion));
+}
+
 /* Esc also dismisses it. Scoped to "while the card is up" so this does not
    become a global key handler competing with the panels' own Esc bindings. */
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (els.welcome && !els.welcome.hidden) closeWelcome();
+  else if (els.whatsnew && !els.whatsnew.hidden) closeWhatsNew(appVersion);
   else if (els.mdPanel && !els.mdPanel.hidden) closeMilkdropPanel();
   else if (els.poster && !els.poster.hidden) closePoster();
 });
@@ -4166,6 +4242,7 @@ function maybeShowCaptureNudge(positionMs) {
   // Never stack the two cards. A first-time user who has not dismissed the
   // welcome yet is not ready for a second thing to read.
   if (els.welcome && !els.welcome.hidden) return;
+  if (els.whatsnew && !els.whatsnew.hidden) return;
   if (!currentTrack || positionMs < CAPTURE_NUDGE_AFTER_MS) return;
   if (captureNudgeAnswered()) return;
   captureNudgeVisible = true;
@@ -6252,12 +6329,12 @@ window.player.getPrefs().then((prefs) => {
   script = prefs.script === 'devanagari' ? 'devanagari' : 'latin';
   showTranslation = prefs.showTranslation !== false;
   applyScript();
+  // Once the version is known, show the first-run welcome OR the what's-new
+  // card — over a running backdrop rather than a blank window mid-boot.
+  appVersion = prefs.appVersion || null;
+  showWelcomeOrWhatsNew(appVersion);
 });
 window.player.getOffset().then((data) => {
   applyOffsetLabel((data && data.offsetMs) || 0);
 });
 setStatus('waiting for playback…');
-
-// Last, so a first-time user sees the card over a running backdrop rather than
-// over a blank window mid-boot.
-maybeShowWelcome();

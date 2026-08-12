@@ -284,6 +284,19 @@
       </div>
     </section>
 
+    <!-- What's new, after an update. Different from the first-run welcome: a
+         returning user does not need the chips explained again, they want to
+         know what changed. Shown once per new version, friendly and short —
+         the list is filled by the renderer from a per-version highlights map. -->
+    <section id="whatsnew" class="welcome" hidden aria-label="What's new">
+      <h2 class="welcome__title">Hey — a few new things <span id="whatsnew-version" class="welcome__version"></span></h2>
+      <p class="welcome__lede">Thanks for keeping it running. Here's what changed:</p>
+      <ul id="whatsnew-list" class="welcome__keys"></ul>
+      <div class="welcome__row">
+        <button id="whatsnew-close" class="chip" type="button">Nice, got it</button>
+      </div>
+    </section>
+
     <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles
          themselves are loaded by milkdrop.html, not here — this page must not
          have them, and must not have eval. -->

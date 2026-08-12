@@ -986,6 +986,13 @@ body.mode-wallpaper .poster {
   color: var(--ink-high, #fff);
 }
 
+.welcome__version {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-live, var(--accent, #e94560));
+  letter-spacing: 0.04em;
+}
+
 .welcome__lede {
   margin: 0 0 0.9rem;
   font-size: 0.86rem;
