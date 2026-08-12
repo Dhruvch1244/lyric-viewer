@@ -15,6 +15,7 @@ mod llm;
 mod lyrics;
 mod mood;
 mod netease;
+mod presets;
 mod translate;
 #[cfg(windows)]
 mod wallpaper;
@@ -681,8 +682,28 @@ fn list_synced() -> Value {
 }
 
 #[tauri::command]
-fn milkdrop_catalogue() -> Value {
-    json!([])
+fn milkdrop_catalogue(app: AppHandle) -> Value {
+    json!(presets::catalogue(&app))
+}
+
+#[tauri::command]
+fn milkdrop_preset(app: AppHandle, name: String) -> Value {
+    presets::preset(&app, &name).unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+fn milkdrop_thumb_get(app: AppHandle, names: Vec<String>) -> Value {
+    presets::thumbs_get(&app, &names)
+}
+
+#[tauri::command]
+fn milkdrop_thumb_put(app: AppHandle, name: String, data_url: String) -> bool {
+    presets::thumb_put(&app, &name, &data_url)
+}
+
+#[tauri::command]
+fn milkdrop_thumb_clear(app: AppHandle) -> bool {
+    presets::thumbs_clear(&app)
 }
 
 #[tauri::command]
@@ -703,11 +724,57 @@ fn wallpaper_interact(_on: bool) {}
 #[tauri::command]
 fn end_local_playback() {}
 
+/// Show the overlay if hidden, hide it if shown; tell the renderer either way
+/// so its render loop parks/resumes (see the onVisibility handler).
+fn toggle_overlay(app: &AppHandle) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    let visible = win.is_visible().unwrap_or(true);
+    if visible {
+        let _ = win.hide();
+    } else {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    let _ = app.emit("overlay-visibility", json!({ "visible": !visible }));
+}
+
+/// Build the system-tray icon + menu (Show/hide, Quit). The overlay has no
+/// window chrome and hides on a hotkey, so the tray is the only thing that says
+/// it is running. A failure here is non-fatal — the app runs without a tray.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+
+    let toggle = MenuItem::with_id(app, "toggle", "Show / hide overlay", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&toggle, &PredefinedMenuItem::separator(app)?, &quit])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .tooltip("Lyric Overlay")
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "toggle" => toggle_overlay(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                toggle_overlay(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
+            let _ = build_tray(&handle);
 
             // Load persisted prefs into shared state.
             let prefs = load_prefs(&handle);
@@ -758,6 +825,10 @@ pub fn run() {
             get_update_state,
             list_synced,
             milkdrop_catalogue,
+            milkdrop_preset,
+            milkdrop_thumb_get,
+            milkdrop_thumb_put,
+            milkdrop_thumb_clear,
             set_api_key,
             save_beatmap,
             save_heatmap,
