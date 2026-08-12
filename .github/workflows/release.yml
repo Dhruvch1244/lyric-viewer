@@ -87,10 +87,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Authenticode signing via SignPath (Windows only; ignored elsewhere).
           # Regenerate the token in SignPath if it is ever exposed in cleartext.
+          # The hook is referenced from tauri.conf.json as ../scripts/... relative
+          # to src-tauri, which is the working directory Tauri runs signCommand in.
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          # Absolute path to the sign hook so it resolves regardless of the
-          # working directory Tauri runs bundle.windows.signCommand from.
-          LYRIC_SIGN_SCRIPT: ${{ github.workspace }}\scripts\signpath-sign.ps1
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Lyric Overlay ${{ github.ref_name }}'

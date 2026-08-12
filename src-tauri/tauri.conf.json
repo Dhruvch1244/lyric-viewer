@@ -46,8 +46,9 @@
           "-NoProfile",
           "-ExecutionPolicy",
           "Bypass",
-          "-Command",
-          "$s = if ($env:LYRIC_SIGN_SCRIPT) { $env:LYRIC_SIGN_SCRIPT } else { 'scripts/signpath-sign.ps1' }; & $s '%1'"
+          "-File",
+          "../scripts/signpath-sign.ps1",
+          "%1"
         ]
       }
     }

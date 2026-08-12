@@ -43,6 +43,7 @@ function Log($msg) {
 
 try {
     Log "signpath-sign invoked with Path = [$Path]"
+    Log "working directory = $(Get-Location)"
     Log "SIGNPATH_API_TOKEN present = $([bool]$env:SIGNPATH_API_TOKEN)"
 
     if ($Path -eq '%1') {
