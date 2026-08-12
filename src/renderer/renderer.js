@@ -3202,10 +3202,12 @@ function drawBackdrop(now) {
     // full drop moment (flash, confetti, hue jump, dancer multiplication).
     if (audioActive) {
       intensity = Math.max(intensity, Math.min(1, audioEnv.level * 1.6));
-      if (audioEnv.kick > 0.12) {
-        beatFlash = Math.max(beatFlash, audioEnv.kick);
-        pulse = Math.max(pulse, 0.5 + audioEnv.kick);
-        if (audioEnv.kick > 0.45) spawnRipple(audioEnv.kick);
+      if (audioEnv.kick > 0.10) {
+        // Snap to a solid flash even on a modest kick, so every thump lands
+        // visibly instead of scaling faintly with a hot-mastered bass band.
+        beatFlash = Math.max(beatFlash, Math.min(1.15, 0.55 + audioEnv.kick * 0.6));
+        pulse = Math.max(pulse, 0.7 + audioEnv.kick * 1.2);   // harder body punch
+        if (audioEnv.kick > 0.4) spawnRipple(audioEnv.kick * 1.15);
         if (window.Tempo) window.Tempo.note(now);   // feed the tempo estimator
       }
       buildup = Math.max(buildup, audioEnv.build);
@@ -4261,6 +4263,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.27.0': [
+    '<b>The visuals hit harder on the beat</b> — every kick thumps the field and sends a shockwave from the centre, with bigger drops.',
+    '<b>No more share pop-up</b> — turning on audio (♫) just starts, no "choose what to share" dialog.',
+    '<b>Snappier build</b> — compiled with link-time optimisation.',
+    '<b>Groundwork for Mac & Linux</b> — the app now builds for all three from one pipeline.',
+  ],
   '0.26.0': [
     '<b>The app is a fraction of the size</b> — rebuilt on Tauri, so the download went from ~116 MB to ~30 MB. Same visuals, same overlay.',
     '<b>Everything still works</b> — lyrics, cover art, wallpaper mode, translation, the dancers — all reimplemented natively.',

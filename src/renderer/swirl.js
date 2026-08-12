@@ -186,8 +186,10 @@ void main() {
   p = vortex(p, c1, spiral * -0.70 * vb);
   p = vortex(p, c2, spiral * 0.55 * vb);
 
-  // Bass squeezes the whole field toward/away from centre — a subtle "pump".
-  p *= 1.0 - u_bass * 0.10 - u_beat * 0.05;
+  // Bass squeezes the whole field toward/away from centre — a "pump". The beat
+  // term is punched up so each kick visibly thumps the whole field inward, not
+  // just a faint wobble.
+  p *= 1.0 - u_bass * 0.13 - u_beat * 0.14;
 
   // Two-stage domain warp: q displaces the lookup, r displaces it again. This
   // is what produces the marbled, liquid banding rather than plain noise.
@@ -234,9 +236,20 @@ void main() {
 
   // Build-up bloom from the centre, and a full-field flash on the drop.
   float centre = 1.0 - smoothstep(0.0, 0.9, length(uv));
-  col += u_pal3 * centre * u_buildup * 0.55;
-  col += u_pal3 * u_drop * 0.40;
-  col += col * u_beat * 0.18;
+  col += u_pal3 * centre * u_buildup * 0.70;         // more tension on the rise
+  col += u_pal3 * u_drop * 0.60;                      // harder release on the drop
+  col += col * u_beat * 0.34;                         // punchier per-kick brightness
+
+  /*
+    Kick shockwave. A bright ring that starts at the centre on the hit and
+    expands outward as the beat pulse decays, so each kick reads as a physical
+    thump radiating through the field rather than a flat flash. Costs a handful
+    of ALU ops and only shows while u_beat is non-zero.
+  */
+  float kr = length(uv);
+  float ringR = (1.0 - u_beat) * 1.1;                 // 0 at the hit, grows as it fades
+  float ring = smoothstep(0.16, 0.0, abs(kr - ringR));
+  col += u_pal3 * ring * u_beat * 0.38;
 
   // Depth vignette so the lyric column always sits on darker pixels.
   float vig = 1.0 - smoothstep(0.55, 1.35, length(uv) * 1.15);

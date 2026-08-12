@@ -1,10 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Lyric Overlay",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "identifier": "com.dhruv.lyricoverlay",
   "build": {
-    "frontendDist": "../src/renderer"
+    "frontendDist": "../src/renderer",
+    "beforeBuildCommand": "npm run vendor:whisper"
   },
   "app": {
     "withGlobalTauri": true,
