@@ -256,26 +256,34 @@ void main() {
 `;
 
   /*
-    The phyllotaxis galaxy, as a GPU point pass.
+    The phyllotaxis galaxy, as a GPU pass of INSTANCED QUADS.
 
     This is the 260-point Fibonacci spiral that used to be drawn on the 2D
-    canvas — one fillRect per point per frame. As discrete points it cannot go
-    in the fragment shader (a per-pixel loop over 260 points is hundreds of
-    millions of iterations a frame), so it is a SECOND program drawing GL_POINTS
-    from a VBO seeded once with each point's (angle, radius). The spin, spread,
-    tilt, twinkle and beat-swell are all computed on the GPU from the same
-    uniforms the field uses, so the CPU uploads nothing per frame and this scales
-    to any point count for free.
+    canvas, one fillRect per point per frame. It cannot go in the fragment
+    shader (a per-pixel loop over 260 points is hundreds of millions of
+    iterations a frame), so it is a second program.
 
-    It is optional: if this program fails to build, the field still renders and
-    the caller keeps the CPU galaxy. See `galaxyReady`.
+    NOT GL_POINTS. The first GPU version used point-sprites, and those render as
+    untextured SQUARES under ANGLE (Electron's Direct3D backend on Windows) on
+    many drivers — coloured rectangles across the screen. Instanced quads avoid
+    the point-sprite path entirely: each star is a real two-triangle quad,
+    positioned by a per-instance (angle, radius), which every driver renders
+    correctly. The round shape comes from a distance falloff over the quad's own
+    corner coords, not gl_PointCoord.
+
+    The spin, spread, tilt, twinkle and beat-swell are all computed on the GPU
+    from the same uniforms the field uses, so the CPU uploads nothing per frame.
+    Optional: if the program fails to build, the field still renders and the
+    caller keeps the CPU galaxy. See `galaxyReady`.
   */
   const GALAXY_VERT = `#version 300 es
-layout(location = 0) in vec2 a_pt;   // (angle radians, radius 0..1)
+layout(location = 0) in vec2 a_corner;  // quad corner, -1..1 (per vertex)
+layout(location = 1) in vec2 a_pt;      // (angle radians, radius 0..1) per instance
 uniform vec2  u_res;
-uniform float u_time;                 // seconds
+uniform float u_time;                    // seconds
 uniform float u_life;
 uniform float u_beat;
+out vec2  v_uv;
 out float v_rad;
 out float v_phase;
 void main() {
@@ -286,17 +294,24 @@ void main() {
   float r = a_pt.y * spread;
   vec2 centre = vec2(u_res.x * 0.5, u_res.y * 0.44);
   vec2 pos = centre + vec2(cos(ang) * r, sin(ang) * r * 0.72); // tilt → disc
+
+  // Half-size of the star in pixels, then offset the quad corner in clip space.
+  float halfPx = (2.0 + a_pt.y * 6.0 + u_beat * 5.0);
   vec2 clip = (pos / u_res) * 2.0 - 1.0;
-  clip.y = -clip.y;                    // canvas y is down; clip y is up
-  gl_Position = vec4(clip, 0.0, 1.0);
-  gl_PointSize = 2.0 + a_pt.y * 6.0 + u_beat * 5.0;
+  clip.y = -clip.y;                       // canvas y is down; clip y is up
+  vec2 offset = a_corner * halfPx / u_res * 2.0;
+  offset.y = -offset.y;
+  gl_Position = vec4(clip + offset, 0.0, 1.0);
+
+  v_uv = a_corner;                        // -1..1 across the quad → round falloff
   v_rad = a_pt.y;
-  v_phase = a_pt.x;                    // per-point twinkle seed
+  v_phase = a_pt.x;                       // per-instance twinkle seed
 }
 `;
 
   const GALAXY_FRAG = `#version 300 es
 precision highp float;
+in vec2  v_uv;
 in float v_rad;
 in float v_phase;
 uniform vec3  u_pal2;
@@ -304,12 +319,12 @@ uniform vec3  u_pal3;
 uniform float u_time;
 uniform float u_life;
 uniform float u_beat;
-uniform float u_galaxy;               // intensity, 0 = off
+uniform float u_galaxy;                 // intensity, 0 = off
 out vec4 fragColor;
 void main() {
-  // Soft round sprite from the point's own coords.
-  float d = length(gl_PointCoord - 0.5);
-  float soft = smoothstep(0.5, 0.0, d);
+  // Round sprite from the quad's own corner coords (no gl_PointCoord).
+  float d = length(v_uv);
+  float soft = smoothstep(1.0, 0.0, d);
   float tw = 0.5 + 0.5 * sin(u_time * 2.0 + v_phase * 30.0);
   float a = (soft * ((0.10 + u_life * 0.16) * tw + u_beat * 0.12)) * u_galaxy;
   vec3 col = mix(u_pal2, u_pal3, v_rad);   // hue ramp by radius, like the buckets
@@ -451,23 +466,12 @@ void main() {
     return true;
   }
 
-  /*
-    GL_POINTS point-sprites render as untextured SQUARES under ANGLE (the
-    Direct3D backend Electron uses on Windows) on many drivers — gl_PointCoord
-    and large gl_PointSize are the historically flaky bits. On the reporting
-    machine the galaxy points came out as coloured rectangles across the screen.
-    So the GPU galaxy is OFF until it is reimplemented as instanced quads (which
-    do not depend on point-sprite support); the CPU galaxy is the fallback and
-    is what draws in the meantime. Flip this to re-enable after that rework.
-  */
-  const GALAXY_GPU_ENABLED = false;
-
   /**
-   * Build the galaxy point program + VBO. Sets `galaxyReady`; on any failure it
-   * stays false and the field is unaffected.
+   * Build the galaxy program (instanced quads) + its buffers. Sets
+   * `galaxyReady`; on any failure it stays false and the field is unaffected,
+   * and the caller keeps the CPU galaxy.
    */
   function buildGalaxy() {
-    if (!GALAXY_GPU_ENABLED) return;
     try {
       const gvs = compile(gl.VERTEX_SHADER, GALAXY_VERT);
       const gfs = compile(gl.FRAGMENT_SHADER, GALAXY_FRAG);
@@ -483,24 +487,38 @@ void main() {
       gl.deleteShader(gvs);
       gl.deleteShader(gfs);
 
-      // Seed the phyllotaxis spiral once: point i at angle i·137.507° and
+      // Seed the phyllotaxis spiral once: instance i at angle i·137.507° and
       // radius √(i/count), the same golden-angle packing the CPU used.
       const count = 260;
       const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-      const data = new Float32Array(count * 2);
+      const inst = new Float32Array(count * 2);
       for (let i = 0; i < count; i += 1) {
-        data[i * 2] = i * GOLDEN;
-        data[i * 2 + 1] = Math.sqrt(i / count);
+        inst[i * 2] = i * GOLDEN;
+        inst[i * 2 + 1] = Math.sqrt(i / count);
       }
       galaxyCount = count;
 
       galaxyVao = gl.createVertexArray();
       gl.bindVertexArray(galaxyVao);
-      const gbuf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, gbuf);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+
+      // Per-vertex: a unit quad as a triangle strip (location 0), never divided.
+      const cornerBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1, 1, -1, -1, 1, 1, 1,
+      ]), gl.STATIC_DRAW);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(0, 0);
+
+      // Per-instance: (angle, radius) for each star (location 1), one per quad.
+      const instBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, inst, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(1, 1);
+
       gl.bindVertexArray(null);
 
       for (const name of ['u_res', 'u_time', 'u_life', 'u_beat', 'u_pal2', 'u_pal3', 'u_galaxy']) {
@@ -589,10 +607,10 @@ void main() {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     /*
-      The phyllotaxis galaxy, drawn additively on top of the field. Uploads only
-      the handful of uniforms that change; the 260 point positions live in the
-      VBO and never move. rgb[2]/rgb[3] hold the current palette (refreshed above
-      on a change), so the point colours track the song.
+      The phyllotaxis galaxy, drawn additively on top of the field as instanced
+      quads. Uploads only the handful of uniforms that change; the 260 instance
+      positions live in a VBO and never move. rgb[2]/rgb[3] hold the current
+      palette (refreshed above on a change) so the star colours track the song.
     */
     const galaxy = s.galaxy || 0;
     if (galaxyReady && galaxy > 0.001) {
@@ -607,7 +625,8 @@ void main() {
       gl.uniform1f(gu.u_galaxy, galaxy);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);   // additive, like the CPU 'lighter'
-      gl.drawArrays(gl.POINTS, 0, galaxyCount);
+      // 4 verts (triangle-strip quad) × galaxyCount instances.
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, galaxyCount);
       gl.disable(gl.BLEND);
     }
   }

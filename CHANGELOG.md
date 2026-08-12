@@ -10,10 +10,11 @@ Bug fixes and UX, from real-use feedback on 0.23.0.
 
 - **Coloured rectangles across the screen.** The GPU galaxy added in 0.23.0
   drew as `GL_POINTS`, and point-sprites render as untextured squares under
-  ANGLE (the Direct3D backend Electron uses on Windows) on many drivers. The
-  GPU galaxy is turned off and the CPU galaxy — which drew correctly for many
-  releases — is back. (The GPU port will return reimplemented as instanced
-  quads, which don't depend on point-sprite support.)
+  ANGLE (the Direct3D backend Electron uses on Windows) on many drivers. It is
+  reimplemented as **instanced quads** — ordinary two-triangle geometry, which
+  every driver renders correctly, so the square bug cannot occur. Same
+  golden-angle spiral, still on the GPU. (If a compile ever fails, it still
+  falls back to the CPU galaxy.)
 
 - **The Gemini CLI fallback failed with "not enough arguments".** Its `-p` flag
   needs the prompt as its value, but the app's prompts are multi-line JSON that
