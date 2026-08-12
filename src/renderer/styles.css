@@ -1200,8 +1200,10 @@ body.keybox-open .hud {
   left: 3vw;
   bottom: 8vh;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
+  max-width: min(34rem, 60vw);
   padding: 0.7rem 0.9rem;
   background: color-mix(in srgb, #000 62%, transparent);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -1239,6 +1241,24 @@ body.keybox-open .hud {
   font-size: 0.72rem;
   color: var(--ink-dim);
   min-width: 8rem;
+}
+
+/* Local-AI picker inside the key panel: its own row below the API key. */
+.keybox__local {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.keybox__cli {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
 }
 
 /* Pre-sync panel — a taller variant of the key panel with a paste area. */

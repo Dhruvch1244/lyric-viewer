@@ -5446,11 +5446,60 @@ els.keyBtn.addEventListener('click', async () => {
     document.body.classList.add('keybox-open');
     const provider = await refreshProviderChip();
     els.keyStatus.textContent = provider ? `active: ${provider}` : 'no provider configured';
+    populateLocalCliPicker();
     els.keyInput.focus();
   } else {
     closeKeybox();
   }
 });
+
+/**
+ * Fill the key panel's "Local AI" picker with the installed CLIs, on demand —
+ * so a CLI can be chosen any time, not only after a cloud request has failed.
+ * The current choice is marked, and picking one (or "off") is saved immediately.
+ */
+async function populateLocalCliPicker() {
+  const box = document.getElementById('keybox-cli');
+  if (!box || !window.player.localcliDetect) return;
+  box.textContent = 'checking…';
+  let detected = [];
+  let chosen = null;
+  try {
+    detected = await window.player.localcliDetect();
+    const status = await window.player.localcliStatus();
+    chosen = status && status.consented ? status.id : null;
+  } catch { /* leave empty */ }
+
+  const installed = (detected || []).filter((c) => c.installed);
+  box.textContent = '';
+
+  if (installed.length === 0) {
+    const hint = document.createElement('span');
+    hint.className = 'localcli__hint';
+    hint.textContent = 'No local AI CLI found. Install Claude, Gemini or Ollama to use one.';
+    box.appendChild(hint);
+    return;
+  }
+
+  const ordered = [...installed].sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+  // An explicit "off" so the cloud-only user can turn a prior choice back off.
+  const options = [{ id: null, label: 'Off (cloud only)' }, ...ordered];
+  for (const c of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip';
+    const badge = c.id === null ? '' : (c.verified ? ' ✓' : (c.unverified ? ' · experimental' : ' · best-effort'));
+    btn.textContent = `${c.label}${badge}`;
+    btn.setAttribute('aria-pressed', String((c.id || null) === (chosen || null)));
+    if (c.verified) btn.classList.add('chip--recommended');
+    btn.addEventListener('click', async () => {
+      await window.player.localcliConsent(c.id);
+      populateLocalCliPicker();
+      els.keyStatus.textContent = c.id ? `local AI: ${c.label}` : 'local AI off';
+    });
+    box.appendChild(btn);
+  }
+}
 
 async function saveApiKey() {
   const value = els.keyInput.value.trim();

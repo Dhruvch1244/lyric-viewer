@@ -152,6 +152,14 @@
                placeholder="hf_…" autocomplete="off" spellcheck="false" />
         <button id="keybox-save" class="chip" type="button">Save</button>
         <span id="keybox-status" class="keybox__status" role="status"></span>
+
+        <!-- Local AI: pick a developer CLI to use when the cloud has no key or
+             is out of quota. Available here on demand, not only when a request
+             has already failed. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Local AI (when the cloud is unavailable)</span>
+          <div id="keybox-cli" class="keybox__cli"></div>
+        </div>
       </div>
       <!-- Collapsible pre-sync panel, revealed by the 📋 chip. Paste a list of
            "Artist - Title" lines (one per line) to fetch + cache their synced
