@@ -379,18 +379,23 @@ body.lyrics-hidden .translation {
   opacity: 1;
 }
 
-/* Focus + capitalize on the word being sung, filled with a vertical gradient
-   (white → accent) for a richer highlight. text-shadow can't show through a
-   clipped-text fill, so legibility comes from drop-shadow filters instead. */
+/* Focus + capitalize on the word being sung, wiped LEFT→RIGHT as it is sung —
+   karaoke-grade, driven per frame by `--fill` (0..1, set in paintWords from the
+   word's own timing). The part already sung is bright white; the part still to
+   come is a dim accent tint, with a soft glowing edge at the wipe front. A
+   text-shadow can't show through a clipped-text fill, so legibility comes from
+   drop-shadow filters instead. */
 .word--active {
+  --fill: 0;
   opacity: 1;
   text-transform: uppercase;
   transform: translateY(-1px) scale(1.09);
   background: linear-gradient(
-    180deg,
+    90deg,
     #ffffff 0%,
-    color-mix(in srgb, var(--accent-live) 45%, #ffffff) 45%,
-    var(--accent-live) 100%
+    #ffffff calc(var(--fill) * 100%),
+    color-mix(in srgb, var(--accent-live) 70%, #ffffff) calc(var(--fill) * 100% + 1.5%),
+    color-mix(in srgb, var(--accent-live) 55%, rgba(255, 255, 255, 0.55)) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;

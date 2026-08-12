@@ -868,11 +868,33 @@ function paintWords(positionMs) {
     const state = positionMs >= w.endMs ? WORD_SUNG
       : positionMs >= w.startMs ? WORD_SINGING
         : WORD_PENDING;
-    if (state === w.state) continue;
-    w.state = state;
-    const cl = w.el.classList;
-    cl.toggle('word--active', state === WORD_SINGING);
-    cl.toggle('word--sung', state === WORD_SUNG);
+
+    if (state !== w.state) {
+      w.state = state;
+      const cl = w.el.classList;
+      cl.toggle('word--active', state === WORD_SINGING);
+      cl.toggle('word--sung', state === WORD_SUNG);
+      // Leaving the active state: clear the fill so a re-entry starts clean and
+      // a sung word is not left mid-wipe.
+      if (state !== WORD_SINGING) w.el.style.removeProperty('--fill');
+    }
+
+    /*
+      Karaoke-grade fill. The active word is wiped left→right over its own
+      duration, the way karaoke has always coloured the syllable being sung —
+      not the old all-at-once highlight. This is the ONE per-frame style write
+      in the lyric loop, on a single element, and it is quantised to ~40 steps
+      so a word only re-paints when the wipe visibly advances.
+    */
+    if (state === WORD_SINGING) {
+      const dur = w.endMs - w.startMs;
+      const p = dur > 0 ? (positionMs - w.startMs) / dur : 1;
+      const step = Math.max(0, Math.min(1, Math.round(p * 40) / 40));
+      if (step !== w.fill) {
+        w.fill = step;
+        w.el.style.setProperty('--fill', String(step));
+      }
+    }
   }
 }
 
