@@ -7,7 +7,7 @@
 //! candidate-picker half (the "choose a different cover" grid) is a later phase.
 
 use base64::Engine;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::lyrics::{clean_artist, clean_title, token_similarity, version_tags, Track};
 
@@ -218,6 +218,177 @@ pub fn fetch_artwork(track: &Track) -> Option<Art> {
         }
     }
     credit_only
+}
+
+// ------------------------------------------------------------- candidates
+//
+// The same three sources also feed a "choose a different cover" grid. Two
+// differences from the automatic pick: MIN_MATCH_SCORE is NOT applied (a person
+// scanning a grid can pick the near-miss the threshold would reject), and each
+// candidate carries a small thumbnail — the full image is fetched only when one
+// is chosen.
+
+const MAX_CANDIDATES: usize = 9;
+const THUMB_SIZE: u32 = 250;
+
+struct RawCand {
+    source: String,
+    title: String,
+    artist: String,
+    score: f64,
+    full_url: String,
+    thumb_url: String,
+}
+
+/// One candidate as sent to the renderer (thumbnail inlined as a data URI).
+#[derive(serde::Serialize)]
+struct Candidate {
+    source: String,
+    title: String,
+    artist: String,
+    score: f64,
+    #[serde(rename = "fullUrl")]
+    full_url: String,
+    thumb: String,
+}
+
+fn itunes_candidates(track: &Track, cleaned: &str, term: &str, want: &std::collections::HashSet<String>) -> Vec<RawCand> {
+    let Some(json) = get_json(ureq::get(ITUNES_SEARCH).query("term", term).query("entity", "song").query("limit", "8")) else {
+        return Vec::new();
+    };
+    let re = regex::Regex::new(r"/\d+x\d+bb\.(jpg|png)").unwrap();
+    json.get("results")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let raw = r.get("artworkUrl100").or_else(|| r.get("artworkUrl60")).and_then(|v| v.as_str())?;
+                    let title = r.get("trackName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let artist = r.get("artistName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    Some(RawCand {
+                        score: score_candidate(&title, &artist, track, cleaned, want),
+                        source: "iTunes".into(),
+                        full_url: re.replace(raw, "/1000x1000bb.$1").to_string(),
+                        thumb_url: re.replace(raw, &format!("/{THUMB_SIZE}x{THUMB_SIZE}bb.$1")).to_string(),
+                        title,
+                        artist,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deezer_candidates(track: &Track, cleaned: &str, term: &str, want: &std::collections::HashSet<String>) -> Vec<RawCand> {
+    let Some(json) = get_json(ureq::get(DEEZER_SEARCH).query("q", term).query("limit", "8")) else {
+        return Vec::new();
+    };
+    json.get("data")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let album = r.get("album")?;
+                    let full = album.get("cover_xl").or_else(|| album.get("cover_big")).or_else(|| album.get("cover_medium")).and_then(|v| v.as_str())?;
+                    let thumb = album.get("cover_medium").or_else(|| album.get("cover_big")).or_else(|| album.get("cover_xl")).and_then(|v| v.as_str()).unwrap_or(full);
+                    let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let artist = r.get("artist").and_then(|a| a.get("name")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    Some(RawCand {
+                        score: score_candidate(&title, &artist, track, cleaned, want),
+                        source: "Deezer".into(),
+                        full_url: full.to_string(),
+                        thumb_url: thumb.to_string(),
+                        title,
+                        artist,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn musicbrainz_candidates(track: &Track, cleaned: &str, want: &std::collections::HashSet<String>) -> Vec<RawCand> {
+    let mut query = format!("recording:\"{cleaned}\"");
+    if !track.artist.is_empty() {
+        query.push_str(&format!(" AND artist:\"{}\"", track.artist));
+    }
+    let Some(json) = get_json(ureq::get(MB_SEARCH).set("User-Agent", MB_UA).query("query", &query).query("fmt", "json").query("limit", "5")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(recs) = json.get("recordings").and_then(|v| v.as_array()) {
+        for rec in recs {
+            let credit = rec.get("artist-credit").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().map(|a| format!("{}{}", a.get("name").and_then(|v| v.as_str()).unwrap_or(""), a.get("joinphrase").and_then(|v| v.as_str()).unwrap_or(""))).collect::<String>().trim().to_string()
+            }).unwrap_or_default();
+            let title = rec.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let Some(release) = rec.get("releases").and_then(|v| v.as_array()).and_then(|a| a.iter().find(|r| r.get("id").is_some())) else { continue };
+            let Some(id) = release.get("id").and_then(|v| v.as_str()) else { continue };
+            out.push(RawCand {
+                score: score_candidate(&title, &credit, track, cleaned, want),
+                source: "Cover Art Archive".into(),
+                full_url: format!("{CAA_FRONT}/{id}/front-500"),
+                thumb_url: format!("{CAA_FRONT}/{id}/front-250"),
+                title,
+                artist: credit,
+            });
+        }
+    }
+    out
+}
+
+/// Drop candidates pointing at the same image, keeping the best-scoring one.
+fn dedupe(list: Vec<RawCand>) -> Vec<RawCand> {
+    let mut seen: std::collections::HashMap<String, RawCand> = std::collections::HashMap::new();
+    for c in list {
+        let key = format!("{}|{}|{}", c.source.to_lowercase(), c.title.trim().to_lowercase(), c.artist.trim().to_lowercase());
+        match seen.get(&key) {
+            Some(prev) if prev.score >= c.score => {}
+            _ => {
+                seen.insert(key, c);
+            }
+        }
+    }
+    seen.into_values().collect()
+}
+
+/// Gather cover-art options for a track, best first, with thumbnails inlined.
+pub fn fetch_candidates(track: &Track) -> Value {
+    let cleaned = clean_title(&track.title);
+    let term = format!("{} {}", cleaned, track.artist);
+    let term = term.trim();
+    if term.is_empty() {
+        return json!([]);
+    }
+    let want = version_tags(&track.title);
+
+    let mut all = itunes_candidates(track, &cleaned, term, &want);
+    all.extend(deezer_candidates(track, &cleaned, term, &want));
+    all.extend(musicbrainz_candidates(track, &cleaned, &want));
+
+    let mut ranked = dedupe(all);
+    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(MAX_CANDIDATES);
+
+    let out: Vec<Candidate> = ranked
+        .into_iter()
+        .filter_map(|c| {
+            download_image(&c.thumb_url).map(|thumb| Candidate {
+                source: c.source,
+                title: c.title,
+                artist: c.artist,
+                score: c.score,
+                full_url: c.full_url,
+                thumb,
+            })
+        })
+        .collect();
+    serde_json::to_value(out).unwrap_or(json!([]))
+}
+
+/// Download one chosen full-size cover as a data URI.
+pub fn fetch_one(url: &str) -> Option<String> {
+    download_image(url)
 }
 
 #[cfg(test)]
