@@ -8,6 +8,7 @@
 //! The renderer talks to it through `window.player` (see tauri-shim.js), which
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
+mod artwork;
 mod lyrics;
 #[cfg(windows)]
 mod wallpaper;
@@ -221,8 +222,9 @@ fn start_smtc(app: AppHandle) {
                                 "durationMs": s.end_ms,
                             }),
                         );
-                        // Kick off the lyric lookup for the new song.
+                        // Kick off the lyric + artwork lookups for the new song.
                         resolve_lyrics(app.clone(), title.clone(), artist.clone(), s.end_ms);
+                        resolve_artwork(app.clone(), title.clone(), artist.clone(), s.end_ms);
                     }
                     let _ = app.emit(
                         "tick",
@@ -314,6 +316,26 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                     }),
                 );
             }
+        }
+    });
+}
+
+/// Fetch cover art for a track and emit it to the renderer, on its own thread.
+/// The renderer uses the image as the blurred backdrop and derives a palette
+/// from it, so a miss simply leaves the hash-palette wash in place.
+fn resolve_artwork(app: AppHandle, title: String, artist: String, duration_ms: i64) {
+    std::thread::spawn(move || {
+        let track = lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
+        if let Some(art) = artwork::fetch_artwork(&track) {
+            let _ = app.emit(
+                "artwork",
+                json!({
+                    "track": { "title": title, "artist": artist },
+                    "artwork": art.data_uri,
+                    "artistName": art.artist_name,
+                    "chosen": false,
+                }),
+            );
         }
     });
 }

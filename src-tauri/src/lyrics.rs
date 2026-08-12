@@ -72,7 +72,7 @@ fn normalize(value: &str) -> String {
 }
 
 /// Token-overlap similarity in [0, 1].
-fn token_similarity(a: &str, b: &str) -> f64 {
+pub fn token_similarity(a: &str, b: &str) -> f64 {
     let na = normalize(a);
     let nb = normalize(b);
     let sa: std::collections::HashSet<&str> = na.split(' ').filter(|s| !s.is_empty()).collect();
@@ -85,7 +85,7 @@ fn token_similarity(a: &str, b: &str) -> f64 {
 }
 
 /// Version markers present in a raw title/album string.
-fn version_tags(raw: &str) -> std::collections::HashSet<String> {
+pub fn version_tags(raw: &str) -> std::collections::HashSet<String> {
     let words: std::collections::HashSet<String> =
         normalize(raw).split(' ').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
     VERSION_TOKENS
