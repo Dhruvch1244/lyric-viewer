@@ -2342,7 +2342,14 @@ function applyEngine(preset, now, dt, w, h) {
       // Recorded as the new intent, not just loaded — otherwise the block above
       // reverts it on the next frame.
       milkdropWanted = all[(i + 1) % all.length];
-      milkdropName = window.MilkDrop.loadPreset(milkdropWanted);
+      // Cross-fade over a musical phrase, not a fixed 2.7s. Fading across four
+      // beats lands the transition on a bar boundary, so the new preset arrives
+      // *with* the music rather than at an arbitrary wall-clock offset. The
+      // beat clock is always running (estimated or tempo-locked), so this
+      // scales from slow to fast tracks. Clamped so a half/double-time estimate
+      // cannot produce an instant cut or a fade that outlives the cooldown.
+      const phraseBlend = Math.max(1.2, Math.min(3.2, (beatPeriodMs * 4) / 1000));
+      milkdropName = window.MilkDrop.loadPreset(milkdropWanted, phraseBlend);
       lastMilkdropSwitchAt = now;
       markMilkdropSeen(milkdropWanted);
       setStatus(`MilkDrop — ${milkdropName}`);
@@ -4016,15 +4023,43 @@ function loadArtImage(dataUri) {
   const img = new Image();
   img.onload = () => {
     artImage = img;
-    buildBlurredArt();
+    buildBlurredArt();          // the visible backdrop — needed this frame
     artReady = Boolean(artBlurred);
     artFadeIn = 0;
-    // Derive a palette from the cover and theme the procedural dancers to it.
-    artPalette = extractArtPalette(img);
-    applyArtPalette();
+    /*
+      Defer the palette extraction off the track-start frame.
+
+      `extractArtPalette` ends in a `getImageData` call, which forces a
+      synchronous GPU→CPU readback and stalls the frame. Landing it here, in
+      the same frame that just blurred a 512² cover — and while the main
+      process is mid-decode/analysis/lyric-fetch — is part of the measured
+      first-few-seconds frame dip. The palette only recolours the procedural
+      dancers, a secondary effect nobody misses for a frame or two, so it waits
+      for an idle slot. The `artImage === img` guard drops the work if a newer
+      cover (or track) has replaced this one before the idle callback runs.
+    */
+    scheduleIdle(() => {
+      if (artImage !== img) return;
+      artPalette = extractArtPalette(img);
+      applyArtPalette();
+    });
   };
   img.onerror = () => { /* keep the previous backdrop */ };
   img.src = dataUri;
+}
+
+/**
+ * Run `fn` when the main thread is next idle, so heavy one-off work does not
+ * pile onto a busy frame. Uses requestIdleCallback where available (a real
+ * idle-time slot) and falls back to a short timeout otherwise.
+ * @param {() => void} fn
+ */
+function scheduleIdle(fn) {
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(fn, { timeout: 400 });
+  } else {
+    setTimeout(fn, 120);
+  }
 }
 
 /**
@@ -4226,6 +4261,12 @@ const SEEN_VERSION_KEY = 'seenVersion';
 let appVersion = null;
 
 const WHATS_NEW = {
+  '0.25.0': [
+    '<b>More songs get synced lyrics</b> — when only plain words exist, the app finds them and times them to the music from audio, instead of showing nothing.',
+    '<b>Smoother preset changes</b> — drops cross-fade across the beat now, landing the new look with the music.',
+    '<b>Faster track starts</b> — the cover-art work no longer stutters the first second of a new song.',
+    '<b>The visuals tell you when they work</b> — "singers identified" and "word-sync active" confirm the clever bits fired.',
+  ],
   '0.24.0': [
     '<b>Language toggles are top-right now</b> — script (अ) and translation (EN) are always visible, no more reaching into the bottom bar.',
     '<b>A display-size menu</b> — click the size chip to pick fullscreen, a bar, a strip, or desktop, instead of cycling.',
@@ -4540,6 +4581,15 @@ let listeningTrack = null;
 let transcribeCfg = { enabled: true, language: '', model: '' };
 
 /**
+ * Whether the current track has *plain* lyrics available (real words with no
+ * timing). Set from the `lyrics` payload. When true, a transcription pass
+ * aligns those correct words to the audio's timing rather than guessing them,
+ * so the messaging can promise properly-worded sync instead of a best-effort
+ * transcription.
+ */
+let plainLyricsAvailable = false;
+
+/**
  * Start recording the current song so it can be transcribed once it ends.
  * Requires live loopback capture (the ♫ chip) — without real audio there is
  * nothing to transcribe.
@@ -4549,13 +4599,18 @@ function beginTranscriptionListen() {
   if (listeningTrack) return;                       // already recording this song
   if (!window.AudioReactive || !window.AudioReactive.isActive()) {
     // Loopback is off; say so rather than silently doing nothing, since the
-    // fix (turn on ♫) is one click away.
-    setStatus('no synced lyrics — enable ♫ to auto-transcribe');
+    // fix (turn on ♫) is one click away. When the real words are already known,
+    // say that too — enabling ♫ times them to the music rather than guessing.
+    setStatus(plainLyricsAvailable
+      ? 'lyrics found — enable ♫ to sync them to the music'
+      : 'no synced lyrics — enable ♫ to auto-transcribe');
     return;
   }
   if (window.PcmCapture.start()) {
     listeningTrack = currentTrack;
-    setStatus('no synced lyrics — listening to learn this song…');
+    setStatus(plainLyricsAvailable
+      ? 'lyrics found — timing them to the music…'
+      : 'no synced lyrics — listening to learn this song…');
   }
 }
 
@@ -4661,6 +4716,7 @@ window.player.onTrack((track) => {
   cuesDevanagari = null;
   cuesEnglish = null;
   cues = [];
+  plainLyricsAvailable = false;   // re-learned from this track's lyrics payload
   /* Belongs to the song that just ended. Carrying it into the next one would
      name that song's artists against these lyrics. */
   setAttribution(null);
@@ -4793,6 +4849,20 @@ window.player.onTick((state) => {
 window.player.onAttribution((payload) => {
   if (!isForCurrentTrack(payload.track)) return;
   setAttribution({ artists: payload.artists, singers: payload.singers });
+  /*
+    Announce a successful multi-singer attribution once, briefly. This is the
+    only feature that runs off a live model and it otherwise lands invisibly —
+    the dancer on the mic just starts being right — so a single play could never
+    confirm it fired. Naming the singers the model actually assigned turns that
+    play into proof. Silent for a one-name credit (nothing was disambiguated).
+  */
+  const names = Array.isArray(payload.artists) ? payload.artists.filter(Boolean) : [];
+  const assigned = Array.isArray(payload.singers)
+    ? new Set(payload.singers.filter((i) => Number.isInteger(i) && i >= 0)).size
+    : 0;
+  if (names.length >= 2 && assigned >= 2) {
+    setStatus(`singers identified — ${names.slice(0, 3).join(', ')}`);
+  }
 });
 
 window.player.onMood((data) => {
@@ -4828,6 +4898,7 @@ window.player.onLyrics((payload) => {
   cuesDevanagari = payload.cuesDevanagari || null;
   transliterationAvailable = Boolean(payload.transliterationAvailable);
   translationAvailable = Boolean(payload.translationAvailable);
+  plainLyricsAvailable = Boolean(payload.plainAvailable);
 
   // LRCLIB often reports the full artist credit even when SMTC gave just the
   // primary — fold any extra collaborators in so each gets a dancer.
@@ -4841,7 +4912,7 @@ window.player.onLyrics((payload) => {
     case 'searching': setJob('lyrics', 'finding lyrics'); setStatus('finding lyrics…'); break;
     case 'not-found':
       setJob('lyrics', null);
-      setStatus('no synced lyrics found');
+      setStatus(payload.plainAvailable ? 'lyrics found — timing needed' : 'no synced lyrics found');
       clearColumn();
       // Nothing to show this play — start listening so Whisper can transcribe
       // the song at the end and have it ready for every play after.
@@ -4864,6 +4935,13 @@ window.player.onLyrics((payload) => {
       */
       if (payload.status === 'ok' && !payload.hasWordTimings) beginTranscriptionListen();
       else stopTranscriptionListen();
+      // Confirm measured word-level sync once, so a live play proves the
+      // record→align→cache→replay cycle completed rather than leaving it
+      // ambiguous against the estimate the wipe also runs on.
+      if (payload.status === 'ok' && payload.hasWordTimings
+          && cuesLatin.some((c) => Array.isArray(c.words) && c.words.length > 0)) {
+        setStatus('word-sync active');
+      }
   }
   if (payload.status !== 'searching') setJob('lyrics', null);
   if (payload.status === 'ok') showSourceBadge(payload.origin);

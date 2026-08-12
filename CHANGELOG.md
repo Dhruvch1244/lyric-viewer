@@ -2,6 +2,41 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.25.0 — 2026-08-12
+
+Smoother transitions, a faster track start, and wider synced-lyric coverage.
+
+### Added
+
+- **Wider synced-lyric coverage from plain lyrics.** When no source has *synced*
+  lyrics but the real words exist as plain text — LRCLIB's plain catalogue is
+  far larger than its synced one — the app now finds and caches them instead of
+  reporting a flat miss. With `♫` capture on, a Whisper pass times those correct
+  words to the music (see `align.js`), so the song scrolls the right lyrics
+  rather than a best-effort transcription. The status says so: "lyrics found —
+  timing them to the music" instead of "no synced lyrics".
+
+- **Live-play confirmation for the model-driven features.** Per-line singer
+  attribution and measured word-level sync used to land invisibly. They now
+  announce themselves briefly ("singers identified — …", "word-sync active") so
+  a single play confirms they fired.
+
+### Changed
+
+- **Beat-synced preset transitions cross-fade over a musical phrase.** A
+  drop-triggered MilkDrop switch now fades across four beats, scaled to the
+  measured tempo, so the new preset arrives on a bar boundary with the music
+  rather than at a fixed 2.7s wall-clock offset.
+
+### Fixed
+
+- **Smoother track starts.** Deriving a cover's palette ends in a `getImageData`
+  call, which forces a GPU→CPU readback and stalls the frame. It ran on the same
+  frame that blurred the new cover, while the main process was mid decode /
+  analysis / lyric fetch — part of the measured first-few-seconds frame dip. The
+  palette pass now waits for an idle slot; the visible backdrop still appears
+  immediately.
+
 ## 0.24.0 — 2026-08-12
 
 Bug fixes and UX, from real-use feedback on 0.23.0.
