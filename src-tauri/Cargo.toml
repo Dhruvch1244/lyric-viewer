@@ -14,6 +14,12 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# `store` compiles out the GitHub self-updater. The Microsoft Store build ships
+# as a read-only MSIX that the Store updates itself, so bundling the updater
+# there would only produce a broken "update available" path. See docs/MICROSOFT-STORE.md.
+store = []
+
 # Optimised release build. LTO + a single codegen unit trade compile time for a
 # smaller, faster binary; strip drops debug symbols. Unwinding is kept (no
 # panic="abort") so a panic inside a command fails that call instead of aborting
