@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Lyric Overlay app icon — "Amplitude L".
+    A bold L monogram (lyrics) with two equalizer bars rising from the negative
+    space (sound), on a dark violet tile. Master source; rasterise via
+    scripts/gen-icon.js then `tauri icon` to regenerate every size.
+  -->
+  <defs>
+    <radialGradient id="tile" cx="34%" cy="26%" r="88%">
+      <stop offset="0" stop-color="#221B40"/>
+      <stop offset="0.62" stop-color="#120E22"/>
+      <stop offset="1" stop-color="#0A0912"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="52%" r="50%">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.42"/>
+      <stop offset="0.5" stop-color="#FF2E93" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FF2E93" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="360" y1="250" x2="704" y2="774">
+      <stop offset="0" stop-color="#FF2E93"/>
+      <stop offset="0.55" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#22E3FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="url(#tile)"/>
+  <rect x="33" y="33" width="958" height="958" rx="207" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+  <!-- ambient glow behind the mark -->
+  <rect x="112" y="112" width="800" height="800" fill="url(#glow)"/>
+
+  <!-- the L monogram -->
+  <g>
+    <rect x="360" y="250" width="120" height="520" rx="60" fill="url(#mark)"/>
+    <rect x="360" y="650" width="344" height="120" rx="60" fill="url(#mark)"/>
+    <!-- equalizer bars sharing a baseline at y=530 -->
+    <rect x="556" y="330" width="58" height="200" rx="29" fill="#22E3FF"/>
+    <rect x="636" y="270" width="58" height="260" rx="29" fill="#FF2E93"/>
+  </g>
+</svg>

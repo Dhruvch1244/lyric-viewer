@@ -1309,10 +1309,19 @@ pub fn run() {
     // actually passes to WebView2 (the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env
     // var is ignored once wry sets args through the API).
 
-    tauri::Builder::default()
+    // The GitHub self-updater is compiled in for the standalone (NSIS) build
+    // only. The Microsoft Store build (`--features store`) is a read-only
+    // package updated by the Store itself, so the updater plugin is omitted
+    // there — which also makes check_for_update()/install_update() silent
+    // no-ops via their `app.updater()` guards.
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(not(feature = "store"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = build_tray(&handle);

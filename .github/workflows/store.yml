@@ -1,0 +1,48 @@
+name: store-msix
+
+# Build the Microsoft Store MSIX. Runs on demand (workflow_dispatch) or when a
+# store-v* tag is pushed. Produces an UNSIGNED .msix artifact — Microsoft signs
+# it on ingestion, so no code-signing secret is needed here (unlike release.yml,
+# which SignPath-signs the standalone NSIS build).
+#
+# The MSIX omits the GitHub self-updater (scripts/build-msix.ps1 builds with
+# `--features store`); the Store delivers updates to packaged apps.
+
+on:
+  push:
+    tags:
+      - 'store-v*'
+  workflow_dispatch: {}
+
+jobs:
+  msix:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build MSIX
+        shell: powershell
+        run: ./scripts/build-msix.ps1
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyric-overlay-msix
+          path: dist-store/*.msix
+          if-no-files-found: error

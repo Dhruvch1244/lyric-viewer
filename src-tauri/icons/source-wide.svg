@@ -1,0 +1,29 @@
+<svg width="310" height="150" viewBox="0 0 310 150" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Wide310x150 Start-menu tile for the MSIX build. The square "Amplitude L"
+    mark centered on the same dark violet ground. Rasterised to
+    Wide310x150Logo.png by scripts/gen-icon.js.
+  -->
+  <defs>
+    <radialGradient id="wtile" cx="30%" cy="28%" r="95%">
+      <stop offset="0" stop-color="#221B40"/>
+      <stop offset="0.62" stop-color="#120E22"/>
+      <stop offset="1" stop-color="#0A0912"/>
+    </radialGradient>
+    <linearGradient id="wmark" gradientUnits="userSpaceOnUse" x1="360" y1="250" x2="704" y2="774">
+      <stop offset="0" stop-color="#FF2E93"/>
+      <stop offset="0.55" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#22E3FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="310" height="150" fill="url(#wtile)"/>
+
+  <!-- mark: 1024-space geometry scaled 0.2 and centered on the 310x150 tile -->
+  <g transform="translate(48.6,-27) scale(0.2)">
+    <rect x="360" y="250" width="120" height="520" rx="60" fill="url(#wmark)"/>
+    <rect x="360" y="650" width="344" height="120" rx="60" fill="url(#wmark)"/>
+    <rect x="556" y="330" width="58" height="200" rx="29" fill="#22E3FF"/>
+    <rect x="636" y="270" width="58" height="260" rx="29" fill="#FF2E93"/>
+  </g>
+</svg>
