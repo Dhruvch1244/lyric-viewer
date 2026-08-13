@@ -1,0 +1,11 @@
+name = "lyric-overlay-proxy"
+main = "src/worker.js"
+compatibility_date = "2026-01-01"
+
+# Optional: serve the proxy from your own domain instead of *.workers.dev.
+# Requires the zone to be on Cloudflare (it is) and the subdomain proxied
+# (orange cloud). Then set LYRICS_BASE in web/demo.js to
+# https://lyricoverlay.dhruvchoudhary.com
+# [[routes]]
+# pattern = "lyricoverlay.dhruvchoudhary.com/api/*"
+# zone_name = "dhruvchoudhary.com"

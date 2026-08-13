@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser Demo — Lyric Overlay</title>
+<meta name="description" content="Try Lyric Overlay in your browser: drop a track and watch the visualizer and synced lyrics come alive.">
+<meta name="theme-color" content="#0B0A12">
+<link rel="icon" href="assets/icon.png">
+<style>
+  :root{
+    --bg:#0B0A12; --panel:#141221; --panel-2:#1B1830; --line:rgba(255,255,255,.09);
+    --line-2:rgba(255,255,255,.16); --text:#ECEAF6; --muted:#9A93B4; --muted-2:#CFC8E6;
+    --pink:#FF2E93; --violet:#8B5CF6; --cyan:#22E3FF; --gold:#FFB020;
+    --grad:linear-gradient(100deg,var(--pink),var(--violet) 46%,var(--cyan));
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI",system-ui,sans-serif;line-height:1.6;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px;}
+
+  nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(12px);background:rgba(11,10,18,.7);border-bottom:1px solid var(--line);}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:1080px;margin:0 auto;padding:0 20px;}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;}
+  .brand svg{width:26px;height:26px;}
+  .nav-in a.back{color:var(--muted);font-size:14px;} .nav-in a.back:hover{color:var(--text);}
+
+  header.head{padding:34px 0 18px;text-align:center;}
+  header.head .pill{display:inline-block;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;color:var(--cyan);background:rgba(34,227,255,.1);border:1px solid rgba(34,227,255,.3);padding:5px 12px;border-radius:99px;margin-bottom:14px;}
+  header.head h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px;letter-spacing:-.02em;}
+  header.head p{color:var(--muted);margin:0 auto;max-width:56ch;font-size:15.5px;}
+
+  /* stage */
+  .stage{position:relative;aspect-ratio:16/9;width:100%;border-radius:18px;overflow:hidden;
+         background:#05040A;border:1px solid var(--line-2);box-shadow:0 30px 80px -30px rgba(0,0,0,.8);margin-top:18px;}
+  #viz{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .lyric-overlay{position:absolute;left:0;right:0;bottom:0;padding:26px clamp(20px,4vw,44px) 30px;
+                 background:linear-gradient(to top,rgba(5,4,10,.82),transparent);pointer-events:none;}
+  #lyricNow{font-family:"Arial Narrow","Oswald",sans-serif;font-weight:800;text-transform:uppercase;
+            font-size:clamp(24px,4.4vw,50px);line-height:1.04;letter-spacing:.01em;margin:0 0 4px;min-height:1.1em;
+            background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;
+            text-shadow:0 2px 30px rgba(139,92,246,.35);transition:opacity .2s ease;}
+  #lyricNext{color:var(--muted-2);font-weight:600;font-size:clamp(14px,2.2vw,20px);opacity:.66;min-height:1.2em;margin:0;}
+  .stage .hint{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted);font-size:15px;}
+  .stage .hint b{color:var(--text);}
+
+  /* controls */
+  .controls{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0;}
+  @media(max-width:720px){.controls{grid-template-columns:1fr;}}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;}
+  .box h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;padding:10px 16px;border-radius:11px;
+       background:var(--grad);color:#0A0912;border:0;cursor:pointer;transition:transform .18s ease,opacity .18s ease;}
+  .btn:hover{transform:translateY(-1px);} .btn:disabled{opacity:.45;cursor:not-allowed;transform:none;}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line-2);}
+  input[type=text]{background:#0C0A16;border:1px solid var(--line-2);color:var(--text);border-radius:10px;
+       padding:10px 12px;font-size:14px;font-family:inherit;flex:1;min-width:120px;}
+  input[type=text]::placeholder{color:var(--muted);}
+  .drop{border:1.5px dashed var(--line-2);border-radius:12px;padding:18px;text-align:center;color:var(--muted);
+        font-size:14px;cursor:pointer;transition:border-color .2s,background .2s;}
+  .drop:hover,.drop.over{border-color:var(--cyan);background:rgba(34,227,255,.05);color:var(--muted-2);}
+  .drop b{color:var(--text);}
+  .status{font-size:13px;color:var(--muted);margin-top:8px;min-height:1.2em;}
+  .status.err{color:#ff7b9c;}
+
+  .note{background:linear-gradient(140deg,var(--panel-2),var(--panel));border:1px solid var(--line);border-radius:16px;
+        padding:22px 24px;margin:22px 0 60px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;}
+  .note p{margin:0;color:var(--muted-2);font-size:15px;max-width:60ch;}
+  .note b{color:var(--text);}
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-in">
+    <a class="brand" href="index.html">
+      <svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="nb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF2E93"/><stop offset=".55" stop-color="#8B5CF6"/><stop offset="1" stop-color="#22E3FF"/></linearGradient></defs><rect x="34" y="24" width="17" height="72" rx="8.5" fill="url(#nb)"/><rect x="34" y="79" width="50" height="17" rx="8.5" fill="url(#nb)"/><rect x="74" y="30" width="8" height="34" rx="4" fill="#22E3FF"/><rect x="86" y="22" width="8" height="42" rx="4" fill="#FF2E93"/></svg>
+      Lyric Overlay
+    </a>
+    <a class="back" href="index.html">← Back to site</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header class="head">
+    <span class="pill">Browser demo</span>
+    <h1>Watch a track come alive</h1>
+    <p>Drop in an audio file, add the artist and title for synced lyrics, and watch the visualizer react. The Windows app does all this automatically for whatever you're already playing.</p>
+  </header>
+
+  <div class="stage">
+    <canvas id="viz"></canvas>
+    <div class="hint" id="hint">Load an audio file below to start the visualizer <b>▾</b></div>
+    <div class="lyric-overlay">
+      <p id="lyricNow"></p>
+      <p id="lyricNext"></p>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="box">
+      <h3>1 · Audio</h3>
+      <div class="drop" id="drop">Drop an audio file here, or <b>click to choose</b><br><span style="font-size:12.5px">mp3, wav, ogg, flac, m4a</span></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="playBtn" disabled>▶ Play</button>
+        <button class="btn ghost" id="presetBtn" disabled>⤨ Shuffle visual</button>
+      </div>
+      <div class="status" id="audioStatus"></div>
+      <input type="file" id="fileInput" accept="audio/*" hidden>
+    </div>
+
+    <div class="box">
+      <h3>2 · Lyrics</h3>
+      <div class="row">
+        <input type="text" id="artist" placeholder="Artist">
+        <input type="text" id="title" placeholder="Song title">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="lyricBtn">Find synced lyrics</button>
+        <button class="btn ghost" id="lrcBtn">Upload .lrc</button>
+      </div>
+      <div class="status" id="lyricStatus"></div>
+      <input type="file" id="lrcInput" accept=".lrc,text/plain" hidden>
+    </div>
+  </div>
+
+  <div class="note">
+    <p><b>This is a taste, not the full thing.</b> A browser can't read what Spotify is playing or capture your system audio on its own. The Windows app does both automatically — no uploading, no tab-sharing.</p>
+    <a class="btn" href="index.html#download">Get the Windows app</a>
+  </div>
+</div>
+
+<script src="assets/butterchurn.min.js"></script>
+<script src="assets/butterchurnPresets.min.js"></script>
+<script src="demo.js"></script>
+</body>
+</html>
