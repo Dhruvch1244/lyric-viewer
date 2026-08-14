@@ -730,6 +730,38 @@ fn stop_audio_capture() {
     audio::stop_capture();
 }
 
+/// Toggle "launch on Windows startup". Registered as a no-op returning `false`
+/// on the Store build: MSIX packages declare startup via the AppX StartupTask
+/// extension instead of a registry Run key, so the registry-based plugin is
+/// only wired in for the standalone (NSIS) build — see the updater's same
+/// `store` gating above for the reasoning.
+#[cfg(not(feature = "store"))]
+#[tauri::command]
+fn set_autostart(enabled: bool, app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if enabled { mgr.enable() } else { mgr.disable() }.is_ok()
+}
+
+#[cfg(feature = "store")]
+#[tauri::command]
+fn set_autostart(_enabled: bool, _app: AppHandle) -> bool {
+    false
+}
+
+#[cfg(not(feature = "store"))]
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[cfg(feature = "store")]
+#[tauri::command]
+fn get_autostart(_app: AppHandle) -> bool {
+    false
+}
+
 /// Nudge (delta != 0) or set (absolute) the sync offset, persist, and mirror it
 /// to the renderer's offset chip. Backs the Ctrl+Alt+Left/Right/0 hotkeys.
 fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) {
@@ -1325,6 +1357,14 @@ pub fn run() {
     #[cfg(not(feature = "store"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
+    // Same store exclusion as the updater above: Store builds use the AppX
+    // StartupTask extension for launch-on-startup, not a registry Run key.
+    #[cfg(not(feature = "store"))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
+
     builder
         .setup(|app| {
             let handle = app.handle().clone();
@@ -1372,6 +1412,8 @@ pub fn run() {
             set_display_mode,
             start_audio_capture,
             stop_audio_capture,
+            set_autostart,
+            get_autostart,
             get_transcribe_config,
             set_transcribe_config,
             request_translation,

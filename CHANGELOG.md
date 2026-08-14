@@ -2,6 +2,20 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.29.0 — 2026-08-14
+
+- **Auto-gained native audio.** The WASAPI loopback spectrum now self-calibrates
+  to whatever the system's actual loudness is instead of assuming a fixed
+  volume range, and capture logs a diagnostic heartbeat to help track down any
+  remaining "not reacting" reports. (Waveform/MilkDrop feed was unaffected —
+  only the frequency spectrum used the fixed range.)
+- **Launch on Windows startup.** A toggle in the settings panel starts Lyric
+  Overlay automatically when you log in. Not available on the Microsoft Store
+  build, which uses its own startup mechanism.
+- **Stop rendering the instant the overlay is hidden.** Ctrl+Alt+H (or the tray
+  icon) now fully stops the render loop rather than idling it — no more waking
+  up every frame just to do nothing while the overlay is out of the way.
+
 ## 0.28.0 — 2026-08-14
 
 - **Fullscreen only, for now.** The Floating bar, Taskbar strip, and Desktop
