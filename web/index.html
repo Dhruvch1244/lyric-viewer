@@ -272,23 +272,23 @@
         <span class="dl-sub">Windows 10 &amp; 11</span>
         <span class="dl-tag">Coming soon</span>
       </div>
-      <a class="dl-card" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+      <a class="dl-card" data-dl="win" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
         <span class="dl-plat">Windows</span>
         <span class="dl-sub">.exe installer · signed</span>
         <span class="dl-go">Download →</span>
       </a>
-      <a class="dl-card" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+      <a class="dl-card" data-dl="mac" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
         <span class="dl-plat">macOS</span>
-        <span class="dl-sub">universal · experimental</span>
+        <span class="dl-sub">universal .dmg · experimental</span>
         <span class="dl-go">Download →</span>
       </a>
-      <a class="dl-card" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+      <a class="dl-card" data-dl="linux" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
         <span class="dl-plat">Linux</span>
-        <span class="dl-sub">deb · rpm · AppImage</span>
+        <span class="dl-sub">.AppImage · .deb · .rpm</span>
         <span class="dl-go">Download →</span>
       </a>
     </div>
-    <p class="fineprint">Or <a href="demo.html" style="color:var(--cyan)">play in your browser</a> — installable on Android &amp; desktop</p>
+    <p class="fineprint">Latest release <span id="dl-version">·</span> — direct downloads · or <a href="demo.html" style="color:var(--cyan)">play in your browser</a>, installable on Android &amp; desktop</p>
   </div>
 </section>
 
@@ -371,6 +371,39 @@
   } catch (e) {
     canvas.style.display = 'none'; // fall back to the CSS backdrop
   }
+})();
+</script>
+<script>
+/* Point each download button at the latest GitHub release's real installer
+   asset, so links stay correct across releases without hardcoding versioned
+   filenames. The buttons keep a releases-page href as a no-JS fallback. */
+(function () {
+  var REPO = 'Dhruvch1244/lyric-viewer';
+  var match = {
+    win:   [/x64-setup\.exe$/i, /\.exe$/i, /\.msi$/i],
+    mac:   [/universal\.dmg$/i, /\.dmg$/i],
+    linux: [/\.AppImage$/i, /amd64\.deb$/i, /\.rpm$/i],
+  };
+  fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+    .then(function (rel) {
+      var assets = rel.assets || [];
+      function pick(res) {
+        for (var i = 0; i < res.length; i++) {
+          for (var j = 0; j < assets.length; j++) {
+            if (res[i].test(assets[j].name)) return assets[j].browser_download_url;
+          }
+        }
+        return null;
+      }
+      document.querySelectorAll('[data-dl]').forEach(function (el) {
+        var url = pick(match[el.dataset.dl] || []);
+        if (url) el.href = url;
+      });
+      var v = document.getElementById('dl-version');
+      if (v && rel.tag_name) v.textContent = rel.tag_name;
+    })
+    .catch(function () { /* keep the releases-page fallback hrefs */ });
 })();
 </script>
 <script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
