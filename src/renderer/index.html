@@ -117,7 +117,7 @@
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
-        <button id="btn-mode" class="chip" type="button" title="Choose display size (Ctrl+Alt+M toggles desktop)" aria-haspopup="true" aria-expanded="false">▭ Size</button>
+        <button id="btn-mode" class="chip" type="button" title="Choose display size" aria-haspopup="true" aria-expanded="false">▭ Size</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
@@ -142,9 +142,6 @@
         <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="strip">
           <span class="mode-menu__glyph">▁</span> Taskbar strip<small>click-through, along the bottom</small>
         </button>
-        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="wallpaper">
-          <span class="mode-menu__glyph">▨</span> Desktop<small>behind your icons</small>
-        </button>
       </div>
 
       <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user
@@ -163,6 +160,16 @@
         <div class="keybox__local">
           <span class="keybox__label">Local AI (when the cloud is unavailable)</span>
           <div id="keybox-cli" class="keybox__cli"></div>
+        </div>
+
+        <!-- Required path to report inappropriate AI-generated output
+             (translation / transliteration / mood). Opens a prefilled email
+             and shows the address inline so a reporting path is always visible. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Report AI-generated content</span>
+          <button id="keybox-report" class="chip" type="button"
+                  title="Report inappropriate AI-generated content">⚑ Report content…</button>
+          <span id="keybox-report-status" class="keybox__status" role="status"></span>
         </div>
       </div>
       <!-- Collapsible pre-sync panel, revealed by the 📋 chip. Paste a list of

@@ -715,16 +715,6 @@ fn set_display_mode(mode: String, app: AppHandle) {
     set_mode(&app, &mode);
 }
 
-/// Ctrl+Alt+M: flip between the overlay and living on the desktop.
-fn toggle_wallpaper(app: &AppHandle) {
-    let current = app
-        .try_state::<Mutex<Prefs>>()
-        .map(|st| st.lock().unwrap().display_mode.clone())
-        .unwrap_or_default();
-    let next = if current == "wallpaper" { "full" } else { "wallpaper" };
-    set_mode(app, next);
-}
-
 /// Nudge (delta != 0) or set (absolute) the sync offset, persist, and mirror it
 /// to the renderer's offset chip. Backs the Ctrl+Alt+Left/Right/0 hotkeys.
 fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) {
@@ -1269,7 +1259,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Register the global hotkeys: Ctrl+Alt+Left/Right/0 nudge the sync offset,
-/// Ctrl+Alt+H shows/hides the overlay, Ctrl+Alt+M flips wallpaper mode.
+/// Ctrl+Alt+H shows/hides the overlay.
 fn register_hotkeys(app: &AppHandle) {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -1287,7 +1277,6 @@ fn register_hotkeys(app: &AppHandle) {
                 Code::ArrowRight => change_offset(app, 100, None),
                 Code::Digit0 => change_offset(app, 0, Some(0)),
                 Code::KeyH => toggle_overlay(app),
-                Code::KeyM => toggle_wallpaper(app),
                 _ => {}
             }
         })
@@ -1297,7 +1286,7 @@ fn register_hotkeys(app: &AppHandle) {
         return;
     }
     let gs = app.global_shortcut();
-    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH, Code::KeyM] {
+    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH] {
         let _ = gs.register(Shortcut::new(Some(ctrl_alt), code));
     }
 }
@@ -1327,8 +1316,13 @@ pub fn run() {
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
-            // Load persisted prefs into shared state.
-            let prefs = load_prefs(&handle);
+            // Load persisted prefs into shared state. Desktop/wallpaper mode was
+            // removed; coerce any saved value so no one boots into a mode that no
+            // longer exists (and could trap the UI behind the desktop icons).
+            let mut prefs = load_prefs(&handle);
+            if prefs.display_mode == "wallpaper" {
+                prefs.display_mode = "full".into();
+            }
             let mode = prefs.display_mode.clone();
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(CurTrack::default()));
@@ -1343,22 +1337,6 @@ pub fn run() {
 
             // Begin streaming "now playing" from Windows.
             start_smtc(handle.clone());
-
-            // Forward the cursor to the renderer when in wallpaper mode.
-            start_pointer_forwarding(handle.clone());
-
-            // Restore a persisted wallpaper mode after the window has painted a
-            // frame, on the main thread (reparenting touches the UI window).
-            if mode == "wallpaper" {
-                let h2 = handle.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(800));
-                    let h3 = h2.clone();
-                    let _ = h2.run_on_main_thread(move || {
-                        apply_wallpaper(&h3, "full", "wallpaper");
-                    });
-                });
-            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
