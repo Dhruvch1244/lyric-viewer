@@ -5023,7 +5023,7 @@ window.player.onTranslation((payload) => {
   current mode so the corner still says what you are in.
 */
 const DISPLAY_MODE_LABELS = {
-  full: '▭ Size', bar: '▬ Bar', strip: '▁ Strip', wallpaper: '▨ Desktop',
+  full: '▭ Size', bar: '▬ Bar', strip: '▁ Strip',
 };
 const modeMenu = document.getElementById('mode-menu');
 
@@ -5069,6 +5069,31 @@ if (modeMenu) {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modeMenu.hidden) closeModeMenu();
   });
+}
+
+/* Report path for AI-generated output (translation / transliteration / mood),
+   required by Microsoft Store policy 11.16. Opens a prefilled email and shows
+   the address inline so there is always a visible way to flag content. */
+{
+  const reportBtn = document.getElementById('keybox-report');
+  const reportStatus = document.getElementById('keybox-report-status');
+  if (reportBtn) {
+    reportBtn.addEventListener('click', () => {
+      const email = 'dhruvchoudhary306@gmail.com';
+      const subject = 'Lyric Overlay — report AI-generated content';
+      const body = [
+        'Feature (translation / transliteration / mood):',
+        'Song:',
+        'What was inappropriate:',
+        '',
+      ].join('\n');
+      try {
+        location.href = 'mailto:' + email + '?subject=' +
+          encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+      } catch (e) { /* fall back to the inline address shown below */ }
+      if (reportStatus) reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+    });
+  }
 }
 
 /*
