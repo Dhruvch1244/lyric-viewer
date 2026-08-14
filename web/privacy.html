@@ -5,52 +5,56 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy — Lyric Overlay</title>
 <meta name="description" content="Privacy policy for Lyric Overlay: no account, no server, no tracking. Audio stays on your device.">
-<meta name="theme-color" content="#0B0A12">
+<meta name="theme-color" content="#09070E">
 <link rel="icon" href="assets/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0B0A12; --panel:#141221; --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
-    --text:#ECEAF6; --muted:#9A93B4; --muted-2:#CFC8E6;
-    --pink:#FF2E93; --violet:#8B5CF6; --cyan:#22E3FF;
-    --grad:linear-gradient(100deg,var(--pink),var(--violet) 46%,var(--cyan));
+    --ink:#09070E; --panel:#141019; --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.16);
+    --text:#F5F2F8; --muted:#B4ACC2; --dim:#6F6780;
+    --magenta:#FF2E7E; --cyan:#28E0EC; --violet:#9A6BFF;
+    --brand:linear-gradient(105deg,#FF2E7E,#9A6BFF 48%,#28E0EC);
+    --disp:"Bebas Neue",Impact,sans-serif;
+    --body:"Hanken Grotesk",system-ui,sans-serif;
+    --mono:"Space Mono",ui-monospace,monospace;
   }
   *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--text);line-height:1.7;
-       font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
-       background-image:radial-gradient(55% 40% at 0% -8%, rgba(139,92,246,.16), transparent 60%);}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:var(--body);line-height:1.7;-webkit-font-smoothing:antialiased;
+       background-image:radial-gradient(50% 40% at 0% -8%, rgba(154,107,255,.15), transparent 60%);}
   a{color:var(--cyan);text-decoration:none;} a:hover{text-decoration:underline;}
-  nav{position:sticky;top:0;backdrop-filter:blur(12px);background:rgba(11,10,18,.7);
-      border-bottom:1px solid var(--line);}
-  .nav-in{display:flex;align-items:center;justify-content:space-between;height:64px;
-          max-width:820px;margin:0 auto;padding:0 24px;}
-  .brand{display:flex;align-items:center;gap:11px;font-weight:700;color:var(--text);}
+  nav{position:sticky;top:0;backdrop-filter:blur(14px);background:rgba(9,7,14,.62);border-bottom:1px solid var(--line);}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:66px;max-width:820px;margin:0 auto;padding:0 24px;}
+  .brand{display:flex;align-items:center;gap:12px;color:var(--text);}
   .brand svg{width:28px;height:28px;}
-  .nav-in a.back{color:var(--muted);font-size:14.5px;}
+  .brand b{font-family:var(--disp);font-weight:400;font-size:24px;letter-spacing:.04em;}
+  .nav-in a.back{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);}
   .nav-in a.back:hover{color:var(--text);text-decoration:none;}
-  main{max-width:820px;margin:0 auto;padding:48px 24px 80px;}
-  .eyebrow{font-size:12.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 12px;}
-  h1{font-size:clamp(34px,6vw,52px);margin:0 0 6px;letter-spacing:-.02em;
-     background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;}
-  .updated{color:var(--muted);font-size:14px;margin:0 0 34px;}
-  h2{font-size:22px;margin:40px 0 12px;letter-spacing:-.01em;}
-  p,li{color:var(--muted-2);font-size:15.5px;}
-  strong{color:var(--text);}
-  .lead{font-size:17px;}
-  .tldr{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:26px 0;}
-  .tldr h2{margin-top:0;font-size:16px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);}
+  main{max-width:820px;margin:0 auto;padding:52px 24px 90px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--magenta);margin:0 0 12px;}
+  h1{font-family:var(--disp);font-weight:400;font-size:clamp(56px,11vw,104px);line-height:.86;letter-spacing:.02em;text-transform:uppercase;margin:0;}
+  .updated{font-family:var(--mono);color:var(--dim);font-size:12px;letter-spacing:.06em;margin:8px 0 36px;}
+  h2{font-family:var(--disp);font-weight:400;font-size:clamp(26px,4vw,36px);letter-spacing:.03em;text-transform:uppercase;margin:44px 0 12px;}
+  p,li{color:var(--muted);font-size:15.5px;}
+  strong{color:var(--text);font-weight:600;}
+  .lead{font-size:17.5px;color:#DED9E8;}
+  .tldr{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:28px 0;}
+  .tldr h2{margin:0 0 12px;font-size:16px;letter-spacing:.16em;color:var(--muted);}
   table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;display:block;overflow-x:auto;}
-  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted-2);}
-  th{color:var(--text);font-weight:600;white-space:nowrap;}
-  .contact{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 24px;margin-top:30px;}
-  footer{border-top:1px solid var(--line);padding:30px 24px;color:var(--muted);font-size:13px;text-align:center;}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted);}
+  th{color:var(--text);font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;}
+  .contact{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 24px;margin-top:32px;}
+  .contact h2{margin-top:0;}
+  footer{border-top:1px solid var(--line);padding:32px 24px;color:var(--dim);font-size:12px;text-align:center;font-family:var(--mono);letter-spacing:.06em;}
 </style>
 </head>
 <body>
 <nav>
   <div class="nav-in">
     <a class="brand" href="index.html">
-      <svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="nb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF2E93"/><stop offset=".55" stop-color="#8B5CF6"/><stop offset="1" stop-color="#22E3FF"/></linearGradient></defs><rect x="34" y="24" width="17" height="72" rx="8.5" fill="url(#nb)"/><rect x="34" y="79" width="50" height="17" rx="8.5" fill="url(#nb)"/><rect x="74" y="30" width="8" height="34" rx="4" fill="#22E3FF"/><rect x="86" y="22" width="8" height="42" rx="4" fill="#FF2E93"/></svg>
-      Lyric Overlay
+      <svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="nb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF2E7E"/><stop offset=".5" stop-color="#9A6BFF"/><stop offset="1" stop-color="#28E0EC"/></linearGradient></defs><rect x="34" y="24" width="17" height="72" rx="8.5" fill="url(#nb)"/><rect x="34" y="79" width="50" height="17" rx="8.5" fill="url(#nb)"/><rect x="74" y="30" width="8" height="34" rx="4" fill="#28E0EC"/><rect x="86" y="22" width="8" height="42" rx="4" fill="#FF2E7E"/></svg>
+      <b>Lyric Overlay</b>
     </a>
     <a class="back" href="index.html">← Back to site</a>
   </div>
@@ -97,6 +101,9 @@
   <h2>On-device auto-transcription (Whisper)</h2>
   <p>If you turn on automatic lyric transcription, speech recognition runs <strong>entirely on your device</strong> using a bundled local model. The audio and the resulting transcript are <strong>not uploaded</strong> anywhere.</p>
 
+  <h2>Reporting AI content</h2>
+  <p>The app's generative features (translation, transliteration, and mood) can produce text shown to you. To report output you find inappropriate, use the <strong>"Report content"</strong> control in the app's AI-settings panel, or email <a href="mailto:dhruvchoudhary306@gmail.com">dhruvchoudhary306@gmail.com</a>.</p>
+
   <h2>Legal bases (GDPR/UK GDPR)</h2>
   <p>Where the GDPR applies, we rely on <strong>legitimate interests</strong> to process now-playing metadata and audio locally so the app works as expected, and on <strong>your consent</strong> — given by enabling a feature — for each request the app sends to a third-party lyrics, artwork, or AI provider. Each such provider is an independent controller under its own policy.</p>
 
@@ -116,11 +123,11 @@
   <p>We may update this policy as the app changes. Material changes will be reflected by a new "Last updated" date at the top. Continued use of the app after an update means you accept the revised policy.</p>
 
   <div class="contact">
-    <h2 style="margin-top:0">Contact</h2>
+    <h2>Contact</h2>
     <p style="margin:0">Questions or requests about this policy or your data:<br><strong>Dhruv Choudhary</strong> — <a href="mailto:dhruvchoudhary306@gmail.com">dhruvchoudhary306@gmail.com</a></p>
   </div>
 </main>
 
-<footer>© 2026 Dhruv Choudhary (cdrv5) · <a href="index.html" style="color:var(--muted)">Lyric Overlay</a></footer>
+<footer>© 2026 Dhruv Choudhary (cdrv5) · <a href="index.html" style="color:var(--dim)">Lyric Overlay</a></footer>
 </body>
 </html>
