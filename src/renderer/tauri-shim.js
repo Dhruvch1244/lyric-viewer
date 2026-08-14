@@ -80,11 +80,15 @@
     onUpdateState: (cb) => on('update-state', cb),
     onLocalcliOffer: (cb) => on('localcli-offer', cb),
     onOffset: (cb) => on('offset', cb),
+    onNativeAudio: (cb) => on('native-audio', cb),
 
     /* ---- invoke commands (renderer → main). snake_case per Tauri. ---- */
     setDisplayMode: (mode) => call('set_display_mode', { mode }),
     getDisplayMode: () => call('get_display_mode', {}, 'full'),
     wallpaperInteract: (on) => call('wallpaper_interact', { on }),
+
+    startAudioCapture: () => call('start_audio_capture', {}, false),
+    stopAudioCapture: () => call('stop_audio_capture', {}),
 
     localcliDetect: () => call('localcli_detect', {}, { detected: [] }),
     localcliStatus: () => call('localcli_status', {}, {}),

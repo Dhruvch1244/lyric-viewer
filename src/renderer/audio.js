@@ -35,6 +35,72 @@
   /** @type {Uint8Array|null} */ let freq = null;
   let running = false;
 
+  /*
+    Native WASAPI loopback (src-tauri/src/audio.rs). When it is available it
+    feeds the exact byte spectrum / waveform a getDisplayMedia AnalyserNode
+    would, via `native-audio` events — so all the DSP below is identical either
+    way, only the SOURCE differs. Native needs no share-picker and no user
+    gesture; getDisplayMedia stays as the fallback.
+  */
+  let nativeMode = false;
+  let nativeSubscribed = false;
+  let nativeGotFrame = false;
+  const nativeAnalyser = {
+    fftSize: 1024,
+    frequencyBinCount: 512,
+    _freq: new Uint8Array(512),
+    _time: (() => { const a = new Uint8Array(1024); a.fill(128); return a; })(),
+    getByteFrequencyData(out) { out.set(this._freq.subarray(0, out.length)); },
+    getByteTimeDomainData(out) { out.set(this._time.subarray(0, out.length)); },
+  };
+
+  function b64ToBytes(b64, out) {
+    const bin = atob(b64);
+    const n = Math.min(bin.length, out.length);
+    for (let i = 0; i < n; i += 1) out[i] = bin.charCodeAt(i);
+  }
+
+  function ensureNativeSubscription() {
+    if (nativeSubscribed || !window.player || !window.player.onNativeAudio) return;
+    nativeSubscribed = true;
+    window.player.onNativeAudio((data) => {
+      if (!data) return;
+      if (data.f) b64ToBytes(data.f, nativeAnalyser._freq);
+      if (data.t) b64ToBytes(data.t, nativeAnalyser._time);
+      nativeGotFrame = true;
+    });
+  }
+
+  /**
+   * Try native WASAPI loopback. Resolves true ONLY if real frames arrive, so a
+   * false result lets the caller fall back to getDisplayMedia.
+   * @returns {Promise<boolean>}
+   */
+  async function startNative() {
+    if (!window.player || !window.player.startAudioCapture) return false;
+    ensureNativeSubscription();
+    if (!nativeSubscribed) return false; // no event bridge → cannot confirm
+    nativeGotFrame = false;
+    try { await window.player.startAudioCapture(); } catch (e) { return false; }
+    // Confirm capture is actually live by waiting for the first frame.
+    const ok = await new Promise((resolve) => {
+      let waited = 0;
+      const iv = setInterval(() => {
+        waited += 50;
+        if (nativeGotFrame) { clearInterval(iv); resolve(true); }
+        else if (waited >= 600) { clearInterval(iv); resolve(false); }
+      }, 50);
+    });
+    if (!ok) { try { window.player.stopAudioCapture(); } catch (e) { /* ignore */ } return false; }
+    analyser = nativeAnalyser;
+    freq = new Uint8Array(nativeAnalyser.frequencyBinCount);
+    prevFreq = new Uint8Array(nativeAnalyser.frequencyBinCount);
+    nativeMode = true;
+    running = true;
+    env.active = true;
+    return true;
+  }
+
   /* Smoothed bands + detector state. */
   let bassEMA = 0;      // slow bass floor, for onset comparison
   /** Previous frame's spectrum, for spectral flux. Allocated with `freq`. */
@@ -63,11 +129,22 @@
   };
 
   /**
-   * Begin loopback capture. Must be triggered from a user gesture the first time
-   * on some Chromium builds; the caller retries on the first pointer/key event.
+   * Begin capture. Prefers native WASAPI loopback (no picker, no gesture); falls
+   * back to the getDisplayMedia path when native is unavailable or silent.
    * @returns {Promise<boolean>} whether capture started
    */
   async function start() {
+    if (running) return true;
+    if (await startNative()) return true;
+    return startDisplayMedia();
+  }
+
+  /**
+   * getDisplayMedia loopback fallback. Must be triggered from a user gesture the
+   * first time on some Chromium builds; the caller retries on a pointer/key event.
+   * @returns {Promise<boolean>} whether capture started
+   */
+  async function startDisplayMedia() {
     if (running) return true;
     let stream;
     try {
@@ -169,6 +246,12 @@
 
   /** Release the capture stream and reset detector state. */
   function stop() {
+    if (nativeMode) {
+      try {
+        if (window.player && window.player.stopAudioCapture) window.player.stopAudioCapture();
+      } catch (e) { /* ignore */ }
+      nativeMode = false;
+    }
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
     if (audioCtx) audioCtx.close().catch(() => {});
     audioCtx = null; analyser = null; sourceNode = null; mediaStream = null;
