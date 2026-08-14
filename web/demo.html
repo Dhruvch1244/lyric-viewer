@@ -7,6 +7,8 @@
 <meta name="description" content="Try Lyric Overlay in your browser: drop a track and watch the live visualizer and synced lyrics come alive.">
 <meta name="theme-color" content="#09070E">
 <link rel="icon" href="assets/icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -161,5 +163,6 @@
 <script src="assets/butterchurn.min.js"></script>
 <script src="assets/butterchurnPresets.min.js"></script>
 <script src="demo.js"></script>
+<script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
 </body>
 </html>
