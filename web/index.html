@@ -10,6 +10,8 @@
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#09070E">
 <link rel="icon" href="assets/icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -124,6 +126,18 @@
   .dl p{color:var(--muted);font-size:18px;max-width:42ch;margin:0 auto 34px;}
   .dl .cta-row{justify-content:center;}
   .dl .fineprint{font-family:var(--mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-top:22px;}
+  .dl-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;max-width:920px;margin:38px auto 0;text-align:left;}
+  @media(max-width:760px){.dl-grid{grid-template-columns:1fr 1fr;}}
+  @media(max-width:420px){.dl-grid{grid-template-columns:1fr;}}
+  .dl-card{display:flex;flex-direction:column;gap:5px;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--panel);
+           transition:transform .2s ease,border-color .2s ease;}
+  a.dl-card:hover{transform:translateY(-4px);border-color:var(--line-2);}
+  .dl-card.is-soon{opacity:.85;border-style:dashed;}
+  .dl-plat{font-family:var(--disp);font-weight:400;font-size:25px;letter-spacing:.03em;text-transform:uppercase;}
+  .dl-sub{font-size:12.5px;color:var(--muted);}
+  .dl-go{margin-top:6px;font-weight:700;color:var(--magenta);font-size:14px;}
+  .dl-tag{margin-top:8px;align-self:flex-start;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+          color:var(--cyan);background:rgba(40,224,236,.1);border:1px solid rgba(40,224,236,.3);border-radius:99px;padding:4px 11px;}
 
   /* footer */
   footer{border-top:1px solid var(--line);padding:46px 0;}
@@ -163,7 +177,7 @@
       <h1>Lyric<br><span class="ov">Overlay</span></h1>
       <p class="lede">Turn <b>whatever you're already playing</b> into a show — beat-synced lyrics and a live visualizer that move with your system audio.</p>
       <div class="cta-row">
-        <a class="btn" href="#download">Get it on Microsoft Store</a>
+        <a class="btn" href="#download">Download for Windows</a>
         <a class="btn ghost" href="demo.html">Try it in your browser →</a>
       </div>
     </div>
@@ -249,14 +263,32 @@
 <!-- ================= DOWNLOAD ================= -->
 <section class="blk dl" id="download">
   <div class="wrap">
-    <p class="sec-label" style="text-align:center">// Free · Windows 10 &amp; 11</p>
+    <p class="sec-label" style="text-align:center">// Free · get it your way</p>
     <h2 class="sec-title">Ready when<br>the music is.</h2>
-    <p>Install from the Microsoft Store, or grab the installer straight from GitHub.</p>
-    <div class="cta-row">
-      <a class="btn" href="#" data-store>Get it on Microsoft Store</a>
-      <a class="btn ghost" href="https://github.com/Dhruvch1244/lyric-viewer/releases">Download on GitHub</a>
+    <p>The Windows app is the full experience. macOS and Linux run the visuals and lyrics — reading your system's now-playing is Windows-only for now.</p>
+    <div class="dl-grid">
+      <div class="dl-card is-soon">
+        <span class="dl-plat">Microsoft Store</span>
+        <span class="dl-sub">Windows 10 &amp; 11</span>
+        <span class="dl-tag">Coming soon</span>
+      </div>
+      <a class="dl-card" data-dl="win" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+        <span class="dl-plat">Windows</span>
+        <span class="dl-sub">.exe installer · signed</span>
+        <span class="dl-go">Download →</span>
+      </a>
+      <a class="dl-card" data-dl="mac" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+        <span class="dl-plat">macOS</span>
+        <span class="dl-sub">universal .dmg · experimental</span>
+        <span class="dl-go">Download →</span>
+      </a>
+      <a class="dl-card" data-dl="linux" href="https://github.com/Dhruvch1244/lyric-viewer/releases/latest">
+        <span class="dl-plat">Linux</span>
+        <span class="dl-sub">.AppImage · .deb · .rpm</span>
+        <span class="dl-go">Download →</span>
+      </a>
     </div>
-    <p class="fineprint">Microsoft-signed · No SmartScreen warning</p>
+    <p class="fineprint">Latest release <span id="dl-version">·</span> — direct downloads · or <a href="demo.html" style="color:var(--cyan)">play in your browser</a>, installable on Android &amp; desktop</p>
   </div>
 </section>
 
@@ -341,5 +373,39 @@
   }
 })();
 </script>
+<script>
+/* Point each download button at the latest GitHub release's real installer
+   asset, so links stay correct across releases without hardcoding versioned
+   filenames. The buttons keep a releases-page href as a no-JS fallback. */
+(function () {
+  var REPO = 'Dhruvch1244/lyric-viewer';
+  var match = {
+    win:   [/x64-setup\.exe$/i, /\.exe$/i, /\.msi$/i],
+    mac:   [/universal\.dmg$/i, /\.dmg$/i],
+    linux: [/\.AppImage$/i, /amd64\.deb$/i, /\.rpm$/i],
+  };
+  fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+    .then(function (rel) {
+      var assets = rel.assets || [];
+      function pick(res) {
+        for (var i = 0; i < res.length; i++) {
+          for (var j = 0; j < assets.length; j++) {
+            if (res[i].test(assets[j].name)) return assets[j].browser_download_url;
+          }
+        }
+        return null;
+      }
+      document.querySelectorAll('[data-dl]').forEach(function (el) {
+        var url = pick(match[el.dataset.dl] || []);
+        if (url) el.href = url;
+      });
+      var v = document.getElementById('dl-version');
+      if (v && rel.tag_name) v.textContent = rel.tag_name;
+    })
+    .catch(function () { /* keep the releases-page fallback hrefs */ });
+})();
+</script>
+<script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
 </body>
 </html>
