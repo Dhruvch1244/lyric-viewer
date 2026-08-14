@@ -10,6 +10,7 @@
 
 mod align;
 mod artwork;
+mod audio;
 mod attribute;
 mod kugou;
 mod llm;
@@ -715,6 +716,20 @@ fn set_display_mode(mode: String, app: AppHandle) {
     set_mode(&app, &mode);
 }
 
+/// Start native WASAPI loopback capture of the system output. Returns true
+/// optimistically; the renderer confirms real audio by waiting for the first
+/// `native-audio` frame and otherwise falls back to getDisplayMedia.
+#[tauri::command]
+fn start_audio_capture(app: AppHandle) -> bool {
+    audio::start_capture(app);
+    true
+}
+
+#[tauri::command]
+fn stop_audio_capture() {
+    audio::stop_capture();
+}
+
 /// Nudge (delta != 0) or set (absolute) the sync offset, persist, and mirror it
 /// to the renderer's offset chip. Backs the Ctrl+Alt+Left/Right/0 hotkeys.
 fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) {
@@ -1355,6 +1370,8 @@ pub fn run() {
             set_show_translation,
             get_display_mode,
             set_display_mode,
+            start_audio_capture,
+            stop_audio_capture,
             get_transcribe_config,
             set_transcribe_config,
             request_translation,
