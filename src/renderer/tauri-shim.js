@@ -90,6 +90,9 @@
     startAudioCapture: () => call('start_audio_capture', {}, false),
     stopAudioCapture: () => call('stop_audio_capture', {}),
 
+    getAutostart: () => call('get_autostart', {}, false),
+    setAutostart: (enabled) => call('set_autostart', { enabled }, false),
+
     localcliDetect: () => call('localcli_detect', {}, { detected: [] }),
     localcliStatus: () => call('localcli_status', {}, {}),
     localcliConsent: (id) => call('localcli_consent', { id }),

@@ -1004,7 +1004,10 @@ function frame() {
   } catch (err) {
     console.error('[frame]', err);
   } finally {
-    requestAnimationFrame(frame);
+    // Hidden overlay: stop rescheduling entirely rather than waking up every
+    // vsync just to hit the early return above. onVisibility restarts the
+    // loop when the overlay comes back.
+    if (overlayVisible) requestAnimationFrame(frame);
   }
 }
 
@@ -3720,7 +3723,9 @@ function drawBackdrop(now) {
     // Cost of the frame we just issued. Smoothed hard (0.1) because a single
     // long frame — a GC pause, a track change — must not swing the governor.
     if (startedAt) drawCostMs += (performance.now() - startedAt - drawCostMs) * 0.1;
-    requestAnimationFrame(drawBackdrop);
+    // Same stop-rather-than-idle rule as frame(): don't keep waking up once
+    // hidden. onVisibility restarts the loop when the overlay comes back.
+    if (overlayVisible) requestAnimationFrame(drawBackdrop);
   }
 }
 
@@ -5072,8 +5077,12 @@ if (modeMenu) {
 }
 
 /* Report path for AI-generated output (translation / transliteration / mood),
-   required by Microsoft Store policy 11.16. Opens a prefilled email and shows
-   the address inline so there is always a visible way to flag content. */
+   required by Microsoft Store policy 11.16. Tries to open a prefilled email,
+   but mailto: only does anything if the user has a desktop mail client
+   registered — plenty of people just use Gmail in a browser and have none.
+   So it ALSO copies the address to the clipboard on every click: whichever
+   of the two actually lands, the user ends up with what they need to send a
+   report, rather than the button silently doing nothing for them. */
 {
   const reportBtn = document.getElementById('keybox-report');
   const reportStatus = document.getElementById('keybox-report-status');
@@ -5090,8 +5099,43 @@ if (modeMenu) {
       try {
         location.href = 'mailto:' + email + '?subject=' +
           encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-      } catch (e) { /* fall back to the inline address shown below */ }
-      if (reportStatus) reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+      } catch (e) { /* clipboard fallback below still fires */ }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(email).catch(() => {});
+        if (reportStatus) {
+          reportStatus.textContent =
+            'Opening your mail app… if nothing happens, the address is copied — paste it into any email: ' + email;
+        }
+      } else if (reportStatus) {
+        reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+      }
+    });
+  }
+}
+
+/* Launch-on-startup toggle. Source of truth is the OS itself (registry Run
+   key via tauri-plugin-autostart) rather than a local pref, so the label is
+   read back from get_autostart() on load instead of assumed. On the Store
+   build both commands are no-ops that always report `false` — Store apps
+   declare startup via the AppX manifest instead — so the button silently
+   does nothing there rather than lying about the state. */
+{
+  const autostartBtn = document.getElementById('keybox-autostart');
+  if (autostartBtn && window.player && window.player.getAutostart) {
+    const paint = (on) => {
+      autostartBtn.setAttribute('aria-pressed', String(on));
+      autostartBtn.textContent = on ? 'On' : 'Off';
+    };
+    window.player.getAutostart().then(paint).catch(() => {});
+    autostartBtn.addEventListener('click', async () => {
+      const next = autostartBtn.getAttribute('aria-pressed') !== 'true';
+      autostartBtn.disabled = true;
+      try {
+        const ok = await window.player.setAutostart(next);
+        paint(ok ? next : !next);
+      } finally {
+        autostartBtn.disabled = false;
+      }
     });
   }
 }
@@ -5253,6 +5297,7 @@ window.player.onDisplayMode(({ mode, insets }) => {
 });
 
 window.player.onVisibility(({ visible }) => {
+  const wasVisible = overlayVisible;
   overlayVisible = visible !== false;
   // Resuming: forget the timestamps from before the pause so the first frame
   // back does not see a multi-minute dt and jump every animation forward.
@@ -5260,6 +5305,12 @@ window.player.onVisibility(({ visible }) => {
     lastBackNow = 0;
     lastFrameAt = 0;
     lastDrawnAt = 0;
+    // Both loops stopped rescheduling themselves while hidden (see frame()
+    // and drawBackdrop()) — kick them back off now that there's something to draw.
+    if (!wasVisible) {
+      requestAnimationFrame(drawBackdrop);
+      requestAnimationFrame(frame);
+    }
   }
 });
 

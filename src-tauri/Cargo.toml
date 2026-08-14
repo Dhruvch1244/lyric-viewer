@@ -1,6 +1,6 @@
 [package]
 name = "lyric-overlay"
-version = "0.28.0"
+version = "0.29.0"
 description = "Beat-aware synced lyric overlay for Windows (Tauri)"
 authors = ["Dhruv Choudhary"]
 license = "MIT"
@@ -43,6 +43,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-autostart = "2"
 ureq = { version = "2.10", features = ["json"] }
 regex = "1"
 base64 = "0.22"

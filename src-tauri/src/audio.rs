@@ -8,9 +8,17 @@
 //!
 //! We capture the default render endpoint in loopback mode (no device picker),
 //! downmix to mono, and every ~20 ms emit a `native-audio` event carrying the
-//! latest 1024-sample waveform and a 512-bin spectrum (both as base64 bytes,
-//! matching the AnalyserNode's `minDecibels`/`maxDecibels`/smoothing so the DSP
-//! thresholds in audio.js stay valid).
+//! latest 1024-sample waveform and a 512-bin spectrum (both as base64 bytes).
+//!
+//! The spectrum uses **auto-gain** rather than a fixed dB range: reproducing a
+//! Web Audio AnalyserNode's internal minDecibels/maxDecibels/windowing math
+//! exactly is unverifiable without a browser to A/B against, and getting the
+//! absolute scale even slightly wrong makes every tuned DSP threshold in
+//! audio.js silently misfire. Each bin is instead scaled against a decaying
+//! peak tracked in `emit_frame`, so the byte range self-calibrates to whatever
+//! the system's actual loudness is. The waveform bytes have no such risk — the
+//! mapping is exact linear PCM — so MilkDrop (which reads the waveform, not
+//! this spectrum) is not affected by the calibration question at all.
 //!
 //! Runtime behaviour is Windows-only; other targets get no-op stubs so the
 //! crate still builds cross-platform.
@@ -59,10 +67,9 @@ mod imp {
 
     const FFT: usize = 1024; // AnalyserNode fftSize
     const BINS: usize = 512; // frequencyBinCount = fftSize / 2
-    const MIN_DB: f32 = -95.0; // matches buildAnalyser() in audio.js
-    const MAX_DB: f32 = -12.0;
-    const SMOOTH: f32 = 0.55; // smoothingTimeConstant
+    const SMOOTH: f32 = 0.55; // smoothingTimeConstant, applied to linear magnitude
     const EMIT_EVERY: Duration = Duration::from_millis(20); // ~50 Hz
+    const REPORT_EVERY: Duration = Duration::from_secs(3); // diagnostic heartbeat
 
     pub fn start(app: AppHandle) {
         // If a capture is already live, do nothing (idempotent start).
@@ -106,8 +113,15 @@ mod imp {
         let format = &*format_ptr;
         let channels = format.nChannels.max(1) as usize;
         let bits = format.wBitsPerSample as usize;
+        // Copy out of the packed struct before formatting — eprintln! needs a
+        // reference to the value, and you can't reference an unaligned field
+        // of a #[repr(packed)] struct directly (E0793).
+        let sample_rate = format.nSamplesPerSec;
         let bytes_per_sample = (bits / 8).max(1);
         let frame_bytes = bytes_per_sample * channels;
+        eprintln!(
+            "[audio] loopback: default render endpoint is {channels} ch, {bits}-bit, {sample_rate} Hz"
+        );
 
         // ~200 ms buffer, in 100-ns units.
         let buffer_duration: i64 = 2_000_000;
@@ -122,6 +136,7 @@ mod imp {
 
         let capture: IAudioCaptureClient = client.GetService()?;
         client.Start()?;
+        eprintln!("[audio] loopback: capture started");
 
         // Circular buffer of the most recent mono samples.
         let mut ring = [0f32; FFT];
@@ -129,8 +144,18 @@ mod imp {
         let win = blackman();
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(FFT);
-        let mut smooth = [0f32; BINS];
+        let mut mag = [0f32; BINS];
+        let mut ceiling = 0.0005f32;
         let mut last_emit = Instant::now();
+
+        // Diagnostic heartbeat: prints whether real audio is actually arriving,
+        // so a report of "visuals aren't reacting" comes with real numbers
+        // instead of another guess. A peak near 0 means nothing is reaching
+        // the capture (wrong device, or genuinely silent); a healthy peak with
+        // the UI still not reacting points at the renderer side instead.
+        let mut last_report = Instant::now();
+        let mut peak_since_report = 0f32;
+        let mut frames_since_report = 0u64;
 
         while CAPTURING.load(Ordering::SeqCst) {
             let packet = capture.GetNextPacketSize()?;
@@ -150,19 +175,33 @@ mod imp {
                     } else {
                         read_frame_mono(data, f, frame_bytes, channels, bytes_per_sample, bits)
                     };
+                    if mono.abs() > peak_since_report {
+                        peak_since_report = mono.abs();
+                    }
                     ring[widx] = mono;
                     widx = (widx + 1) % FFT;
                 }
+                frames_since_report += frames as u64;
                 capture.ReleaseBuffer(num_frames)?;
             }
 
             if last_emit.elapsed() >= EMIT_EVERY {
                 last_emit = Instant::now();
-                emit_frame(app, &ring, widx, &win, &*fft, &mut smooth);
+                emit_frame(app, &ring, widx, &win, &*fft, &mut mag, &mut ceiling);
+            }
+
+            if last_report.elapsed() >= REPORT_EVERY {
+                eprintln!(
+                    "[audio] loopback: {frames_since_report} frames captured, peak={peak_since_report:.4}, agc ceiling={ceiling:.4}"
+                );
+                last_report = Instant::now();
+                peak_since_report = 0.0;
+                frames_since_report = 0;
             }
         }
 
         let _ = client.Stop();
+        eprintln!("[audio] loopback: capture stopped");
         Ok(())
     }
 
@@ -202,14 +241,17 @@ mod imp {
         sum / channels as f32
     }
 
-    /// Build the waveform + spectrum bytes and emit them.
+    /// Build the waveform + spectrum bytes and emit them. See the module doc
+    /// for why the spectrum is auto-gained rather than dB-scaled to a fixed
+    /// range.
     fn emit_frame(
         app: &AppHandle,
         ring: &[f32; FFT],
         widx: usize,
         win: &[f32; FFT],
         fft: &dyn rustfft::Fft<f32>,
-        smooth: &mut [f32; BINS],
+        mag: &mut [f32; BINS],
+        ceiling: &mut f32,
     ) {
         // Unwrap the circular buffer into chronological order.
         let mut time_bytes = [128u8; FFT];
@@ -224,14 +266,29 @@ mod imp {
 
         fft.process(&mut buf);
 
-        let mut freq_bytes = [0u8; BINS];
-        let scale = 255.0 / (MAX_DB - MIN_DB);
+        let mut peak = 0f32;
         for i in 0..BINS {
-            let mag = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt() / FFT as f32;
-            // Web Audio smooths the linear magnitude before the dB conversion.
-            smooth[i] = SMOOTH * smooth[i] + (1.0 - SMOOTH) * mag;
-            let db = 20.0 * smooth[i].max(1e-9).log10();
-            freq_bytes[i] = ((db - MIN_DB) * scale).clamp(0.0, 255.0) as u8;
+            let m = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt();
+            mag[i] = SMOOTH * mag[i] + (1.0 - SMOOTH) * m;
+            if mag[i] > peak {
+                peak = mag[i];
+            }
+        }
+
+        // Auto-gain: rise instantly on a new peak, decay ~1.5%/frame (roughly
+        // a 1s half-life at 50Hz) so a quiet passage doesn't get amplified
+        // into visual noise, but a loud chorus after a quiet verse is picked
+        // up within a beat or two.
+        if peak > *ceiling {
+            *ceiling = peak;
+        } else {
+            *ceiling *= 0.985;
+        }
+        let ceil = ceiling.max(0.0005); // floor so near-silence can't divide by ~0
+
+        let mut freq_bytes = [0u8; BINS];
+        for i in 0..BINS {
+            freq_bytes[i] = (mag[i] / ceil * 255.0).clamp(0.0, 255.0) as u8;
         }
 
         let b64 = base64::engine::general_purpose::STANDARD;
