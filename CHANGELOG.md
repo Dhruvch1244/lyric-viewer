@@ -2,6 +2,16 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.28.0 — 2026-08-14
+
+- **Fullscreen only, for now.** The Floating bar, Taskbar strip, and Desktop
+  display modes are removed — the overlay runs fullscreen, and you hide or show
+  it with the tray icon or Ctrl+Alt+H. Any saved mode opens as fullscreen.
+- **Native system-audio capture — no share-picker.** Turning on ♫ now taps your
+  system output directly via WASAPI loopback instead of the "choose what to
+  share" prompt. It falls back to the old capture if the native path is
+  unavailable.
+
 ## 0.27.5 — 2026-08-14
 
 - **Removed the "Desktop" display mode.** It sent the overlay behind the desktop
