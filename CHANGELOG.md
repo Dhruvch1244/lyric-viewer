@@ -2,6 +2,15 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.27.5 — 2026-08-14
+
+- **Removed the "Desktop" display mode.** It sent the overlay behind the desktop
+  icons, where its buttons became unclickable with no obvious way back. Any saved
+  "Desktop" preference now opens as Fullscreen. (Fixes a Microsoft Store
+  certification block.)
+- **Report AI content.** The AI-settings panel now has a "Report content" control
+  for flagging inappropriate translation / transliteration / mood output.
+
 ## 0.27.4 — 2026-08-13
 
 - **Signed Windows installers.** Windows builds are now Authenticode-signed via
