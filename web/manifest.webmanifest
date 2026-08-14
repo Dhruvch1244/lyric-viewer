@@ -1,0 +1,17 @@
+{
+  "name": "Lyric Overlay",
+  "short_name": "Lyric Overlay",
+  "description": "Beat-synced lyrics and a live music visualizer. Drop a track and watch it come alive.",
+  "start_url": "./demo.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#09070E",
+  "theme_color": "#09070E",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
