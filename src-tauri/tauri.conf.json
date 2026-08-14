@@ -30,7 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg", "deb", "rpm", "appimage"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -38,19 +38,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "signCommand": {
-        "cmd": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-        "args": [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "$s = if ($env:LYRIC_SIGN_SCRIPT) { $env:LYRIC_SIGN_SCRIPT } else { 'scripts/signpath-sign.ps1' }; & $s '%1'"
-        ]
-      }
-    }
+    ]
   },
   "plugins": {
     "updater": {
