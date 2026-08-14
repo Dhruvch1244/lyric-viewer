@@ -5072,8 +5072,12 @@ if (modeMenu) {
 }
 
 /* Report path for AI-generated output (translation / transliteration / mood),
-   required by Microsoft Store policy 11.16. Opens a prefilled email and shows
-   the address inline so there is always a visible way to flag content. */
+   required by Microsoft Store policy 11.16. Tries to open a prefilled email,
+   but mailto: only does anything if the user has a desktop mail client
+   registered — plenty of people just use Gmail in a browser and have none.
+   So it ALSO copies the address to the clipboard on every click: whichever
+   of the two actually lands, the user ends up with what they need to send a
+   report, rather than the button silently doing nothing for them. */
 {
   const reportBtn = document.getElementById('keybox-report');
   const reportStatus = document.getElementById('keybox-report-status');
@@ -5090,8 +5094,16 @@ if (modeMenu) {
       try {
         location.href = 'mailto:' + email + '?subject=' +
           encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-      } catch (e) { /* fall back to the inline address shown below */ }
-      if (reportStatus) reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+      } catch (e) { /* clipboard fallback below still fires */ }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(email).catch(() => {});
+        if (reportStatus) {
+          reportStatus.textContent =
+            'Opening your mail app… if nothing happens, the address is copied — paste it into any email: ' + email;
+        }
+      } else if (reportStatus) {
+        reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+      }
     });
   }
 }
