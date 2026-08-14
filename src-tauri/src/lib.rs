@@ -1331,11 +1331,11 @@ pub fn run() {
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
-            // Load persisted prefs into shared state. Desktop/wallpaper mode was
-            // removed; coerce any saved value so no one boots into a mode that no
-            // longer exists (and could trap the UI behind the desktop icons).
+            // Load persisted prefs into shared state. Only Fullscreen mode
+            // remains — coerce any saved bar/strip/wallpaper value so no one
+            // boots into a removed mode.
             let mut prefs = load_prefs(&handle);
-            if prefs.display_mode == "wallpaper" {
+            if prefs.display_mode != "full" {
                 prefs.display_mode = "full".into();
             }
             let mode = prefs.display_mode.clone();
