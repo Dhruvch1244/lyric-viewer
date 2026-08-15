@@ -19,6 +19,17 @@
   inference in WebView2. Single-threaded WASM is used deliberately — multi-thread
   needs SharedArrayBuffer, which needs COOP/COEP headers the asset protocol does
   not set.
+
+  PROXY MODE. numThreads:1 alone still runs inference synchronously on the
+  calling thread — a whisper-base pass over a real song is many seconds of
+  blocking WASM execution, which would freeze the rAF-driven visuals for the
+  whole transcription (confirmed by reading the call path, not yet measured
+  live). `wasm.proxy` is onnxruntime-web's own fix: it moves session.run()
+  onto a single dedicated Worker via postMessage/transferables, which needs no
+  SharedArrayBuffer/COOP/COEP (unlike numThreads>1) — the CSP's `worker-src
+  'self' blob:` was already set up anticipating this. The worker loads the
+  same vendored ort-wasm-simd-threaded.jsep.mjs this thread does, so nothing
+  new needs vendoring.
 */
 (function () {
   /** Cached pipeline promise, so the model loads once per session. */
@@ -40,6 +51,7 @@
       env.allowLocalModels = false;
       env.backends.onnx.wasm.wasmPaths = new URL('./vendor/transformers/', document.baseURI).href;
       env.backends.onnx.wasm.numThreads = 1;
+      env.backends.onnx.wasm.proxy = true;
 
       return pipeline('automatic-speech-recognition', model, {
         dtype: 'q8', // quantised — smaller download, fine for lyrics

@@ -2286,8 +2286,8 @@ function applyEngine(preset, now, dt, w, h) {
     if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
-      window.MilkDrop.resize(w, h);
-      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
+      window.MilkDrop.resize(w, h, liteMode);
+      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
       // Cut rather than blend on the way in: there is nothing to blend FROM,
       // and a fade from black reads as the app being slow to start. The target
       // respects a pin and a session choice — see milkdropTargetFor for why
@@ -2360,11 +2360,13 @@ function applyEngine(preset, now, dt, w, h) {
   }
 
   // Resize crosses a frame boundary, so it is sent only on a real change rather
-  // than every frame — the CSS already stretches the frame itself.
-  const size = `${Math.floor(w)}x${Math.floor(h)}`;
+  // than every frame — the CSS already stretches the frame itself. Lite mode
+  // is folded into the same key so toggling it mid-song re-fires this exactly
+  // like a real size change, dropping (or restoring) MilkDrop's render res.
+  const size = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
   if (size !== milkdropSize) {
     milkdropSize = size;
-    window.MilkDrop.resize(w, h);
+    window.MilkDrop.resize(w, h, liteMode);
   }
 
   window.MilkDrop.render(dt / 1000);
@@ -5091,6 +5093,22 @@ if (els.wallpaperBtn) {
       } finally {
         autostartBtn.disabled = false;
       }
+    });
+  }
+}
+
+/* Whisper transcription language. The backend (get/set-transcribe-config) has
+   existed since the Tauri port; this is the first UI control for it — until
+   now `whisperLanguage` could only be set by hand-editing settings.json, and
+   omitting it silently mistranscribes non-English vocals as English. */
+{
+  const langSelect = document.getElementById('keybox-whisper-lang');
+  if (langSelect && window.player && window.player.getTranscribeConfig) {
+    window.player.getTranscribeConfig().then((cfg) => {
+      langSelect.value = (cfg && cfg.language) || '';
+    }).catch(() => {});
+    langSelect.addEventListener('change', () => {
+      window.player.setTranscribeConfig({ language: langSelect.value }).catch(() => {});
     });
   }
 }

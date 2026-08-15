@@ -274,9 +274,18 @@
     thumbAudio = null;
   }
 
-  function resize(width, height) {
-    const w = Math.max(1, Math.floor(width));
-    const h = Math.max(1, Math.floor(height));
+  /*
+    Lite mode drops the internal render resolution rather than swapping presets
+    — the canvas is CSS-stretched to 100% (see milkdrop.html), so a smaller
+    backing buffer just costs Butterchurn fewer pixels per frame, the same
+    trick swirl.js uses for its own Lite scale.
+  */
+  const LITE_SCALE = 0.55;
+
+  function resize(width, height, lite) {
+    const scale = lite ? LITE_SCALE : 1;
+    const w = Math.max(1, Math.floor(width * scale));
+    const h = Math.max(1, Math.floor(height * scale));
     canvas.width = w;
     canvas.height = h;
     if (!visualizer) return;
@@ -291,7 +300,7 @@
     switch (msg.type) {
       case 'init': init(); break;
       case 'preset': loadPreset(msg.name, msg.blend, msg.data); break;
-      case 'resize': resize(msg.width, msg.height); break;
+      case 'resize': resize(msg.width, msg.height, msg.lite); break;
       case 'render': render(msg); break;
       case 'thumb': thumbnail(msg.name, msg.data); break;
       case 'thumb-end': endThumbnails(); break;

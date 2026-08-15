@@ -155,6 +155,23 @@
                   aria-pressed="false" title="Start Lyric Overlay automatically when Windows starts">Off</button>
         </div>
 
+        <!-- Whisper only auto-detects English; leaving language unset on a
+             Hindi/Punjabi track decodes the vocals as English gibberish. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Transcription language (for songs with no synced lyrics)</span>
+          <select id="keybox-whisper-lang" class="chip" title="Language Whisper should expect when transcribing from audio">
+            <option value="">Auto-detect (defaults to English)</option>
+            <option value="english">English</option>
+            <option value="hindi">Hindi</option>
+            <option value="punjabi">Punjabi</option>
+            <option value="urdu">Urdu</option>
+            <option value="spanish">Spanish</option>
+            <option value="french">French</option>
+            <option value="korean">Korean</option>
+            <option value="japanese">Japanese</option>
+          </select>
+        </div>
+
         <div class="keybox__local">
           <span class="keybox__label">Report AI-generated content</span>
           <button id="keybox-report" class="chip" type="button"

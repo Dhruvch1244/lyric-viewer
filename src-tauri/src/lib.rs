@@ -1158,9 +1158,24 @@ fn report_transcribe_progress(app: AppHandle, data: Value) {
     let _ = app.emit("transcribe-progress", data);
 }
 
+/// A cached lyrics payload's `source` is a bare string ("whisper" or
+/// "lrclib-plain+whisper") only when THIS function produced it; every real
+/// fetch (LRCLIB/NetEase/Kugou) stores an object. Used to tell "already has
+/// the correct synced lyrics" apart from "was itself transcribed".
+fn source_is_whisper_derived(source: &Value) -> bool {
+    matches!(source.as_str(), Some("whisper") | Some("lrclib-plain+whisper"))
+}
+
 /// Finalise a webview Whisper result: align the raw transcription to the real
 /// plain lyrics where they exist (the correct words on the transcription's
 /// clock), cache it as normal synced lyrics for the next play, and report done.
+///
+/// Every track with `hasWordTimings: false` — which today is every track,
+/// since nothing sets it true yet — makes the renderer listen-and-transcribe
+/// once ♫ has heard enough of it (see `beginTranscriptionListen` in
+/// renderer.js). Without this guard that would silently overwrite a track
+/// that already has correct LRCLIB-synced lyrics with a re-derived,
+/// Whisper-accuracy version on every single play.
 #[tauri::command]
 fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
@@ -1174,6 +1189,23 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         return json!({ "status": "empty" });
     }
     let key = track_key(&t.artist, &t.title);
+
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(existing) = serde_json::from_str::<Value>(&text) {
+                let has_cues = existing.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+                let already_synced = has_cues
+                    && !source_is_whisper_derived(existing.get("source").unwrap_or(&Value::Null));
+                if already_synced {
+                    let _ = app.emit(
+                        "transcribe-progress",
+                        json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                    );
+                    return json!({ "status": "skipped", "reason": "already-synced" });
+                }
+            }
+        }
+    }
 
     // Prefer the real words on the transcription's timing when we can anchor
     // enough of them; otherwise keep the honest raw transcription.
