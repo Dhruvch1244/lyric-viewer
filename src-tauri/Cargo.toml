@@ -51,6 +51,10 @@ base64 = "0.22"
 # turns raw PCM into the same byte-spectrum a Web Audio AnalyserNode would, so
 # the renderer's tuned DSP needs no change.
 rustfft = "6"
+# Native audio decode for offline per-song analysis. mp3/aac/isomp4 are added on
+# top of the default open codecs (flac/wav/ogg/vorbis) so local files of any
+# common format decode without the renderer's Web Audio pass.
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
