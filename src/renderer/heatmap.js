@@ -72,6 +72,26 @@
   let structureCache = null;
   /** @type {{revision: number, value: Array}|null} */
   let cellsCache = null;
+  /** @type {{revision: number, value: number}|null} */
+  let peakCache = null;
+
+  /**
+   * The loudest `level` seen across all bins, memoised against `revision`.
+   *
+   * `cells()` and `lookahead()` both normalise against this and used to each
+   * do their own 96-bin scan; `lookahead()` is called every audio-active
+   * frame, so that was a full pass over the map 60 times a second for a
+   * number that only changes when a bin does.
+   * @returns {number}
+   */
+  function peakLevel() {
+    if (!map) return 0;
+    if (peakCache && peakCache.revision === revision) return peakCache.value;
+    let peak = 0;
+    for (const b of map.bins) if (b.level > peak) peak = b.level;
+    peakCache = { revision, value: peak };
+    return peak;
+  }
 
   /**
    * Start (or resume) recording for a track of known length.
@@ -171,8 +191,7 @@
   function cells() {
     if (!map) return [];
     if (cellsCache && cellsCache.revision === revision) return cellsCache.value;
-    let peak = 0;
-    for (const b of map.bins) if (b.level > peak) peak = b.level;
+    const peak = peakLevel();
     const scale = peak > 0 ? 1 / peak : 0;
     const value = map.bins.map((b) => ({
       level: Math.min(1, b.level * scale),
@@ -230,9 +249,9 @@
     if (here < 0) return none;
 
     // Normalise against the song's own loudest bin, exactly as cells() does, so
-    // "rise" means the same thing on a quiet track and a loud one.
-    let top = 0;
-    for (const b of map.bins) if (b.level > top) top = b.level;
+    // "rise" means the same thing on a quiet track and a loud one. Shared,
+    // revision-memoised scan — this function runs every audio-active frame.
+    const top = peakLevel();
     if (top <= 0) return none;
 
     const nowBin = map.bins[here];
