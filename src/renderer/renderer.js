@@ -1537,6 +1537,25 @@ function seedGalaxy() {
   }));
 }
 
+/**
+ * Drop elements failing `keep` from `arr` in place, preserving relative
+ * order. Same result as `arr = arr.filter(keep)` without allocating a new
+ * array — these particle/clone lists get filtered every animation frame,
+ * and most frames drop nothing at all.
+ * @template T
+ * @param {T[]} arr @param {(item: T) => boolean} keep
+ */
+function compactInPlace(arr, keep) {
+  let w = 0;
+  for (let r = 0; r < arr.length; r += 1) {
+    if (keep(arr[r])) {
+      arr[w] = arr[r];
+      w += 1;
+    }
+  }
+  arr.length = w;
+}
+
 /** Spawn an expanding ring from screen centre. */
 function spawnRipple(strength) {
   ripples.push({
@@ -1625,7 +1644,7 @@ function drawEmojiParticles() {
     ctx.restore();
   }
   ctx.globalAlpha = 1;
-  emojiParticles = emojiParticles.filter((p) => p.life > 0);
+  compactInPlace(emojiParticles, (p) => p.life > 0);
 }
 
 /* Wavy horizontal aurora bands, hue-shifted live so the wash keeps changing. */
@@ -2201,16 +2220,19 @@ function drawRipples(w, h) {
   ctx.globalCompositeOperation = 'lighter';
   const cx = w / 2;
   const cy = h * 0.44;
+  // shiftHex only depends on palette/bgHue, both constant for this whole
+  // pass — hoisted out so it runs once per frame instead of once per ripple.
+  const ringHue = shiftHex(palette[3] || '#4cc9f0', bgHue);
   for (const rp of ripples) {
     rp.r += rp.v;
     rp.a *= 0.96;
-    ctx.strokeStyle = hexA(shiftHex(palette[3] || '#4cc9f0', bgHue), rp.a);
+    ctx.strokeStyle = hexA(ringHue, rp.a);
     ctx.lineWidth = rp.lw || 2;
     ctx.beginPath();
     ctx.arc(cx, cy, rp.r, 0, Math.PI * 2);
     ctx.stroke();
   }
-  ripples = ripples.filter((rp) => rp.a > 0.02);
+  compactInPlace(ripples, (rp) => rp.a > 0.02);
 }
 
 function drawConfetti() {
@@ -2232,7 +2254,7 @@ function drawConfetti() {
     ctx.restore();
   }
   ctx.globalAlpha = 1;
-  confetti = confetti.filter((c) => c.life > 0);
+  compactInPlace(confetti, (c) => c.life > 0);
 }
 
 let shootTimer = 0;
@@ -3782,6 +3804,10 @@ function drawBackdrop(now) {
         onStage ? STAGE_FLOOR_Y - 0.045 : 0.60,
         onStage ? STAGE_FLOOR_Y + 0.010 : 0.96
       );
+      // Every actor's body blit wants this off (crisp pixels at scale); was
+      // being set redundantly by each actor's own draw() call, up to once per
+      // troupe member and clone (≤ ~38/frame) instead of once for the pass.
+      ctx.imageSmoothingEnabled = false;
       for (const actor of spriteActors) {
         actor.update(now, env);
         actor.draw(ctx, w, h, unit, now, env);
@@ -3792,7 +3818,7 @@ function drawBackdrop(now) {
           c.update(now, env);
           c.draw(ctx, w, h, unit, now, env);
         }
-        spriteClones = spriteClones.filter((c) => !c.expired);
+        compactInPlace(spriteClones, (c) => !c.expired);
       }
     }
 
