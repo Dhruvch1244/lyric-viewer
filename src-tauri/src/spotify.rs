@@ -21,6 +21,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
@@ -201,6 +202,40 @@ fn urlencoding_component(s: &str) -> String {
     out
 }
 
+/// Drops the overlay's always-on-top for the lifetime of the guard, restoring
+/// it on drop (success, error, or an early `?` return — RAII covers all of
+/// them, unlike a plain "restore at the end" which a `?` would skip).
+///
+/// This is the actual fix for "the browser doesn't load right": the overlay
+/// window is `alwaysOnTop: true` by design, so a browser window Spotify's
+/// login opens in — a completely normal, unrelated top-level window — was
+/// opening BEHIND the overlay the whole time. Not a lag, not a failed open;
+/// invisible and unclickable behind an always-on-top surface. Same shape of
+/// bug as wallpaper mode's own interactive-surface lift, just for a window
+/// belonging to a different process this time.
+struct AlwaysOnTopGuard<'a> {
+    window: Option<tauri::WebviewWindow>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> AlwaysOnTopGuard<'a> {
+    fn engage(app: &'a tauri::AppHandle) -> Self {
+        let window = app.get_webview_window("main");
+        if let Some(w) = &window {
+            let _ = w.set_always_on_top(false);
+        }
+        AlwaysOnTopGuard { window, _marker: std::marker::PhantomData }
+    }
+}
+
+impl<'a> Drop for AlwaysOnTopGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(w) = &self.window {
+            let _ = w.set_always_on_top(true);
+        }
+    }
+}
+
 /// Run the whole PKCE + loopback + browser + token-exchange flow. Blocking —
 /// call this on its own thread, never from a command handler directly, since
 /// it waits on the user's browser for up to `CALLBACK_TIMEOUT`.
@@ -221,6 +256,11 @@ pub fn authorize(app: &tauri::AppHandle) -> Result<SpotifyToken, String> {
         urlencoding_component(SCOPE),
         urlencoding_component(&state),
     );
+
+    // Engaged before opening the browser, dropped (restoring always-on-top)
+    // when this function returns by any path — the browser needs to be
+    // choosable/clickable for the whole login, not just the first instant.
+    let _surfaced = AlwaysOnTopGuard::engage(app);
 
     {
         use tauri_plugin_opener::OpenerExt;

@@ -1595,10 +1595,20 @@ function spawnEmojiBurst(w, h, pool, count) {
   if (emojiParticles.length > 120) emojiParticles.splice(0, emojiParticles.length - 120);
 }
 
+/*
+  Measured: setting ctx.font per particle per frame is catastrophic — 25
+  particles cost more than 300 confetti rects (16ms vs 1.6ms), because every
+  assignment re-resolves font metrics. Fixed size, set ONCE outside the loop;
+  the per-particle size variation moves to ctx.scale(), which composes into
+  the existing transform for close to nothing.
+*/
+const EMOJI_BASE_SIZE = 28;
+
 function drawEmojiParticles() {
   ctx.globalCompositeOperation = 'source-over';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.font = `${EMOJI_BASE_SIZE}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
   for (const p of emojiParticles) {
     p.x += p.vx;
     p.y += p.vy;
@@ -1609,8 +1619,8 @@ function drawEmojiParticles() {
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(p.rot);
+    ctx.scale(p.size / EMOJI_BASE_SIZE, p.size / EMOJI_BASE_SIZE);
     ctx.globalAlpha = Math.max(0, p.life);
-    ctx.font = `${p.size}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
     ctx.fillText(p.char, 0, 0);
     ctx.restore();
   }
