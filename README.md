@@ -123,6 +123,7 @@ was a colour conversion per particle, not a canvas call).
 | `Ctrl+Alt+←` / `Ctrl+Alt+→` | Nudge lyric sync 100ms earlier / later |
 | `Ctrl+Alt+0` | Reset sync offset |
 | `Ctrl+Alt+H` | Show / hide the player |
+| `Ctrl+Alt+M` | Toggle wallpaper mode — works even if the window isn't currently clickable |
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
