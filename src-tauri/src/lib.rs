@@ -67,6 +67,7 @@ struct Prefs {
     transcribe_language: String,
     transcribe_model: String,
     display_mode: String,
+    vocal_isolation: bool,
 }
 
 impl Default for Prefs {
@@ -79,6 +80,7 @@ impl Default for Prefs {
             transcribe_language: String::new(),
             transcribe_model: String::new(),
             display_mode: "full".into(),
+            vocal_isolation: false,
         }
     }
 }
@@ -789,6 +791,7 @@ fn get_transcribe_config(state: State<Mutex<Prefs>>) -> Value {
         "enabled": p.transcribe_enabled,
         "language": p.transcribe_language,
         "model": p.transcribe_model,
+        "vocalIsolation": p.vocal_isolation,
     })
 }
 
@@ -803,6 +806,9 @@ fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle)
     }
     if let Some(v) = cfg.get("model").and_then(|v| v.as_str()) {
         p.transcribe_model = v.to_string();
+    }
+    if let Some(v) = cfg.get("vocalIsolation").and_then(|v| v.as_bool()) {
+        p.vocal_isolation = v;
     }
     save_prefs(&app, &p);
 }

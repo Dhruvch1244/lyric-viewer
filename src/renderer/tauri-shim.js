@@ -150,7 +150,22 @@
           return { status: 'error' };
         }
         await report({ stage: 'starting' });
-        const cues = await window.Whisper.transcribe(payload.pcm, {
+        let pcm = payload.pcm;
+        // Experimental, off by default (see demucs.js for why): isolate
+        // vocals before transcribing rather than feeding Whisper the full
+        // mix. A failure here falls back to the raw signal rather than
+        // losing the transcription entirely.
+        if (payload.vocalIsolation && window.Demucs) {
+          try {
+            pcm = await window.Demucs.isolateVocals(pcm, 16000, {
+              outputRate: 16000,
+              onProgress: (p) => report({ stage: 'isolating-vocals', pct: p.pct }),
+            });
+          } catch (err) {
+            console.warn('[demucs] vocal isolation failed, transcribing the raw mix:', err && err.message);
+          }
+        }
+        const cues = await window.Whisper.transcribe(pcm, {
           language: payload.language,
           onProgress: (p) => report(p),
         });
@@ -164,7 +179,7 @@
         return { status: 'error' };
       }
     },
-    getTranscribeConfig: () => call('get_transcribe_config', {}, { enabled: true, language: '', model: '' }),
+    getTranscribeConfig: () => call('get_transcribe_config', {}, { enabled: true, language: '', model: '', vocalIsolation: false }),
     setTranscribeConfig: (cfg) => call('set_transcribe_config', { cfg }),
   };
 })();

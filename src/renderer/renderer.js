@@ -4599,7 +4599,7 @@ function flushHeatmap() {
 let listeningTrack = null;
 
 /** Whether transcription is enabled + which language/model to use. */
-let transcribeCfg = { enabled: true, language: '', model: '' };
+let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: false };
 
 /**
  * Whether the current track has *plain* lyrics available (real words with no
@@ -4655,7 +4655,7 @@ function flushTranscription() {
   if (!pcm) return;
 
   window.player
-    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined })
+    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined, vocalIsolation: Boolean(transcribeCfg.vocalIsolation) })
     .catch((err) => console.warn('[transcribe] failed:', err && err.message));
 }
 
@@ -5109,6 +5109,21 @@ if (els.wallpaperBtn) {
     }).catch(() => {});
     langSelect.addEventListener('change', () => {
       window.player.setTranscribeConfig({ language: langSelect.value }).catch(() => {});
+    });
+  }
+
+  const viBtn = document.getElementById('keybox-vocal-isolation');
+  if (viBtn && window.player && window.player.getTranscribeConfig) {
+    const paint = (on) => {
+      viBtn.setAttribute('aria-pressed', String(on));
+      viBtn.textContent = on ? 'On' : 'Off';
+    };
+    window.player.getTranscribeConfig().then((cfg) => paint(Boolean(cfg && cfg.vocalIsolation))).catch(() => {});
+    viBtn.addEventListener('click', () => {
+      const next = viBtn.getAttribute('aria-pressed') !== 'true';
+      paint(next);
+      transcribeCfg.vocalIsolation = next;
+      window.player.setTranscribeConfig({ vocalIsolation: next }).catch(() => {});
     });
   }
 }

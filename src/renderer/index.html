@@ -172,6 +172,15 @@
           </select>
         </div>
 
+        <!-- Experimental, off by default — isolates vocals from the mix
+             before transcribing (see demucs.js). Untested against the real
+             model; may just cost extra download/CPU for no gain. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Isolate vocals before transcribing (experimental)</span>
+          <button id="keybox-vocal-isolation" class="chip" type="button"
+                  aria-pressed="false" title="Try to separate vocals from the mix before Whisper transcribes — may improve accuracy on dense mixes, unverified">Off</button>
+        </div>
+
         <div class="keybox__local">
           <span class="keybox__label">Report AI-generated content</span>
           <button id="keybox-report" class="chip" type="button"
@@ -376,6 +385,11 @@
     <!-- Webview Whisper (transformers.js/WASM). Lazy — nothing loads until a song
          actually needs transcribing. -->
     <script src="whisper.js"></script>
+    <!-- Optional vocal-isolation pre-pass (onnxruntime-web, separate from
+         whisper.js's transformers.js pipeline — see demucs.js for why). Also
+         lazy; only loads its model when the toggle is on and a transcription
+         actually runs. -->
+    <script src="demucs.js"></script>
     <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>

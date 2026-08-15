@@ -15,6 +15,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "vendor:whisper": "node scripts/vendor-whisper.js",
+    "vendor:demucs": "node scripts/vendor-demucs.js",
     "icon": "node scripts/gen-icon.js"
   },
   "license": "MIT",

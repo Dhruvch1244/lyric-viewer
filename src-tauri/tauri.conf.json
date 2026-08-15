@@ -5,7 +5,7 @@
   "identifier": "com.dhruv.lyricoverlay",
   "build": {
     "frontendDist": "../src/renderer",
-    "beforeBuildCommand": "npm run vendor:whisper"
+    "beforeBuildCommand": "npm run vendor:whisper && npm run vendor:demucs"
   },
   "app": {
     "withGlobalTauri": true,

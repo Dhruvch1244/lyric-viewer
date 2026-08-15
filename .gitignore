@@ -9,6 +9,10 @@ out/
 # copied from node_modules by scripts/vendor-whisper.js, not authored here.
 src/renderer/vendor/transformers/
 
+# Vendored onnxruntime-web for demucs.js (see scripts/vendor-demucs.js) — same
+# reasoning, a large binary copied from node_modules, not authored here.
+src/renderer/vendor/onnxruntime/
+
 # Machine-specific Claude Code local settings
 .claude/settings.local.json
 
