@@ -659,12 +659,25 @@ fn window_hwnd(app: &AppHandle) -> Option<isize> {
 fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
     let Some(hwnd) = window_hwnd(app) else { return };
     if new_mode == "wallpaper" && old_mode != "wallpaper" {
+        WALLPAPER_SURFACED.store(false, Ordering::Relaxed);
         match wallpaper::attach(hwnd) {
             Ok(()) => WALLPAPER_ATTACHED.store(true, Ordering::Relaxed),
             Err(e) => eprintln!("[wallpaper] attach failed: {e}"),
         }
     } else if new_mode != "wallpaper" && old_mode == "wallpaper" {
+        // Leaving wallpaper mode entirely must land in a known-good state no
+        // matter what wallpaper_interact left behind — a stale WALLPAPER_SURFACED
+        // or a leftover always-on-top from an interrupted surface/settle is
+        // exactly how a stuck "can't get out" report happens.
+        let was_surfaced = WALLPAPER_SURFACED.swap(false, Ordering::Relaxed);
         WALLPAPER_ATTACHED.store(false, Ordering::Relaxed);
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_always_on_top(false);
+        }
+        // detach() on a window that's already detached (was_surfaced) is a
+        // harmless no-op — still call it, since "definitely not attached" is
+        // cheaper to guarantee than to track precisely.
+        let _ = was_surfaced;
         if let Err(e) = wallpaper::detach(hwnd) {
             eprintln!("[wallpaper] detach failed: {e}");
         }
@@ -1565,6 +1578,16 @@ fn toggle_overlay(app: &AppHandle) {
     let _ = app.emit("overlay-visibility", json!({ "visible": !visible }));
 }
 
+/// Toggle full ⇄ wallpaper. A keyboard escape hatch that works no matter what
+/// state pointer-forwarding or the interactive-surface lift are in — a window
+/// reparented behind the desktop icons that stops taking clicks for any reason
+/// must not be a dead end. See wallpaper_interact for the click-driven path.
+fn toggle_wallpaper(app: &AppHandle) {
+    let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
+    let current = st.lock().unwrap().display_mode.clone();
+    set_mode(app, if current == "wallpaper" { "full" } else { "wallpaper" });
+}
+
 /// Build the system-tray icon + menu (Show/hide, Quit). The overlay has no
 /// window chrome and hides on a hotkey, so the tray is the only thing that says
 /// it is running. A failure here is non-fatal — the app runs without a tray.
@@ -1597,7 +1620,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Register the global hotkeys: Ctrl+Alt+Left/Right/0 nudge the sync offset,
-/// Ctrl+Alt+H shows/hides the overlay.
+/// Ctrl+Alt+H shows/hides the overlay, Ctrl+Alt+M toggles wallpaper mode.
+///
+/// M is deliberately global (works even when the window has no focus and
+/// isn't clickable) — the click-driven wallpaper_interact path depends on
+/// pointer forwarding, and wallpaper mode must never be a dead end if that
+/// hiccups. A global shortcut still fires on a window reparented behind the
+/// desktop icons.
 fn register_hotkeys(app: &AppHandle) {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -1615,6 +1644,7 @@ fn register_hotkeys(app: &AppHandle) {
                 Code::ArrowRight => change_offset(app, 100, None),
                 Code::Digit0 => change_offset(app, 0, Some(0)),
                 Code::KeyH => toggle_overlay(app),
+                Code::KeyM => toggle_wallpaper(app),
                 _ => {}
             }
         })
@@ -1624,7 +1654,7 @@ fn register_hotkeys(app: &AppHandle) {
         return;
     }
     let gs = app.global_shortcut();
-    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH] {
+    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH, Code::KeyM] {
         let _ = gs.register(Shortcut::new(Some(ctrl_alt), code));
     }
 }

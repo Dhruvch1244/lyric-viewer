@@ -2,6 +2,16 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.30.1 — 2026-08-15
+
+- **Fixed: wallpaper mode had no way out.** If pointer forwarding to a window
+  reparented behind the desktop icons ever stalled, the only click target
+  that could get you back (the wallpaper toggle chip) was itself unreachable
+  — no keyboard fallback existed either. Added `Ctrl+Alt+M` as a global
+  hotkey that toggles wallpaper mode regardless of pointer/click state, and
+  fixed the underlying state reset so leaving wallpaper mode always lands in
+  a clean, interactive fullscreen window even from mid-interaction edge cases.
+
 ## 0.30.0 — 2026-08-15
 
 - **Wallpaper mode is back, for real this time.** Fullscreen-only (0.28.0)
