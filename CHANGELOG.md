@@ -2,6 +2,16 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.31.1 — 2026-08-15
+
+- **Fixed: Spotify sign-in was invisible.** The overlay's always-on-top
+  setting was hiding the browser window Spotify's login opened in — not
+  broken, not laggy, just unclickable behind the overlay the whole time.
+- **Fixed a real perf bug in the emoji reaction burst** (shipped in 0.31.0):
+  setting the emoji font per particle per frame was drastically expensive —
+  measured 58ms for 120 particles, blowing the frame budget 3.5x. Down to
+  under 2ms for the same load.
+
 ## 0.31.0 — 2026-08-15
 
 - **Import a playlist straight from Spotify** into the pre-sync panel — register
