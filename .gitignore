@@ -16,9 +16,6 @@ src/renderer/vendor/onnxruntime/
 # Machine-specific Claude Code local settings
 .claude/settings.local.json
 
-# Shipped API keys — bundled into the installer, never committed
-src/main/secrets.js
-
 # Promo stills are regenerated, not authored — keep them out of git.
 promo/stills/
 

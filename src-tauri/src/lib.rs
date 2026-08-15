@@ -51,7 +51,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// The PowerShell 5.1 SMTC poller, embedded so it needs no resource-path
 /// resolution and works identically in `tauri dev` and a bundled install. It is
 /// written to a temp file at startup and spawned from there.
-const SMTC_POLL_PS1: &str = include_str!("../../src/main/smtc-poll.ps1");
+const SMTC_POLL_PS1: &str = include_str!("../smtc-poll.ps1");
 
 // ---------------------------------------------------------------- preferences
 

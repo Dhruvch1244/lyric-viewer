@@ -374,8 +374,8 @@ function buildWordTimings(text, startMs, endMs) {
 /**
  * When a line stops being sung (ms).
  *
- * `endMs` is real data — the LRC gap marker that closes the line (see
- * normaliseCues in src/main/lyrics.js). Only when a line has none do we fall
+ * `endMs` is real data — the LRC gap marker that closes the line, parsed on
+ * the Rust side (src-tauri/src/lyrics.rs). Only when a line has none do we fall
  * back to "it runs until the next line starts", which overstates every line
  * followed by an instrumental stretch.
  *
@@ -618,8 +618,8 @@ function renderWords(el, index) {
   /*
     Measured timings win. `cue.words` is present when this song has been through
     word-level alignment (correct words from the lyric source, measured timing
-    from Whisper — see src/main/wordalign.js). Only when that is absent do we
-    fall back to estimating the split from syllables.
+    from Whisper) — not yet ported to the Rust backend, so this never fires
+    today. Falls back to estimating the split from syllables (wordtiming.js).
   */
   const timings = Array.isArray(cue.words) && cue.words.length > 0
     ? cue.words
@@ -3774,9 +3774,10 @@ function setJob(name, label) {
   /*
     Mirror the job map to the tray. The HUD chip is inside a bar that stays
     invisible until the cursor moves, so work taking minutes could finish with
-    nothing on screen having said it started. The tray tooltip always shows it,
-    and the few jobs worth interrupting for raise a notification (see
-    NOTIFY_ON_DONE in src/main/tray.js).
+    nothing on screen having said it started. The tray tooltip always shows
+    it (report_jobs in src-tauri/src/lib.rs) — Electron's version also raised
+    a desktop notification for the jobs worth interrupting for; that half
+    isn't ported.
   */
   if (window.player.reportJobs) {
     const finished = wasRunning && !label ? { id: name, label: jobDoneLabel(name) } : null;
@@ -4944,10 +4945,14 @@ window.player.onLyrics((payload) => {
       setStatus('');
       /*
         Lyrics arrived. Keep listening anyway when they have no word timings
-        yet: the audio is what turns correct line-level lyrics into word-level
-        sync (see src/main/wordalign.js), and it can only be captured while the
-        song is actually playing. Main decides at the end whether to spend a
-        Whisper pass on it; this side just makes sure the audio exists.
+        yet: the audio is what would turn correct line-level lyrics into
+        word-level sync (word-level alignment isn't ported to the Rust
+        backend yet — see finalize_transcription in src-tauri/src/lib.rs,
+        which currently just declines to re-transcribe an already-synced
+        track rather than attaching word timing to it), and it can only be
+        captured while the song is actually playing. Main decides at the end
+        whether to spend a Whisper pass on it; this side just makes sure the
+        audio exists.
 
         Costs nothing when the user has not enabled audio capture — the
         recorder taps that same stream and simply declines to start without it.

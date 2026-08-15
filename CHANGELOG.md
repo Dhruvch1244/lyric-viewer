@@ -2,6 +2,31 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.30.0 — 2026-08-15
+
+- **Wallpaper mode is back, for real this time.** Fullscreen-only (0.28.0)
+  quietly left it completely dead — the pointer-forwarding loop that makes a
+  reparented window clickable was never actually started, and there was no
+  way to turn it on even before that. New `🖥 Wallpaper` toggle chip.
+- **Fixed a bug re-transcribing every song, every play.** With ♫ on, a track
+  that already had correct synced lyrics was silently re-transcribed via
+  Whisper and overwritten with a lower-accuracy guess on every single replay.
+- **MilkDrop now respects Lite mode** instead of always rendering at full
+  internal resolution regardless of the ⚡ chip.
+- **Whisper transcription moved off the render thread** (WASM proxy mode) so
+  a transcription pass no longer freezes the visuals while it runs.
+- **Whisper transcription-language picker** — a real UI control for the
+  setting that already existed but was only reachable by hand-editing config.
+- **Experimental: isolate vocals before transcribing.** Off by default; tries
+  to separate vocals from the mix before Whisper runs, aimed at fast rap and
+  dense EDM mixes where Whisper's accuracy drops the most.
+- **Playlist pre-sync, beat maps, and the local-CLI AI fallback (Claude /
+  Gemini / Ollama / `gh models` / Antigravity) all actually work now** — each
+  had shipped as an empty stub on the Tauri port.
+- **Native per-song audio analysis** (symphonia) — local-file playback
+  decodes and analyses off the UI thread instead of through the renderer's
+  Web Audio pass.
+
 ## 0.29.0 — 2026-08-14
 
 - **Auto-gained native audio.** The WASAPI loopback spectrum now self-calibrates

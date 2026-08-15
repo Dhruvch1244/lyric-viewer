@@ -21,9 +21,8 @@
 (function () {
   const T = window.__TAURI__;
   if (!T) {
-    // Not running under Tauri — this is the Electron build (whose preload has
-    // already installed window.player) or a plain browser. Leave window.player
-    // untouched; installing our inert version would clobber Electron's real one.
+    // Not running under Tauri — a plain browser (e.g. the web demo, which
+    // doesn't load this shim). Leave window.player untouched.
     return;
   }
 

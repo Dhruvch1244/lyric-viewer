@@ -1,15 +1,10 @@
 {
   "name": "lyric-overlay",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Beat-aware synced lyric overlay for Windows. Detects any media app via SMTC.",
-  "main": "src/main/main.js",
   "scripts": {
-    "start": "electron .",
     "test": "node --test",
-    "probe": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File src/main/smtc-poll.ps1 -Once",
-    "package": "electron-packager . LyricPlayer --platform=win32 --arch=x64 --out=dist --overwrite --asar=false --app-copyright=\"Lyric Player\" --ignore=\"^/dist\" --ignore=\"^/\\.gitignore\"",
-    "dist:win": "electron-builder --win --x64",
-    "release:assets": "node scripts/release-assets.js",
+    "probe": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File src-tauri/smtc-poll.ps1 -Once",
     "vendor:presets": "node scripts/vendor-presets.js",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -21,76 +16,14 @@
   "license": "MIT",
   "private": true,
   "author": "Dhruv Choudhary",
-  "build": {
-    "appId": "com.dhruv.lyricoverlay",
-    "productName": "Lyric Overlay",
-    "copyright": "Copyright © 2026 Dhruv Choudhary",
-    "asar": false,
-    "directories": {
-      "output": "dist-installer",
-      "buildResources": "build"
-    },
-    "files": [
-      "src/**/*",
-      "package.json",
-      "build/icon.png",
-      "!**/*.map",
-      "!**/*.md",
-      "!src/main/secrets.js",
-      "!node_modules/@huggingface/transformers/.cache${/*}",
-      "!node_modules/onnxruntime-node/bin/napi-v6/darwin${/*}",
-      "!node_modules/onnxruntime-node/bin/napi-v6/linux${/*}",
-      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64${/*}",
-      "!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/DirectML.dll",
-      "!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxcompiler.dll",
-      "!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxil.dll",
-      "!node_modules/@huggingface/transformers/dist/*.web.*",
-      "!node_modules/onnxruntime-web${/*}"
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "Dhruvch1244",
-        "repo": "lyric-viewer"
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.png",
-      "artifactName": "LyricOverlay-Setup-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Lyric Overlay",
-      "uninstallDisplayName": "Lyric Overlay"
-    }
-  },
   "devDependencies": {
-    "@electron/packager": "^20.2.0",
-    "@tauri-apps/cli": "^2.11.4",
-    "electron": "^43.3.0",
-    "electron-builder": "^26.0.0"
+    "@tauri-apps/cli": "^2.11.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0",
     "@huggingface/transformers": "^4.2.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "butterchurn": "^2.6.7",
-    "butterchurn-presets": "^2.4.7",
-    "electron-updater": "^6.8.9",
-    "koffi": "^3.1.4",
-    "wavefile": "^11.0.0"
+    "butterchurn-presets": "^2.4.7"
   }
 }

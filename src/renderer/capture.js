@@ -5,7 +5,7 @@
 
   Taps the same loopback MediaStream audio.js already holds (see its
   getStream()) and accumulates mono 16 kHz Float32 samples — exactly the format
-  src/main/transcribe.js wants. Chromium does the hard parts for free: an
+  whisper.js wants. Chromium does the hard parts for free: an
   AudioContext constructed at 16 kHz resamples the stream on the way in, and a
   single-channel processor downmixes stereo, so there is no hand-written
   resampler or codec anywhere in this path.
