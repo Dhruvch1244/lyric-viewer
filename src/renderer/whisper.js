@@ -32,6 +32,8 @@
   new needs vendoring.
 */
 (function () {
+  const DEFAULT_MODEL = 'onnx-community/whisper-base';
+
   /** Cached pipeline promise, so the model loads once per session. */
   let pipePromise = null;
 
@@ -73,7 +75,7 @@
    * @returns {Promise<Array<{timeMs:number, text:string}>>}
    */
   async function transcribe(pcm, opts = {}) {
-    const model = opts.model || 'onnx-community/whisper-base';
+    const model = opts.model || DEFAULT_MODEL;
     const transcriber = await loadPipeline(model, opts.onProgress);
     if (opts.onProgress) opts.onProgress({ stage: 'transcribing' });
 
@@ -94,5 +96,17 @@
       }));
   }
 
-  window.Whisper = { transcribe };
+  /**
+   * Warm the model cache without transcribing anything. Fire-and-forget from
+   * renderer.js a few seconds after startup, so a song that actually needs
+   * transcription later doesn't pay for the download + WASM compile in the
+   * moment — WebView2 persists the fetched bytes across restarts, so this
+   * only ever costs something once per install.
+   * @param {string} [model]
+   */
+  function preload(model) {
+    return loadPipeline(model || DEFAULT_MODEL).then(() => true).catch(() => false);
+  }
+
+  window.Whisper = { transcribe, preload, DEFAULT_MODEL };
 })();
