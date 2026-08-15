@@ -1894,6 +1894,11 @@ function drawGalaxy(now, w, h, life) {
   const step = Math.max(1, Math.round(1 / Math.max(0.4, quality))); // thin out when slow
   const colours = galaxyColours();
   const twBase = 0.10 + life * 0.16;
+  // p.bucket is non-decreasing in seed order (assigned from i/count in
+  // seedGalaxy), so walking the array in order only crosses a bucket
+  // boundary ~GALAXY_HUE_BUCKETS times total. Skipping the redundant
+  // fillStyle writes cuts colour-string reparses from up to 260/frame to ~12.
+  let lastBucket = -1;
   for (let gi = 0; gi < galaxy.length; gi += step) {
     const p = galaxy[gi];
     const a = p.ang + spin;
@@ -1903,7 +1908,10 @@ function drawGalaxy(now, w, h, life) {
     const tw = 0.5 + 0.5 * Math.sin(now * 0.002 + p.tw);
     // Alpha rides globalAlpha instead of being baked into a fresh colour string.
     ctx.globalAlpha = Math.min(1, twBase * tw + beatFlash * 0.12);
-    ctx.fillStyle = colours[p.bucket];
+    if (p.bucket !== lastBucket) {
+      ctx.fillStyle = colours[p.bucket];
+      lastBucket = p.bucket;
+    }
     // fillRect over beginPath+arc+fill, the same trade the stars layer already
     // makes below — these dots are a few px and the shape is not readable.
     // Sized by EQUAL AREA, not equal width: a square of side 2r covers 27% more
