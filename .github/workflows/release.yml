@@ -11,6 +11,15 @@ name: release
 # run — they just don't have those OS integrations yet (MediaRemote / MPRIS /
 # desktop-wallpaper equivalents are a follow-on). The visuals, lyrics, artwork
 # and LLM features work everywhere.
+#
+# NOTE on releaseDraft (below): every release lands as a GitHub DRAFT, on
+# purpose — a chance to check the notes before anyone sees them. But GitHub
+# excludes drafts from /releases/latest and its API, which is what the
+# website's download buttons and version chip read. A tag that's built but
+# never manually published leaves the site silently serving the previous
+# release. After a build finishes: review it in the GitHub UI, then either
+# click "Publish release" there, or run
+# `gh release edit <tag> --repo Dhruvch1244/lyric-viewer --draft=false`.
 
 on:
   push:
