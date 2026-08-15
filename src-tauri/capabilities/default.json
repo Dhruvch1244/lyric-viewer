@@ -11,6 +11,8 @@
     "global-shortcut:allow-unregister",
     "dialog:allow-open",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "notification:default",
+    "opener:allow-open-url"
   ]
 }

@@ -20,6 +20,7 @@ mod lyrics;
 mod mood;
 mod netease;
 mod presets;
+mod spotify;
 mod translate;
 mod transliterate;
 #[cfg(windows)]
@@ -28,11 +29,50 @@ mod wallpaper;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// True while the app is playing a local file itself. The SMTC watcher stands
 /// down so its "no session" idle doesn't clear a locally-playing track.
 static LOCAL_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Set once in `run()`'s setup hook. `llm::convert()` is a pure function with
+/// no `AppHandle` of its own, called from four different modules — this is
+/// how it reaches back up to emit the local-CLI offer without every caller
+/// needing to know about it (mirrors where Electron's `setAllFailedHook`
+/// lived: inside llm.js's `convert()`, not in each feature module).
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// True once the local-CLI offer has fired this session — asked once, not on
+/// every subsequent provider failure.
+static OFFERED_CLI: AtomicBool = AtomicBool::new(false);
+
+/// Called from `llm::convert()` when every configured provider (cloud and
+/// local-CLI) has just failed or none is configured. Offers the local-CLI
+/// fallback exactly at the moment it would actually help, rather than as a
+/// startup nag — but only once per session, and not if the user already
+/// decided (consented to one, or explicitly declined).
+pub(crate) fn maybe_offer_localcli() {
+    if OFFERED_CLI.swap(true, Ordering::Relaxed) {
+        return; // already asked this session
+    }
+    let Some(app) = APP_HANDLE.get() else { return };
+    let decided = localcli::consent();
+    let consented = decided.get("consented").and_then(|v| v.as_bool()).unwrap_or(false);
+    let declined = decided.get("id").and_then(|v| v.as_str()) == Some("declined");
+    if consented || declined {
+        return;
+    }
+    let detected = localcli::detect();
+    let any_installed = detected
+        .as_array()
+        .map(|arr| arr.iter().any(|c| c.get("installed").and_then(|v| v.as_bool()).unwrap_or(false)))
+        .unwrap_or(false);
+    if !any_installed {
+        OFFERED_CLI.store(false, Ordering::Relaxed); // nothing to offer; try again on a later failure
+        return;
+    }
+    let _ = app.emit("localcli-offer", json!({ "detected": detected }));
+}
 
 /// True while the overlay is reparented behind the desktop. Gates the pointer-
 /// forwarding loop, which is the only way a window under the icons gets clicks.
@@ -522,15 +562,26 @@ fn resolve_artwork(app: AppHandle, title: String, artist: String, duration_ms: i
 
 // ------------------------------------------------------------- window sizing
 
-/// Size the overlay to fill the primary monitor — the fullscreen transparent
-/// overlay the app expects. Display-mode variants (bar/strip) resize from here.
+/// Size the overlay to fill a monitor — the fullscreen transparent overlay
+/// the app expects. Display-mode variants (bar/strip) resize from here.
+///
+/// Wallpaper mode targets whichever monitor the cursor is on at the moment
+/// it's entered, not always the primary display — on a multi-monitor setup
+/// where you work on a secondary screen, "wallpaper" meant "the desktop I
+/// never look at" otherwise. Every other mode keeps the simpler, established
+/// primary-monitor default (the window has no drag region, so it can never
+/// end up elsewhere on its own).
 fn size_overlay(app: &AppHandle, mode: &str) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    let monitor = match win.primary_monitor() {
-        Ok(Some(m)) => m,
-        _ => return,
+    let wallpaper_monitor = (mode == "wallpaper")
+        .then(|| win.cursor_position().ok())
+        .flatten()
+        .and_then(|pos| win.monitor_from_point(pos.x, pos.y).ok().flatten());
+    let monitor = match wallpaper_monitor.or_else(|| win.primary_monitor().ok().flatten()) {
+        Some(m) => m,
+        None => return,
     };
     let size = *monitor.size();
     let pos = *monitor.position();
@@ -727,9 +778,12 @@ fn set_mode(app: &AppHandle, mode: &str) {
     };
     // Wallpaper wants the full monitor; bar/strip resize; leaving wallpaper
     // detaches first so the window is a normal top-level again before resizing.
+    // size_overlay is passed the real mode string (not translated to "full")
+    // because entering wallpaper mode needs to know that, specifically, to
+    // pick the cursor's monitor instead of always the primary one — its
+    // layout math treats "wallpaper" and "full" identically either way.
     apply_wallpaper(app, &old_mode, mode);
-    let size_mode = if mode == "wallpaper" { "full" } else { mode };
-    size_overlay(app, size_mode);
+    size_overlay(app, mode);
     let _ = app.emit("display-mode", json!({ "mode": mode, "insets": {} }));
 }
 
@@ -1026,9 +1080,14 @@ fn load_api_keys(app: &AppHandle) {
 
 /// Persist an API key from the 🔑 panel and apply it immediately.
 #[tauri::command]
-fn set_api_key(name: String, value: String, app: AppHandle) {
+fn set_api_key(name: String, value: String, app: AppHandle) -> Value {
+    // Found while wiring the Spotify Client ID save button: this returned
+    // unit, so the renderer's `res.status === 'ok'` check on the other side
+    // (saveApiKey in renderer.js) threw on `null.status` and always reported
+    // "save failed" — the key was being saved correctly the whole time, only
+    // the confirmation was broken.
     if name.is_empty() {
-        return;
+        return json!({ "status": "error", "message": "no key name" });
     }
     std::env::set_var(&name, &value);
     if let Some(path) = keys_path(&app) {
@@ -1046,6 +1105,7 @@ fn set_api_key(name: String, value: String, app: AppHandle) {
         }
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&map).unwrap_or_default());
     }
+    json!({ "status": "ok", "provider": llm::active_provider() })
 }
 
 /// Merge fields into a track's on-disk cache record, creating it if absent.
@@ -1153,6 +1213,28 @@ fn report_jobs(payload: Value, cur: State<Mutex<CurTrack>>, app: AppHandle) {
         format!("Lyric Overlay\n{song}\n{jobs}")
     };
     set_tray_tooltip(&app, &text);
+
+    // A job worth interrupting for raises an actual notification — the HUD
+    // chip that reports progress lives inside a bar that stays invisible
+    // until the cursor moves, so minutes of background work could finish
+    // with nothing on screen having said it started. Only transcription
+    // today: it is the one job whose result changes what you'll see next
+    // play, everything else is routine and would just be noise.
+    if let Some(finished) = payload.get("finished") {
+        if finished.get("id").and_then(|v| v.as_str()) == Some("transcribe") {
+            if let Some(label) = finished.get("label").and_then(|v| v.as_str()) {
+                notify(&app, label);
+            }
+        }
+    }
+}
+
+/// Best-effort desktop notification — silent (informational, not an alarm),
+/// and a failure here (permission denied, platform unsupported) is not worth
+/// surfacing over.
+fn notify(app: &AppHandle, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app.notification().builder().title("Lyric Overlay").body(body).show();
 }
 
 /// Auto-transcription (Whisper) is the one remaining feature: in Electron it ran
@@ -1356,6 +1438,60 @@ fn presync_list(text: String, app: AppHandle) -> Value {
         json!({ "done": done, "total": total, "status": "done", "summary": summary }),
     );
     json!({ "status": "ok", "synced": synced, "cached": cached, "missed": missed })
+}
+
+/// Whether a Spotify session is live and a client ID is even configured —
+/// lets the UI show "connect" vs "import" without guessing.
+#[tauri::command]
+fn spotify_status(state: State<spotify::TokenState>) -> Value {
+    let has_client_id = std::env::var("SPOTIFY_CLIENT_ID").map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let connected = state
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|t| t.expires_at > std::time::Instant::now())
+        .unwrap_or(false);
+    json!({ "hasClientId": has_client_id, "connected": connected })
+}
+
+/// Run the PKCE + loopback + browser sign-in flow. Blocks the async call
+/// (up to a few minutes) waiting on the user's browser — that's expected for
+/// a user-initiated "connect to Spotify" click, not a bug.
+#[tauri::command]
+fn spotify_authorize(app: AppHandle, state: State<spotify::TokenState>) -> Value {
+    match spotify::authorize(&app) {
+        Ok(token) => {
+            *state.lock().unwrap() = Some(token);
+            json!({ "status": "ok" })
+        }
+        Err(e) => json!({ "status": "error", "message": e }),
+    }
+}
+
+#[tauri::command]
+fn spotify_playlists(state: State<spotify::TokenState>) -> Value {
+    let guard = state.lock().unwrap();
+    let Some(token) = guard.as_ref() else {
+        return json!({ "status": "error", "message": "not connected" });
+    };
+    match spotify::list_playlists(token) {
+        Ok(playlists) => json!({ "status": "ok", "playlists": playlists }),
+        Err(e) => json!({ "status": "error", "message": e }),
+    }
+}
+
+/// A playlist's tracks as "Artist - Title" text, ready to paste straight into
+/// the pre-sync textarea (or hand directly to `presync_list`).
+#[tauri::command]
+fn spotify_playlist_tracks(playlist_id: String, state: State<spotify::TokenState>) -> Value {
+    let guard = state.lock().unwrap();
+    let Some(token) = guard.as_ref() else {
+        return json!({ "status": "error", "message": "not connected" });
+    };
+    match spotify::playlist_tracks_as_text(token, &playlist_id) {
+        Ok(text) => json!({ "status": "ok", "text": text }),
+        Err(e) => json!({ "status": "error", "message": e }),
+    }
 }
 
 /// Temporarily surface the wallpaper window as a real interactive overlay.
@@ -1673,7 +1809,9 @@ pub fn run() {
     // no-ops via their `app.updater()` guards.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init());
 
     #[cfg(not(feature = "store"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -1689,6 +1827,7 @@ pub fn run() {
     builder
         .setup(|app| {
             let handle = app.handle().clone();
+            let _ = APP_HANDLE.set(handle.clone());
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
@@ -1703,16 +1842,19 @@ pub fn run() {
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(CurTrack::default()));
             app.manage(UpdateStore(Mutex::new(json!({ "available": false }))));
+            app.manage(Mutex::<Option<spotify::SpotifyToken>>::new(None));
 
             // Apply any keys saved via the 🔑 panel, then check for an update.
             load_api_keys(&handle);
             check_for_update(handle.clone());
 
-            // Fill the primary monitor at the remembered display mode. If that
-            // mode is wallpaper, reparent immediately — apply_wallpaper only
-            // fires on a *transition*, and startup has no prior mode to
-            // transition from.
-            size_overlay(&handle, if mode == "wallpaper" { "full" } else { &mode });
+            // Fill the remembered display mode's monitor. If that mode is
+            // wallpaper, reparent immediately — apply_wallpaper only fires on
+            // a *transition*, and startup has no prior mode to transition
+            // from. The real "wallpaper" string is passed through (not
+            // translated to "full") so it lands on whichever monitor the
+            // cursor is on at launch, not always the primary one.
+            size_overlay(&handle, &mode);
             if mode == "wallpaper" {
                 apply_wallpaper(&handle, "full", "wallpaper");
             }
@@ -1763,6 +1905,10 @@ pub fn run() {
             save_beatmap,
             save_heatmap,
             presync_list,
+            spotify_status,
+            spotify_authorize,
+            spotify_playlists,
+            spotify_playlist_tracks,
             report_jobs,
             wallpaper_interact,
             artwork_candidates,

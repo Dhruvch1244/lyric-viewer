@@ -145,5 +145,15 @@
     return resample(out, SAMPLE_RATE, opts.outputRate || SAMPLE_RATE);
   }
 
-  window.Demucs = { isolateVocals, SAMPLE_RATE };
+  /**
+   * Warm the model cache without separating anything. Only worth calling
+   * when vocal isolation is actually enabled — this downloads the same
+   * multi-MB model isolateVocals would, and the setting defaults off.
+   * @returns {Promise<boolean>}
+   */
+  function preload() {
+    return loadSession().then(() => true).catch(() => false);
+  }
+
+  window.Demucs = { isolateVocals, preload, SAMPLE_RATE };
 })();

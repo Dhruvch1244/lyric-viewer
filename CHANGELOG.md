@@ -2,6 +2,34 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.31.0 — 2026-08-15
+
+- **Import a playlist straight from Spotify** into the pre-sync panel — register
+  a free Spotify Developer app, paste the Client ID into the 🔑 panel, connect,
+  pick a playlist, and its tracks land in the pre-sync box ready to fetch. Uses
+  a local loopback redirect rather than a custom URI scheme (the alternative
+  has a known bug on NSIS installs — the one most people are running).
+- **Desktop notifications for background work that's actually worth
+  interrupting for** — just transcription today, silent, not an alarm.
+- **A local-CLI fallback offer, for real this time.** If every configured
+  provider (cloud or local) fails and you have Claude/Gemini/Ollama/`gh
+  models`/Antigravity installed but haven't picked one, the app now actually
+  offers it once per session instead of staying silent about the option.
+- **Emoji reaction burst** on drops and hype lines — 🔥⚡💥✨🎉 on a drop,
+  🔥🎤💯🙌🚀 on an energetic line, physics-matched to the existing confetti.
+- **Wallpaper mode now targets the monitor you're actually using**, not
+  always the primary display, on multi-monitor setups.
+- **Vocal isolation respects Lite mode** — skipped outright when Lite mode is
+  on, rather than spending the CPU regardless.
+- **Groq's default model upgraded** to `openai/gpt-oss-120b` — cheaper, faster,
+  same context as the old default, verified against Groq's own docs.
+- **Whisper and Demucs models pre-warm in the background** a few seconds
+  after startup (only for features you actually have on), so the first real
+  transcription or vocal-isolation pass doesn't pay for the download.
+- Fixed: the 🔑 panel's "saved" confirmation was silently broken (a backend
+  return-type mismatch) — keys were saving correctly the whole time, only the
+  confirmation message was wrong.
+
 ## 0.30.1 — 2026-08-15
 
 - **Fixed: wallpaper mode had no way out.** If pointer forwarding to a window

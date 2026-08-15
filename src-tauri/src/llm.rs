@@ -207,7 +207,11 @@ pub fn convert(system: &str, user: &str, schema: &Value) -> Result<Value, String
         }
     }
     if let Some(key) = groq_key() {
-        let model = std::env::var("LYRIC_OVERLAY_GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".into());
+        // gpt-oss-120b: Groq's production-tier flagship as of 2026-08 — cheaper
+        // and faster than llama-3.3-70b-versatile at the same 131K context
+        // (console.groq.com/docs/models), and a better fit for a knowledge-
+        // heavy task like "which artist sings this line" than the smaller model.
+        let model = std::env::var("LYRIC_OVERLAY_GROQ_MODEL").unwrap_or_else(|_| "openai/gpt-oss-120b".into());
         match call_openai_compatible("https://api.groq.com/openai/v1/chat/completions", &model, &key, system, user, schema) {
             Ok(v) => return Ok(v),
             Err(e) => failures.push(format!("groq: {e}")),
@@ -230,6 +234,12 @@ pub fn convert(system: &str, user: &str, schema: &Value) -> Result<Value, String
             Err(e) => failures.push(format!("local-cli: {e}")),
         }
     }
+
+    // Every configured provider — cloud and a consented local CLI, if any —
+    // just failed or none exists. This is exactly the moment offering the
+    // local-CLI fallback is useful, rather than a startup nag; a no-op if
+    // one's already consented, declined, or was already offered this session.
+    crate::maybe_offer_localcli();
 
     if failures.is_empty() {
         Err("no LLM provider configured".into())

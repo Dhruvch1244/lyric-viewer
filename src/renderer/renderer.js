@@ -514,6 +514,7 @@ function triggerDrop() {
   setTimeout(() => spawnRipple(1.0), 90);
   setTimeout(() => spawnRipple(0.7), 190);
   spawnConfetti(window.innerWidth, window.innerHeight, shiftHex((palette && palette[3]) || '#e94560', bgHue));
+  spawnEmojiBurst(window.innerWidth, window.innerHeight, DROP_EMOJI, 10);
   // Re-appear the whole troupe with mixed entrance animations for a big "moment"
   // (corners fly-in, warp-slide, materialize, spiral, pop, teleport…), and
   // MULTIPLY them: transient clones burst across the screen and dance hard, then
@@ -708,9 +709,10 @@ function setActive(index) {
   // The gap is measured from where the previous line STOPPED being sung, not
   // where it started; measuring from the start counts the line's own length as
   // silence and fires drops that aren't there.
+  let isDrop = false;
   if (index >= 0 && index === prev + 1) {
     const prevTime = index > 0 ? lineEndMs(index - 1) : 0;
-    if (cues[index].timeMs - prevTime > GAP_DROP_MS) triggerDrop();
+    if (cues[index].timeMs - prevTime > GAP_DROP_MS) { triggerDrop(); isDrop = true; }
   }
 
   if (index < 0) {
@@ -729,6 +731,15 @@ function setActive(index) {
   intensity = intensity * 0.4 + energy * 0.6;
   pulse = 1;
   spawnRipple(energy); // an expanding ring pings out on every new line
+
+  // A hype line gets its own, smaller reaction burst — triggerDrop() already
+  // fires one for drops, so skip here to avoid stacking two bursts on the
+  // same line. Same energy threshold the word-anim pool already uses for
+  // "this line is energetic" (line ~835 below), so the two read as one
+  // consistent read of the line rather than two different opinions on it.
+  if (!isDrop && energy > 0.55) {
+    spawnEmojiBurst(window.innerWidth, window.innerHeight, HYPE_EMOJI, 4);
+  }
 
   // Re-estimate the beat period from this line's cadence so every reactive layer
   // pulses in time with the song. Wordy/fast lines imply a quicker tempo; clamp
@@ -1044,6 +1055,7 @@ let vignette = null; // cached gradient, rebuilt on resize
 let bokeh = [];      // soft floating orbs
 let ripples = [];    // expanding rings, one per lyric line + drops
 let confetti = [];   // particle burst on drops
+let emojiParticles = []; // reaction-emoji burst on drops + hype lines
 let bars = [];       // equalizer bar seeds
 let bgHue = 0;       // global hue drift (deg) added to live-coloured layers
 let lastBackNow = 0; // for per-frame dt in the backdrop loop
@@ -1553,6 +1565,57 @@ function spawnConfetti(w, h, accent) {
     });
   }
   if (confetti.length > 500) confetti.splice(0, confetti.length - 500);
+}
+
+const DROP_EMOJI = ['🔥', '⚡', '💥', '✨', '🎉'];
+const HYPE_EMOJI = ['🔥', '🎤', '💯', '🙌', '🚀'];
+
+/**
+ * Burst reaction emoji from centre-top, same launch physics as
+ * spawnConfetti — a smaller, distinct sibling rather than folding into the
+ * confetti particle shape, since drawing text needs its own font/measure
+ * path instead of a filled rect.
+ * @param {number} w @param {number} h
+ * @param {string[]} pool emoji to pick from
+ * @param {number} count
+ */
+function spawnEmojiBurst(w, h, pool, count) {
+  const n = liteMode ? Math.round(count * 0.5) : count;
+  for (let i = 0; i < n; i += 1) {
+    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.0;
+    const sp = 5 + Math.random() * 11;
+    emojiParticles.push({
+      x: w / 2, y: h * 0.42,
+      vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      size: 22 + Math.random() * 20, life: 1,
+      char: pool[(Math.random() * pool.length) | 0],
+      rot: (Math.random() - 0.5) * 0.6, vr: (Math.random() - 0.5) * 0.05,
+    });
+  }
+  if (emojiParticles.length > 120) emojiParticles.splice(0, emojiParticles.length - 120);
+}
+
+function drawEmojiParticles() {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const p of emojiParticles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.3; // gravity, same fall rate as confetti
+    p.vx *= 0.99;
+    p.life -= 0.010;
+    p.rot += p.vr;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.font = `${p.size}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+    ctx.fillText(p.char, 0, 0);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  emojiParticles = emojiParticles.filter((p) => p.life > 0);
 }
 
 /* Wavy horizontal aurora bands, hue-shifted live so the wash keeps changing. */
@@ -3715,8 +3778,9 @@ function drawBackdrop(now) {
       }
     }
 
-    // Confetti burst (drops) rendered last so it sits in front of the dancers.
+    // Confetti + emoji bursts rendered last so they sit in front of the dancers.
     if (confetti.length) drawConfetti();
+    if (emojiParticles.length) drawEmojiParticles();
 
     ctx.globalCompositeOperation = 'source-over';
   } catch (err) {
@@ -3775,9 +3839,8 @@ function setJob(name, label) {
     Mirror the job map to the tray. The HUD chip is inside a bar that stays
     invisible until the cursor moves, so work taking minutes could finish with
     nothing on screen having said it started. The tray tooltip always shows
-    it (report_jobs in src-tauri/src/lib.rs) — Electron's version also raised
-    a desktop notification for the jobs worth interrupting for; that half
-    isn't ported.
+    it, and a desktop notification fires for the jobs worth interrupting for
+    (report_jobs in src-tauri/src/lib.rs, gated to just 'transcribe' there).
   */
   if (window.player.reportJobs) {
     const finished = wasRunning && !label ? { id: name, label: jobDoneLabel(name) } : null;
@@ -4656,7 +4719,16 @@ function flushTranscription() {
   if (!pcm) return;
 
   window.player
-    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined, vocalIsolation: Boolean(transcribeCfg.vocalIsolation) })
+    .transcribeAudio({
+      track,
+      pcm,
+      language: transcribeCfg.language || undefined,
+      // Lite mode means "fewer effects, save resources" — vocal isolation is
+      // an optional accuracy enhancement with a real CPU cost (a second
+      // multi-MB model, a full chunked inference pass), so it's the one thing
+      // worth skipping outright rather than just tuning down.
+      vocalIsolation: Boolean(transcribeCfg.vocalIsolation) && !liteMode,
+    })
     .catch((err) => console.warn('[transcribe] failed:', err && err.message));
 }
 
@@ -4714,7 +4786,29 @@ window.player.onTranscribeProgress((data) => {
 
 window.player.getTranscribeConfig().then((cfg) => {
   if (cfg) transcribeCfg = cfg;
+  schedulePreload();
 }).catch(() => { /* keep defaults */ });
+
+/*
+  Warm the Whisper/Demucs model caches a few seconds after startup, at idle
+  priority, so a song that actually needs transcription or vocal isolation
+  later doesn't pay for the multi-MB download in the moment it's needed.
+  WebView2 persists the fetched bytes across restarts, so this only ever
+  costs anything once per install — and only downloads a model for a feature
+  that's actually on, so turning transcription or vocal isolation off keeps
+  their models out of the picture entirely.
+*/
+function schedulePreload() {
+  const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 4000));
+  idle(() => {
+    if (transcribeCfg.enabled && window.Whisper && window.Whisper.preload) {
+      window.Whisper.preload(transcribeCfg.model || undefined).catch(() => {});
+    }
+    if (transcribeCfg.vocalIsolation && window.Demucs && window.Demucs.preload) {
+      window.Demucs.preload().catch(() => {});
+    }
+  }, { timeout: 8000 });
+}
 
 window.player.onTrack((track) => {
   flushBeatmap();                 // persist what we learned for the previous song
@@ -5681,6 +5775,30 @@ els.keyInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') saveApiKey();
   if (e.key === 'Escape') closeKeybox();
 });
+
+/* Spotify Client ID — separate save button from the HF key above, since it's
+   a different key name and doesn't affect which translation/mood provider is
+   active (refreshProviderChip is HF/cloud-LLM specific, not relevant here). */
+{
+  const input = document.getElementById('keybox-spotify-input');
+  const save = document.getElementById('keybox-spotify-save');
+  const status = document.getElementById('keybox-spotify-status');
+  if (input && save && status && window.player && window.player.setApiKey) {
+    const saveSpotifyClientId = async () => {
+      const value = input.value.trim();
+      status.textContent = 'saving…';
+      try {
+        const res = await window.player.setApiKey('SPOTIFY_CLIENT_ID', value);
+        status.textContent = res && res.status === 'ok' ? 'saved' : (res && res.message) || 'save failed';
+        if (res && res.status === 'ok') syncSpotifyPanel();
+      } catch (err) {
+        status.textContent = (err && err.message) || 'save failed';
+      }
+    };
+    save.addEventListener('click', saveSpotifyClientId);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSpotifyClientId(); });
+  }
+}
 
 /* Pre-sync panel. The 📋 chip reveals a paste area; running it fetches + caches
    synced lyrics for the whole list in the background so those songs play instantly
@@ -6679,10 +6797,104 @@ els.presyncBtn.addEventListener('click', () => {
     document.body.classList.add('keybox-open'); // pin the HUD open while typing
     els.presyncInput.focus();
     refreshSyncedList(); // show the current library each time the panel opens
+    syncSpotifyPanel();
   } else {
     closePresync();
   }
 });
+
+/*
+  Import a Spotify playlist into the same paste box, rather than a parallel
+  sync path — one playlist's worth of "Artist - Title" lines land in
+  #presync-input and the existing Pre-sync button runs them, so this is
+  purely a faster way to fill that textarea, not a second pipeline to keep in
+  step with the first.
+
+  Hidden entirely until a Client ID is set (🔑 panel) — no Client ID means no
+  redirect URI Spotify would accept, so there is nothing this row could do.
+*/
+function syncSpotifyPanel() {
+  const row = document.getElementById('presync-spotify');
+  if (!row || !window.player || !window.player.spotifyStatus) return;
+  window.player.spotifyStatus().then((s) => {
+    row.hidden = !(s && s.hasClientId);
+  }).catch(() => { row.hidden = true; });
+}
+
+{
+  const connectBtn = document.getElementById('presync-spotify-connect');
+  const playlistSelect = document.getElementById('presync-spotify-playlists');
+  const importBtn = document.getElementById('presync-spotify-import');
+  const status = document.getElementById('presync-spotify-status');
+
+  async function loadSpotifyPlaylists() {
+    if (!status || !playlistSelect || !importBtn) return;
+    status.textContent = 'loading playlists…';
+    try {
+      const res = await window.player.spotifyPlaylists();
+      if (!res || res.status !== 'ok') {
+        status.textContent = (res && res.message) || 'could not load playlists';
+        return;
+      }
+      playlistSelect.innerHTML = '';
+      for (const p of res.playlists || []) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = `${p.name} (${p.trackCount})`;
+        playlistSelect.appendChild(opt);
+      }
+      const has = (res.playlists || []).length > 0;
+      playlistSelect.hidden = !has;
+      importBtn.hidden = !has;
+      status.textContent = has ? `${res.playlists.length} playlist${res.playlists.length === 1 ? '' : 's'}` : 'no playlists found';
+    } catch (err) {
+      status.textContent = (err && err.message) || 'could not load playlists';
+    }
+  }
+
+  if (connectBtn) {
+    connectBtn.addEventListener('click', async () => {
+      connectBtn.disabled = true;
+      status.textContent = 'opening Spotify in your browser…';
+      try {
+        const res = await window.player.spotifyAuthorize();
+        if (res && res.status === 'ok') {
+          status.textContent = 'connected';
+          await loadSpotifyPlaylists();
+        } else {
+          status.textContent = (res && res.message) || 'connect failed';
+        }
+      } catch (err) {
+        status.textContent = (err && err.message) || 'connect failed';
+      } finally {
+        connectBtn.disabled = false;
+      }
+    });
+  }
+
+  if (importBtn) {
+    importBtn.addEventListener('click', async () => {
+      const id = playlistSelect && playlistSelect.value;
+      if (!id) return;
+      importBtn.disabled = true;
+      status.textContent = 'importing…';
+      try {
+        const res = await window.player.spotifyPlaylistTracks(id);
+        if (res && res.status === 'ok') {
+          els.presyncInput.value = res.text || '';
+          const lines = (res.text || '').split('\n').filter(Boolean).length;
+          status.textContent = `${lines} track${lines === 1 ? '' : 's'} loaded — press Pre-sync`;
+        } else {
+          status.textContent = (res && res.message) || 'import failed';
+        }
+      } catch (err) {
+        status.textContent = (err && err.message) || 'import failed';
+      } finally {
+        importBtn.disabled = false;
+      }
+    });
+  }
+}
 
 els.presyncRun.addEventListener('click', async () => {
   const text = els.presyncInput.value.trim();
