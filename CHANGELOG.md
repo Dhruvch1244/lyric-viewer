@@ -2,6 +2,20 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.31.2 — 2026-08-16
+
+- **Removed the emoji reaction burst entirely.** The 0.31.1 fix cut its
+  per-frame font cost, but it was still reported as a heavy slowdown in
+  practice — pulled the effect rather than tuning it further. Confetti and
+  the rest of the drop celebration (ripples, dancer troupe burst, hue jump)
+  are unaffected.
+- **Backdrop perf sweep**: several small hot-path fixes in the animated
+  backdrop — skipped redundant canvas colour-state writes in the galaxy
+  field, replaced four per-frame particle/clone-list rebuilds with in-place
+  compaction, hoisted a couple of frame-constant colour computations out of
+  per-object loops, and memoised a repeated 96-bin scan in the song heatmap.
+  No visual change; less CPU spent reproducing the same frame.
+
 ## 0.31.1 — 2026-08-15
 
 - **Fixed: Spotify sign-in was invisible.** The overlay's always-on-top
