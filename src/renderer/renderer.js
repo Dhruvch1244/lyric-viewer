@@ -70,7 +70,7 @@ const els = {
   ccEarlier: document.getElementById('cc-earlier'),
   ccLater: document.getElementById('cc-later'),
   ccTranslate: document.getElementById('cc-translate'),
-  modeBtn: document.getElementById('btn-mode'),
+  wallpaperBtn: document.getElementById('btn-wallpaper'),
   posterBtn: document.getElementById('btn-poster'),
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
@@ -4510,7 +4510,7 @@ function showLocalcliOffer(detected) {
           : `${c.label} should work but is not fully verified`;
       if (c.verified) btn.classList.add('chip--recommended');
       btn.addEventListener('click', async () => {
-        await window.player.localcliConsent(c.id);
+        try { await window.player.localcliConsent(c.id); } catch { /* command may not exist on this backend yet */ }
         closeLocalcliCard();
         setStatus(`AI features will use ${c.label} from now on`);
       });
@@ -4536,7 +4536,7 @@ if (els.localcliDismiss) {
   els.localcliDismiss.addEventListener('click', async () => {
     closeLocalcliCard();
     // Remembered as a decision so it does not ask again.
-    await window.player.localcliConsent('declined');
+    try { await window.player.localcliConsent('declined'); } catch { /* command may not exist on this backend yet */ }
   });
 }
 if (window.player.onLocalcliOffer) {
@@ -5021,58 +5021,13 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /*
-  The size chip opens a menu instead of cycling. Cycling four modes with one
-  chip meant you could not jump to the one you wanted and could land on a
-  half-finished one by accident; a menu is predictable — every mode is a
-  labelled click and the current one is marked. The chip label reflects the
-  current mode so the corner still says what you are in.
+  Fullscreen-only removed bar/strip and the old cycle-through-four menu, but
+  wallpaper mode is worth keeping as a real feature — it has no "half-finished"
+  problem a menu was meant to solve, it's just on or off. One chip toggles it.
 */
-const DISPLAY_MODE_LABELS = {
-  full: '▭ Size', bar: '▬ Bar', strip: '▁ Strip',
-};
-const modeMenu = document.getElementById('mode-menu');
-
-function markModeMenu() {
-  if (!modeMenu) return;
-  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
-    item.setAttribute('aria-checked', String(item.dataset.mode === displayMode));
-  }
-}
-
-function openModeMenu() {
-  if (!modeMenu) return;
-  markModeMenu();
-  modeMenu.hidden = false;
-  document.body.classList.add('show-cursor');
-  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'true');
-}
-
-function closeModeMenu() {
-  if (!modeMenu) return;
-  modeMenu.hidden = true;
-  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'false');
-}
-
-if (els.modeBtn) {
-  els.modeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (modeMenu && modeMenu.hidden) openModeMenu(); else closeModeMenu();
-  });
-}
-
-if (modeMenu) {
-  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
-    item.addEventListener('click', () => {
-      window.player.setDisplayMode(item.dataset.mode);
-      closeModeMenu();
-    });
-  }
-  // Click anywhere else, or Esc, closes it.
-  document.addEventListener('click', (e) => {
-    if (!modeMenu.hidden && !modeMenu.contains(e.target) && e.target !== els.modeBtn) closeModeMenu();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modeMenu.hidden) closeModeMenu();
+if (els.wallpaperBtn) {
+  els.wallpaperBtn.addEventListener('click', () => {
+    window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
   });
 }
 
@@ -5255,10 +5210,7 @@ window.player.onDisplayMode(({ mode, insets }) => {
   root.setProperty('--shell-left', `${inset.left || 0}px`);
   root.setProperty('--shell-right', `${inset.right || 0}px`);
 
-  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Size';
-  markModeMenu();
-  document.body.classList.toggle('mode-bar', displayMode === 'bar');
-  document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  if (els.wallpaperBtn) els.wallpaperBtn.setAttribute('aria-pressed', String(displayMode === 'wallpaper'));
   /* Wallpaper draws the full layout — it IS the desktop, so there is as much
      room as fullscreen. It is not compact, and must not take the compact path
      that tears the GPU surfaces out of the page. */
@@ -5661,7 +5613,7 @@ async function populateLocalCliPicker() {
     btn.setAttribute('aria-pressed', String((c.id || null) === (chosen || null)));
     if (c.verified) btn.classList.add('chip--recommended');
     btn.addEventListener('click', async () => {
-      await window.player.localcliConsent(c.id);
+      try { await window.player.localcliConsent(c.id); } catch { /* command may not exist on this backend yet */ }
       populateLocalCliPicker();
       els.keyStatus.textContent = c.id ? `local AI: ${c.label}` : 'local AI off';
     });
