@@ -972,7 +972,8 @@
         }
       } else {
         // Steady state: one blit of the pre-rendered body (was ~150 fillRects).
-        ctx.imageSmoothingEnabled = false;        // keep the pixels crisp when scaled
+        // Pixels stay crisp when scaled because the caller sets
+        // ctx.imageSmoothingEnabled = false once for the whole actor pass.
         ctx.drawImage(bodyCanvas(this.look), left, top, spriteW, spriteH);
       }
 
