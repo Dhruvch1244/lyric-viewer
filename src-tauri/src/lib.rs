@@ -9,11 +9,13 @@
 //! maps onto the `#[tauri::command]` functions and the events emitted here.
 
 mod align;
+mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
 mod kugou;
 mod llm;
+mod localcli;
 mod lyrics;
 mod mood;
 mod netease;
@@ -25,7 +27,7 @@ mod wallpaper;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// True while the app is playing a local file itself. The SMTC watcher stands
@@ -37,6 +39,11 @@ static LOCAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 static WALLPAPER_ATTACHED: AtomicBool = AtomicBool::new(false);
 
+/// True while a scrollable panel has temporarily lifted the wallpaper window
+/// to the foreground so wheel/drag/focus work. See `wallpaper_interact`.
+#[cfg(windows)]
+static WALLPAPER_SURFACED: AtomicBool = AtomicBool::new(false);
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -44,7 +51,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// The PowerShell 5.1 SMTC poller, embedded so it needs no resource-path
 /// resolution and works identically in `tauri dev` and a bundled install. It is
 /// written to a temp file at startup and spawned from there.
-const SMTC_POLL_PS1: &str = include_str!("../../src/main/smtc-poll.ps1");
+const SMTC_POLL_PS1: &str = include_str!("../smtc-poll.ps1");
 
 // ---------------------------------------------------------------- preferences
 
@@ -60,6 +67,7 @@ struct Prefs {
     transcribe_language: String,
     transcribe_model: String,
     display_mode: String,
+    vocal_isolation: bool,
 }
 
 impl Default for Prefs {
@@ -72,6 +80,7 @@ impl Default for Prefs {
             transcribe_language: String::new(),
             transcribe_model: String::new(),
             display_mode: "full".into(),
+            vocal_isolation: false,
         }
     }
 }
@@ -782,6 +791,7 @@ fn get_transcribe_config(state: State<Mutex<Prefs>>) -> Value {
         "enabled": p.transcribe_enabled,
         "language": p.transcribe_language,
         "model": p.transcribe_model,
+        "vocalIsolation": p.vocal_isolation,
     })
 }
 
@@ -796,6 +806,9 @@ fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle)
     }
     if let Some(v) = cfg.get("model").and_then(|v| v.as_str()) {
         p.transcribe_model = v.to_string();
+    }
+    if let Some(v) = cfg.get("vocalIsolation").and_then(|v| v.as_bool()) {
+        p.vocal_isolation = v;
     }
     save_prefs(&app, &p);
 }
@@ -854,6 +867,26 @@ fn request_translation(app: AppHandle, state: State<Mutex<CurTrack>>) -> Value {
 #[tauri::command]
 fn get_provider_status() -> Value {
     json!({ "provider": llm::active_provider() })
+}
+
+/// Which local developer CLIs (Claude/Gemini/Ollama/`gh models`/Antigravity)
+/// are installed right now, for the local-AI picker under the 🔑 panel.
+#[tauri::command]
+fn localcli_detect() -> Value {
+    localcli::detect()
+}
+
+/// The user's current local-CLI consent: `{consented, id}`.
+#[tauri::command]
+fn localcli_status() -> Value {
+    localcli::consent()
+}
+
+/// Record (or clear, or decline) the user's local-CLI choice.
+#[tauri::command]
+fn localcli_consent(id: Option<String>) -> Value {
+    localcli::set_consent(id.as_deref());
+    localcli::consent()
 }
 
 /// Last-known auto-update state, mirrored to the renderer's update card.
@@ -1002,11 +1035,74 @@ fn set_api_key(name: String, value: String, app: AppHandle) {
     }
 }
 
-#[tauri::command]
-fn save_beatmap(_payload: Value) {}
+/// Merge fields into a track's on-disk cache record, creating it if absent.
+/// Mirrors Electron's `llmCache.merge` — only the given keys are touched, so
+/// lyrics, a beat map and a heat map can each land independently as they're
+/// learned, without clobbering each other.
+fn merge_track_cache(app: &AppHandle, key: &str, patch: &Value) {
+    let Some(path) = lyrics_cache_path(app, key) else { return };
+    let mut cached: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| json!({}));
+    if let (Some(obj), Some(patch_obj)) = (cached.as_object_mut(), patch.as_object()) {
+        for (k, v) in patch_obj {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+}
 
+/// A track's title/artist out of the `{track, beatmap|heatmap}` payload
+/// shape tauri-shim.js sends, or None if either is missing.
+fn track_name_from_payload(payload: &Value) -> Option<(&str, &str)> {
+    let t = payload.get("track")?.as_object()?;
+    let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let artist = t.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+    if title.is_empty() && artist.is_empty() {
+        return None;
+    }
+    Some((title, artist))
+}
+
+/// Persist a beat map the renderer learned from live audio, keyed by track —
+/// "learn once, replay next time" needs this to actually land on disk.
 #[tauri::command]
-fn save_heatmap(_payload: Value) {}
+fn save_beatmap(payload: Value, app: AppHandle) -> Value {
+    let beatmap = payload.get("beatmap").cloned();
+    let (Some((title, artist)), Some(beatmap)) = (track_name_from_payload(&payload), beatmap)
+    else {
+        return json!({ "status": "ignored" });
+    };
+    let key = track_key(artist, title);
+    merge_track_cache(&app, &key, &json!({ "beatmap": beatmap, "title": title, "artist": artist }));
+    json!({ "status": "ok" })
+}
+
+/// Persist the heat map (energy arc binned against position) the renderer
+/// learned from live audio, keyed by track. Separate from the beat map
+/// because it's learned at a different rate and answers a different
+/// question — storing the arc is what makes it a property of the SONG
+/// rather than of one playthrough.
+#[tauri::command]
+fn save_heatmap(payload: Value, app: AppHandle) -> Value {
+    let heatmap = payload.get("heatmap").cloned();
+    let has_bins = heatmap
+        .as_ref()
+        .and_then(|h| h.get("bins"))
+        .map(|b| b.is_array())
+        .unwrap_or(false);
+    let (Some((title, artist)), Some(heatmap)) = (track_name_from_payload(&payload), heatmap)
+    else {
+        return json!({ "status": "ignored" });
+    };
+    if !has_bins {
+        return json!({ "status": "ignored" });
+    }
+    let key = track_key(artist, title);
+    merge_track_cache(&app, &key, &json!({ "heatmap": heatmap, "title": title, "artist": artist }));
+    json!({ "status": "ok" })
+}
 
 /// Update the tray tooltip with the current song + any background work, so the
 /// chromeless overlay has somewhere that says what it is doing.
@@ -1068,9 +1164,24 @@ fn report_transcribe_progress(app: AppHandle, data: Value) {
     let _ = app.emit("transcribe-progress", data);
 }
 
+/// A cached lyrics payload's `source` is a bare string ("whisper" or
+/// "lrclib-plain+whisper") only when THIS function produced it; every real
+/// fetch (LRCLIB/NetEase/Kugou) stores an object. Used to tell "already has
+/// the correct synced lyrics" apart from "was itself transcribed".
+fn source_is_whisper_derived(source: &Value) -> bool {
+    matches!(source.as_str(), Some("whisper") | Some("lrclib-plain+whisper"))
+}
+
 /// Finalise a webview Whisper result: align the raw transcription to the real
 /// plain lyrics where they exist (the correct words on the transcription's
 /// clock), cache it as normal synced lyrics for the next play, and report done.
+///
+/// Every track with `hasWordTimings: false` — which today is every track,
+/// since nothing sets it true yet — makes the renderer listen-and-transcribe
+/// once ♫ has heard enough of it (see `beginTranscriptionListen` in
+/// renderer.js). Without this guard that would silently overwrite a track
+/// that already has correct LRCLIB-synced lyrics with a re-derived,
+/// Whisper-accuracy version on every single play.
 #[tauri::command]
 fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
@@ -1084,6 +1195,23 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         return json!({ "status": "empty" });
     }
     let key = track_key(&t.artist, &t.title);
+
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(existing) = serde_json::from_str::<Value>(&text) {
+                let has_cues = existing.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+                let already_synced = has_cues
+                    && !source_is_whisper_derived(existing.get("source").unwrap_or(&Value::Null));
+                if already_synced {
+                    let _ = app.emit(
+                        "transcribe-progress",
+                        json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                    );
+                    return json!({ "status": "skipped", "reason": "already-synced" });
+                }
+            }
+        }
+    }
 
     // Prefer the real words on the transcription's timing when we can anchor
     // enough of them; otherwise keep the honest raw transcription.
@@ -1117,6 +1245,152 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     json!({ "status": "ok", "lines": lines })
 }
 
+/// Bumped on every `presync_list` call so an in-flight run can tell it has
+/// been superseded by a newer paste and stop early instead of racing it.
+static PRESYNC_TOKEN: AtomicU64 = AtomicU64::new(0);
+
+/// Parse one pasted playlist line into (artist, title). Accepts
+/// "Artist - Title" (hyphen or en/em dash); a line with no separator is
+/// treated as a bare title.
+fn parse_track_line(line: &str) -> Option<(String, String)> {
+    let s = line.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let re = regex::Regex::new(r"\s+[-\u{2013}\u{2014}]\s+").unwrap();
+    if let Some(m) = re.find(s) {
+        let artist = s[..m.start()].trim().to_string();
+        let title = s[m.end()..].trim().to_string();
+        return Some((artist, title));
+    }
+    Some((String::new(), s.to_string()))
+}
+
+/// Fetch + cache synced lyrics for a single pre-sync track, skipping ones
+/// already on disk. Mirrors `resolve_lyrics`'s fetch chain, minus the SMTC
+/// event emission — this runs ahead of any playback.
+fn presync_one(app: &AppHandle, artist: &str, title: &str) -> &'static str {
+    let key = track_key(artist, title);
+    if let Some(path) = lyrics_cache_path(app, &key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                if cached.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+                    return "cached";
+                }
+            }
+        }
+    }
+    let track = lyrics::Track { title: title.to_string(), artist: artist.to_string(), duration_ms: 0 };
+    let found = lyrics::fetch_synced(&track)
+        .or_else(|| netease::fetch_synced(&track))
+        .or_else(|| kugou::fetch_synced(&track));
+    match found {
+        Some((cues, source)) if !cues.is_empty() => {
+            let payload = json!({
+                "title": title, "artist": artist, "cues": cues,
+                "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+                "source": source, "status": "ok", "indic": false, "hasWordTimings": false,
+            });
+            if let Some(path) = lyrics_cache_path(app, &key) {
+                let _ = std::fs::write(&path, serde_json::to_string(&payload).unwrap_or_default());
+            }
+            "ok"
+        }
+        _ => "not-found",
+    }
+}
+
+/// Bulk pre-sync: fetch + cache synced lyrics for a pasted "Artist - Title"
+/// list, so those songs play instantly and offline later. Runs sequentially
+/// (politely — LRCLIB gets a short gap between requests) and streams
+/// `presync-progress` events; a fresh call supersedes any run in flight.
+#[tauri::command]
+fn presync_list(text: String, app: AppHandle) -> Value {
+    let tracks: Vec<(String, String)> = text.lines().filter_map(parse_track_line).collect();
+    let token = PRESYNC_TOKEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let total = tracks.len();
+
+    if total == 0 {
+        let _ = app.emit(
+            "presync-progress",
+            json!({ "done": 0, "total": 0, "status": "done", "summary": "nothing to sync" }),
+        );
+        return json!({ "status": "empty" });
+    }
+
+    let (mut done, mut synced, mut cached, mut missed) = (0usize, 0usize, 0usize, 0usize);
+    for (artist, title) in &tracks {
+        if PRESYNC_TOKEN.load(Ordering::SeqCst) != token {
+            return json!({ "status": "cancelled" });
+        }
+        let label = if artist.is_empty() { title.clone() } else { format!("{artist} - {title}") };
+        let _ = app.emit(
+            "presync-progress",
+            json!({ "done": done, "total": total, "status": "running", "current": label }),
+        );
+        match presync_one(&app, artist, title) {
+            "ok" => synced += 1,
+            "cached" => cached += 1,
+            _ => missed += 1,
+        }
+        done += 1;
+        std::thread::sleep(std::time::Duration::from_millis(150)); // be polite to LRCLIB
+    }
+
+    let summary = format!("{synced} synced · {cached} already cached · {missed} not found");
+    let _ = app.emit(
+        "presync-progress",
+        json!({ "done": done, "total": total, "status": "done", "summary": summary }),
+    );
+    json!({ "status": "ok", "synced": synced, "cached": cached, "missed": missed })
+}
+
+/// Temporarily surface the wallpaper window as a real interactive overlay.
+///
+/// A window reparented behind the desktop icons gets no wheel, no drag and no
+/// real focus — pointer forwarding only synthesizes clicks/hover, which is
+/// unusable for a scrolling panel (library, MilkDrop browser, poster picker).
+/// Rather than hand-rolling more forwarded event types, briefly lift the
+/// whole window to the foreground while such a panel is open: every kind of
+/// input then works because it is a normal top-level window again. It settles
+/// back behind the icons when the panel closes. Mirrors Electron's
+/// `setWallpaperInteractive`; the renderer drives this via `syncWallpaperInteract`.
+#[cfg(windows)]
+#[tauri::command]
+fn wallpaper_interact(on: bool, app: AppHandle, state: State<Mutex<Prefs>>) {
+    let is_wallpaper = state.lock().unwrap().display_mode == "wallpaper";
+    if !is_wallpaper || on == WALLPAPER_SURFACED.load(Ordering::Relaxed) {
+        return;
+    }
+    let (Some(hwnd), Some(window)) = (window_hwnd(&app), app.get_webview_window("main")) else {
+        return;
+    };
+    WALLPAPER_SURFACED.store(on, Ordering::Relaxed);
+
+    if on {
+        // Stopping forwarding is implicit: the loop in start_pointer_forwarding
+        // skips every tick WALLPAPER_ATTACHED is false.
+        WALLPAPER_ATTACHED.store(false, Ordering::Relaxed);
+        if let Err(e) = wallpaper::detach(hwnd) {
+            eprintln!("[wallpaper] interact-detach failed: {e}");
+        }
+        let _ = window.set_always_on_top(true);
+    } else {
+        let _ = window.set_always_on_top(false);
+        match wallpaper::attach(hwnd) {
+            Ok(()) => WALLPAPER_ATTACHED.store(true, Ordering::Relaxed),
+            Err(e) => {
+                // Could not settle back behind the icons; staying surfaced
+                // beats the window vanishing behind everything else.
+                eprintln!("[wallpaper] interact-reattach failed: {e}");
+                let _ = window.set_always_on_top(true);
+                WALLPAPER_SURFACED.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
 #[tauri::command]
 fn wallpaper_interact(_on: bool) {}
 
@@ -1199,6 +1473,23 @@ fn set_local_track(track: Value, app: AppHandle) {
 fn end_local_playback(app: AppHandle) {
     LOCAL_ACTIVE.store(false, Ordering::Relaxed);
     let _ = app.emit("idle", ());
+}
+
+/// Decode + measure a local file natively (off the UI thread), returning the
+/// per-window energy envelopes + bass onsets the renderer feeds into the heat
+/// map and tempo estimator — so a local song's shape is known on the first play
+/// with no Web Audio decode stalling the opening frames.
+#[tauri::command]
+fn analyze_local_file(path: String) -> Value {
+    let (samples, sample_rate) = match analysis::decode_to_mono(&path) {
+        Some(pair) => pair,
+        None => return json!({ "ok": false }),
+    };
+    let a = analysis::analyse_samples(&samples, sample_rate);
+    let mut out = serde_json::to_value(&a).unwrap_or(json!({}));
+    out["ok"] = json!(true);
+    out["durationMs"] = json!((samples.len() as f64 / sample_rate as f64) * 1000.0);
+    out
 }
 
 /// Audio file extensions the pickers and folder scan accept.
@@ -1371,11 +1662,11 @@ pub fn run() {
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
-            // Load persisted prefs into shared state. Only Fullscreen mode
-            // remains — coerce any saved bar/strip/wallpaper value so no one
-            // boots into a removed mode.
+            // Load persisted prefs into shared state. Bar/strip are gone for
+            // good (fullscreen-only); wallpaper mode stays a real option, so
+            // only coerce a legacy bar/strip value, not wallpaper.
             let mut prefs = load_prefs(&handle);
-            if prefs.display_mode != "full" {
+            if prefs.display_mode != "full" && prefs.display_mode != "wallpaper" {
                 prefs.display_mode = "full".into();
             }
             let mode = prefs.display_mode.clone();
@@ -1387,11 +1678,20 @@ pub fn run() {
             load_api_keys(&handle);
             check_for_update(handle.clone());
 
-            // Fill the primary monitor at the remembered display mode.
-            size_overlay(&handle, &mode);
+            // Fill the primary monitor at the remembered display mode. If that
+            // mode is wallpaper, reparent immediately — apply_wallpaper only
+            // fires on a *transition*, and startup has no prior mode to
+            // transition from.
+            size_overlay(&handle, if mode == "wallpaper" { "full" } else { &mode });
+            if mode == "wallpaper" {
+                apply_wallpaper(&handle, "full", "wallpaper");
+            }
 
-            // Begin streaming "now playing" from Windows.
+            // Begin streaming "now playing" from Windows, and (Windows only)
+            // the pointer-forwarding loop wallpaper mode needs for clicks to
+            // reach a window reparented behind the desktop icons.
             start_smtc(handle.clone());
+            start_pointer_forwarding(handle.clone());
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -1418,6 +1718,9 @@ pub fn run() {
             set_transcribe_config,
             request_translation,
             get_provider_status,
+            localcli_detect,
+            localcli_status,
+            localcli_consent,
             get_update_state,
             update_action,
             list_synced,
@@ -1429,6 +1732,7 @@ pub fn run() {
             set_api_key,
             save_beatmap,
             save_heatmap,
+            presync_list,
             report_jobs,
             wallpaper_interact,
             artwork_candidates,
@@ -1439,6 +1743,7 @@ pub fn run() {
             read_local_file,
             set_local_track,
             end_local_playback,
+            analyze_local_file,
             transcribe_audio,
             report_transcribe_progress,
             finalize_transcription,

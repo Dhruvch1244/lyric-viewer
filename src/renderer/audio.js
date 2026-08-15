@@ -3,9 +3,13 @@
 /*
   Real audio-reactive engine.
 
-  Captures the system audio via Electron's loopback path (the main process wires
-  setDisplayMediaRequestHandler → audio: 'loopback'), runs it through a Web Audio
-  AnalyserNode, and derives a compact reactive envelope every frame:
+  Captures system audio via native WASAPI loopback (Rust, see audio.rs) as the
+  primary path, falling back to getDisplayMedia's screen-share picker when
+  native capture is unavailable or silent — Electron could auto-approve that
+  picker via setDisplayMediaRequestHandler, but WebView2 has no equivalent
+  bypass wired up, so the fallback shows a real prompt on Tauri. Either path
+  runs through a Web Audio AnalyserNode, deriving a compact reactive envelope
+  every frame:
 
     level  — overall loudness            (0..1)
     bass   — sub/kick band               (0..1)

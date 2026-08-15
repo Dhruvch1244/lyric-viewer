@@ -224,9 +224,9 @@
     post({ type: 'render', t, elapsed: elapsedSeconds });
   }
 
-  /** @param {number} w @param {number} h CSS pixels */
-  function resize(w, h) {
-    post({ type: 'resize', width: w, height: h });
+  /** @param {number} w @param {number} h CSS pixels @param {boolean} [lite] Lite mode — render at a lower internal resolution */
+  function resize(w, h, lite) {
+    post({ type: 'resize', width: w, height: h, lite: Boolean(lite) });
   }
 
   /**

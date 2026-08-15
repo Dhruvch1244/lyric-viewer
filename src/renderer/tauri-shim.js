@@ -21,9 +21,8 @@
 (function () {
   const T = window.__TAURI__;
   if (!T) {
-    // Not running under Tauri — this is the Electron build (whose preload has
-    // already installed window.player) or a plain browser. Leave window.player
-    // untouched; installing our inert version would clobber Electron's real one.
+    // Not running under Tauri — a plain browser (e.g. the web demo, which
+    // doesn't load this shim). Leave window.player untouched.
     return;
   }
 
@@ -120,6 +119,9 @@
     openLocalFiles: () => call('open_local_files', {}, []),
     openLocalFolder: () => call('open_local_folder', {}, []),
     readLocalFile: (filePath) => call('read_local_file', { filePath }),
+    /* Native per-song analysis (symphonia decode + envelope/onset DSP) so the
+       renderer doesn't decode + crunch the whole track on the UI thread. */
+    analyzeLocalFile: (path) => call('analyze_local_file', { path }, { ok: false }),
     setLocalTrack: (track) => call('set_local_track', { track }),
     endLocalPlayback: () => call('end_local_playback', {}),
 
@@ -147,7 +149,22 @@
           return { status: 'error' };
         }
         await report({ stage: 'starting' });
-        const cues = await window.Whisper.transcribe(payload.pcm, {
+        let pcm = payload.pcm;
+        // Experimental, off by default (see demucs.js for why): isolate
+        // vocals before transcribing rather than feeding Whisper the full
+        // mix. A failure here falls back to the raw signal rather than
+        // losing the transcription entirely.
+        if (payload.vocalIsolation && window.Demucs) {
+          try {
+            pcm = await window.Demucs.isolateVocals(pcm, 16000, {
+              outputRate: 16000,
+              onProgress: (p) => report({ stage: 'isolating-vocals', pct: p.pct }),
+            });
+          } catch (err) {
+            console.warn('[demucs] vocal isolation failed, transcribing the raw mix:', err && err.message);
+          }
+        }
+        const cues = await window.Whisper.transcribe(pcm, {
           language: payload.language,
           onProgress: (p) => report(p),
         });
@@ -161,7 +178,7 @@
         return { status: 'error' };
       }
     },
-    getTranscribeConfig: () => call('get_transcribe_config', {}, { enabled: true, language: '', model: '' }),
+    getTranscribeConfig: () => call('get_transcribe_config', {}, { enabled: true, language: '', model: '', vocalIsolation: false }),
     setTranscribeConfig: (cfg) => call('set_transcribe_config', { cfg }),
   };
 })();

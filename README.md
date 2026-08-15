@@ -40,14 +40,19 @@ file playback landed in 0.18.0.
 ## How it works
 
 ```
-SMTC (Windows)  ──►  smtc-poll.ps1  ──►  smtc.js  ──►  main.js  ──►  renderer
- any media app        JSON stream        staleness-     lyric        fullscreen
-                                         corrected pos   matching     word emphasis
+SMTC (Windows)  ──►  smtc-poll.ps1  ──►  Rust (lib.rs)  ──►  webview renderer
+ any media app        JSON stream        staleness-          lyric matching,
+                                         corrected pos        fullscreen word emphasis
 
-local file      ──►  read + ID3    ──►  main.js  ──►  renderer ──► analyze.js
- your library                           same pipeline   plays it    whole song
-                                                                    measured up front
+local file      ──►  read + decode  ──►  Rust (lib.rs)  ──►  renderer ──► analyze.js
+ your library         (symphonia)        same pipeline        plays it    whole song
+                                                                          measured up front
 ```
+
+The app is a Tauri shell: Rust owns the window, SMTC polling, lyric/artwork
+lookups, the LLM calls and local-file decode; the webview (WebView2) renders
+everything you see, same as before. There is no Node/Electron process at
+runtime — `node`/`npm` are only needed to develop and build it.
 
 - **Detection** uses the Windows System Media Transport Controls (SMTC). One API
   covers every media app and gives title, artist, playback status, and position.
@@ -60,8 +65,10 @@ local file      ──►  read + ID3    ──►  main.js  ──►  renderer
 
 ## Requirements
 
-- Windows 10/11
-- Node.js 18+
+- Windows 10/11 (macOS/Linux build and run too, minus the Windows-only bits —
+  SMTC now-playing detection, wallpaper mode, WASAPI capture — see
+  `.github/workflows/release.yml`)
+- Node.js 18+ and the [Rust toolchain](https://rustup.rs/) (stable)
 - **Windows PowerShell 5.1** (`powershell.exe`) must be present. PowerShell 7 (`pwsh`)
   removed the WinRT type projection the SMTC poller depends on, so 7 alone is not enough.
   5.1 ships with Windows by default.
@@ -70,10 +77,10 @@ local file      ──►  read + ID3    ──►  main.js  ──►  renderer
 
 ```sh
 npm install
-npm start
+npm run tauri:dev
 ```
 
-Diagnose detection on its own (prints one SMTC sample as JSON):
+Diagnose SMTC detection on its own (prints one sample as JSON):
 
 ```sh
 npm run probe
@@ -82,16 +89,13 @@ npm run probe
 ## Build a desktop app
 
 ```sh
-npm run package
+npm run tauri:build
 ```
 
-Produces `dist/LyricPlayer-win32-x64/LyricPlayer.exe`.
-
-> **asar must stay disabled** (`--asar=false` in the package script). The SMTC
-> poller is launched as `powershell.exe -File smtc-poll.ps1`, and PowerShell — an
-> external process — cannot read a file packed inside `app.asar`. With asar on,
-> detection silently fails. `smtc.js` also redirects to `app.asar.unpacked` as a
-> defensive fallback if a future build re-enables asar with the `.ps1` unpacked.
+Produces a signed-by-updater (not Authenticode-signed — see
+`.github/workflows/release.yml`) NSIS installer under
+`src-tauri/target/release/bundle/nsis/`. Tagged pushes (`v*`) build and publish
+this automatically for Windows, macOS and Linux via GitHub Actions.
 
 ## Performance
 
@@ -119,7 +123,6 @@ was a colour conversion per particle, not a canvas call).
 | `Ctrl+Alt+←` / `Ctrl+Alt+→` | Nudge lyric sync 100ms earlier / later |
 | `Ctrl+Alt+0` | Reset sync offset |
 | `Ctrl+Alt+H` | Show / hide the player |
-| `Ctrl+Alt+M` | Cycle size: fullscreen → floating bar → taskbar strip → **desktop wallpaper** |
 | Move the mouse | Reveal the bottom control bar (auto-hides after 2.5s) |
 | `अ` chip | Toggle Latin / Devanagari script |
 | `EN` chip | Toggle English translation line |
@@ -132,12 +135,13 @@ was a colour conversion per particle, not a canvas call).
 | `⚡` chip | Lite mode — fewer effects, higher frame rate |
 | `✳` chip | Browse the **1754 MilkDrop presets** by their pictures — like one, hide one, pin one to a song |
 | `▣` chip | Cover art — pick a different one when the search got it wrong |
-| `▭` chip | The same size cycle as `Ctrl+Alt+M` |
+| `🖥 Wallpaper` chip | Toggle between fullscreen and desktop-wallpaper mode |
 
-**Wallpaper mode.** The fourth size renders *behind* your desktop icons instead
-of over everything, so the app is simply on rather than something you launch.
-It stays interactive: a window parented into the desktop gets no mouse input
-from Windows at all, so the pointer is forwarded and every chip still works.
+**Wallpaper mode.** Renders *behind* your desktop icons instead of over
+everything, so the app is simply on rather than something you launch. It stays
+interactive: a window parented into the desktop gets no mouse input from
+Windows at all, so the pointer is forwarded, and any panel that needs to
+scroll or take focus briefly lifts the window to the foreground while it's open.
 
 **MilkDrop presets (`✳` chip).** 1754 of them, from the Butterchurn/MilkDrop
 ecosystem. Names written by strangers in 2003 tell you nothing about what a
@@ -211,10 +215,10 @@ change always reads.
 **Sync offsets are saved per track.** SMTC's reported position drifts from actual
 audio by roughly 100–500ms depending on the source app and audio stack. The same
 track tends to need the same correction, so once you dial it in, it sticks — stored
-in `settings.json` under Electron's `userData` directory.
+in `settings.json` under `%APPDATA%\com.dhruv.lyricoverlay\`.
 
 Timestamp accuracy is also improved at the source: the poller reports how *old* each
-position reading is (`stalenessMs`), and the main process projects forward from that
+position reading is (`stalenessMs`), and the Rust backend projects forward from that
 rather than trusting a value that may be seconds stale.
 
 ## Hindi / Punjabi
@@ -239,8 +243,8 @@ Devanagari renders with **Nirmala UI**, which ships with Windows.
 
 A second, italic line beneath the running lyric shows the **English translation**.
 It auto-appears for tracks detected as Hindi or Punjabi (romanized or native
-script — see `detectIndic()` in `src/main/lyrics.js`); English songs are correctly
-skipped so no API call is wasted. Toggle it on any track with the `EN` chip.
+script); English songs are correctly skipped so no API call is wasted. Toggle
+it on any track with the `EN` chip.
 
 This is **translation** (meaning), distinct from the Devanagari toggle
 (transliteration / script).
@@ -252,14 +256,16 @@ credential is present — no code change, no hardcoded keys:
 
 | Env var | Provider | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | Google Gemini | Free tier is plenty for this — one call per new song, cached |
-| `ANTHROPIC_API_KEY` (or `ant auth login`) | Claude | |
-| *(neither set)* | — | Features are simply unavailable; lyrics still work |
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Google Gemini | Free tier is plenty for this — one call per new song, cached |
+| `GROQ_API_KEY` | Groq | OpenAI-compatible, tried if Gemini isn't configured |
+| `HF_API_KEY` (or `HUGGINGFACE_API_KEY`/`HF_TOKEN`) | HuggingFace router | Needs the "Make calls to Inference Providers" token scope |
+| *(a local CLI, via the 🔑 panel's "Local AI" picker)* | Claude / Gemini / Ollama / `gh models` / Antigravity CLI | Last resort, tried only once you've explicitly opted in — spends your own machine/tokens |
+| *(none of the above)* | — | Features are simply unavailable; lyrics still work |
 
-Gemini takes precedence when both are set; override with
-`LYRIC_OVERLAY_PROVIDER=gemini|claude`. Set the key in your environment before
-launching — **never commit a key.** If you have ever pasted a key into a chat or
-file, rotate it.
+Keys can also be pasted into the in-app 🔑 panel instead of set as env vars —
+set once, no rebuild needed. Precedence is Gemini → Groq → HuggingFace → local
+CLI; override with `LYRIC_OVERLAY_PROVIDER=gemini|groq|huggingface`. **Never
+commit a key.** If you have ever pasted a key into a chat or file, rotate it.
 
 Results are cached per song, so each track costs at most one transliteration and
 one translation call for its whole lifetime in the cache.
@@ -341,29 +347,25 @@ The only legitimate path for uncovered tracks is transcription from actual audio
   drop**, drawn as pixel art on the backdrop canvas. See `src/renderer/sprites.js`
   — the registry is one array; add a `{ match, label, members }` entry to brand a
   new artist.
-- **Never goes static.** `backgroundThrottling: false` on the window keeps the
-  render loop at full speed even when the overlay isn't the focused window (e.g.
-  while Spotify is in front) — Chromium otherwise throttles background windows to
-  near-zero FPS. Both render loops are also wrapped so an error can't freeze them.
+- **Never goes static.** The render loop stays at full speed even when the
+  overlay isn't the focused window (e.g. while Spotify is in front) — Chromium
+  otherwise throttles background windows to near-zero FPS. Both render loops
+  are also wrapped so an error can't freeze them.
 
-## Reactive visuals — today vs. later
+## Reactive visuals
 
-The backdrop and font react to the **input we currently have**: per-track colour
-palette, per-line pulse, and cadence-driven intensity. This tracks dense rap
-delivery well.
-
-It does **not** yet react to the audio itself — an instrumental **EDM drop** has
-no lyrics for the cadence heuristic to read, so it can't drive the visuals there.
-Real drop/beat detection needs the audio-capture layer (below). When that lands,
-the same intensity signal gets a true audio source and the auto-font + starfield
-react to actual drops and beats.
+The backdrop reacts to real audio now, not just lyric timing: native WASAPI
+loopback capture (`♫` chip) feeds a measured tempo, kick/drop detection, and a
+learned per-song energy map, so build-ups and drops land on actual instrumental
+hits — including EDM tracks with no lyrics for a cadence heuristic to read.
+Local file playback measures the whole track up front instead, so this all
+works from the first play with no capture and no permission prompt.
 
 ## Not built yet
 
-- **Audio capture (WASAPI loopback) + FFT** — prerequisite for true audio-reactive
-  visuals. Build-up/drop moments and the dancing characters already exist but are
-  driven by *lyric timing*, not audio; this layer would let them react to actual
-  instrumental drops and beats (e.g. EDM tracks with no lyrics for the heuristic).
+- Vocal isolation before transcription is shipped but experimental/unverified
+  (see the 🔑 panel) — aimed at fast rap and dense EDM mixes where Whisper's
+  transcription accuracy drops the most
+- Word-level sync (not just line-level) for tracks that already have synced
+  lyrics from LRCLIB, rather than only ones that went through transcription
 - Genre-aware theming (EDM vs hip-hop) driven by actual audio, not just palette
-- Persistent listening library and song history
-- ASR fallback for tracks with no LRCLIB entry

@@ -117,6 +117,7 @@
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
+        <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons" aria-pressed="false">🖥 Wallpaper</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
@@ -152,6 +153,32 @@
           <span class="keybox__label">Launch on Windows startup</span>
           <button id="keybox-autostart" class="chip" type="button"
                   aria-pressed="false" title="Start Lyric Overlay automatically when Windows starts">Off</button>
+        </div>
+
+        <!-- Whisper only auto-detects English; leaving language unset on a
+             Hindi/Punjabi track decodes the vocals as English gibberish. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Transcription language (for songs with no synced lyrics)</span>
+          <select id="keybox-whisper-lang" class="chip" title="Language Whisper should expect when transcribing from audio">
+            <option value="">Auto-detect (defaults to English)</option>
+            <option value="english">English</option>
+            <option value="hindi">Hindi</option>
+            <option value="punjabi">Punjabi</option>
+            <option value="urdu">Urdu</option>
+            <option value="spanish">Spanish</option>
+            <option value="french">French</option>
+            <option value="korean">Korean</option>
+            <option value="japanese">Japanese</option>
+          </select>
+        </div>
+
+        <!-- Experimental, off by default — isolates vocals from the mix
+             before transcribing (see demucs.js). Untested against the real
+             model; may just cost extra download/CPU for no gain. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Isolate vocals before transcribing (experimental)</span>
+          <button id="keybox-vocal-isolation" class="chip" type="button"
+                  aria-pressed="false" title="Try to separate vocals from the mix before Whisper transcribes — may improve accuracy on dense mixes, unverified">Off</button>
         </div>
 
         <div class="keybox__local">
@@ -358,6 +385,11 @@
     <!-- Webview Whisper (transformers.js/WASM). Lazy — nothing loads until a song
          actually needs transcribing. -->
     <script src="whisper.js"></script>
+    <!-- Optional vocal-isolation pre-pass (onnxruntime-web, separate from
+         whisper.js's transformers.js pipeline — see demucs.js for why). Also
+         lazy; only loads its model when the toggle is on and a transcription
+         actually runs. -->
+    <script src="demucs.js"></script>
     <script src="milkdrop.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>

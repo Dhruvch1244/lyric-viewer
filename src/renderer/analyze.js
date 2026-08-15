@@ -184,8 +184,24 @@
     const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const mono = toMono(buffer);
     const result = analyseSamples(mono, buffer.sampleRate);
-    const durationMs = buffer.duration * 1000;
+    const summary = applyAnalysis(result, buffer.duration * 1000);
+    const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - started;
+    return { ...summary, ms };
+  }
 
+  /**
+   * Load an already-computed analysis (from anywhere — the JS pass above, or the
+   * native Rust `analyze_local_file`) into the learned state: fill the heat map
+   * and estimate tempo. `result` needs `windowMs` + the `level/bass/treble`
+   * envelopes + `onsets`; the envelopes may be plain arrays (JSON from Rust) or
+   * typed arrays — both index the same.
+   *
+   * @param {{windowMs:number, level:number[], bass:number[], treble:number[], onsets:number[]}} result
+   * @param {number} durationMs
+   * @returns {{windows:number, onsets:number, bpm:number|null}}
+   */
+  function applyAnalysis(result, durationMs) {
+    if (!result || !result.level) return { windows: 0, onsets: 0, bpm: null };
     if (window.HeatMap) {
       window.HeatMap.start(durationMs);
       for (let w = 0; w < result.level.length; w += 1) {
@@ -194,19 +210,15 @@
           bass: result.bass[w],
           treble: result.treble[w],
         });
-        // A bin is only "known" once it has MIN_SAMPLES; windows are ~23ms and
-        // bins are seconds wide, so this is satisfied many times over.
       }
     }
-
     let bpm = null;
-    if (window.Tempo && result.onsets.length) {
-      const est = window.Tempo.estimate(result.onsets);
+    const onsets = result.onsets || [];
+    if (window.Tempo && onsets.length) {
+      const est = window.Tempo.estimate(onsets);
       if (est) bpm = est.bpm;
     }
-
-    const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - started;
-    return { windows: result.level.length, onsets: result.onsets.length, bpm, ms };
+    return { windows: result.level.length, onsets: onsets.length, bpm };
   }
 
   /**
@@ -228,7 +240,7 @@
     return out;
   }
 
-  const api = { analyseSamples, findOnsets, loadFromBuffer, WINDOW_MS, ONSET_THRESHOLD };
+  const api = { analyseSamples, findOnsets, loadFromBuffer, applyAnalysis, WINDOW_MS, ONSET_THRESHOLD };
 
   // Browser IIFE by default; also requireable so the arithmetic can be tested
   // in Node with no browser and no AudioContext.

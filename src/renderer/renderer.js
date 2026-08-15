@@ -70,7 +70,7 @@ const els = {
   ccEarlier: document.getElementById('cc-earlier'),
   ccLater: document.getElementById('cc-later'),
   ccTranslate: document.getElementById('cc-translate'),
-  modeBtn: document.getElementById('btn-mode'),
+  wallpaperBtn: document.getElementById('btn-wallpaper'),
   posterBtn: document.getElementById('btn-poster'),
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
@@ -374,8 +374,8 @@ function buildWordTimings(text, startMs, endMs) {
 /**
  * When a line stops being sung (ms).
  *
- * `endMs` is real data — the LRC gap marker that closes the line (see
- * normaliseCues in src/main/lyrics.js). Only when a line has none do we fall
+ * `endMs` is real data — the LRC gap marker that closes the line, parsed on
+ * the Rust side (src-tauri/src/lyrics.rs). Only when a line has none do we fall
  * back to "it runs until the next line starts", which overstates every line
  * followed by an instrumental stretch.
  *
@@ -618,8 +618,8 @@ function renderWords(el, index) {
   /*
     Measured timings win. `cue.words` is present when this song has been through
     word-level alignment (correct words from the lyric source, measured timing
-    from Whisper — see src/main/wordalign.js). Only when that is absent do we
-    fall back to estimating the split from syllables.
+    from Whisper) — not yet ported to the Rust backend, so this never fires
+    today. Falls back to estimating the split from syllables (wordtiming.js).
   */
   const timings = Array.isArray(cue.words) && cue.words.length > 0
     ? cue.words
@@ -2286,8 +2286,8 @@ function applyEngine(preset, now, dt, w, h) {
     if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
-      window.MilkDrop.resize(w, h);
-      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}`;
+      window.MilkDrop.resize(w, h, liteMode);
+      milkdropSize = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
       // Cut rather than blend on the way in: there is nothing to blend FROM,
       // and a fade from black reads as the app being slow to start. The target
       // respects a pin and a session choice — see milkdropTargetFor for why
@@ -2360,11 +2360,13 @@ function applyEngine(preset, now, dt, w, h) {
   }
 
   // Resize crosses a frame boundary, so it is sent only on a real change rather
-  // than every frame — the CSS already stretches the frame itself.
-  const size = `${Math.floor(w)}x${Math.floor(h)}`;
+  // than every frame — the CSS already stretches the frame itself. Lite mode
+  // is folded into the same key so toggling it mid-song re-fires this exactly
+  // like a real size change, dropping (or restoring) MilkDrop's render res.
+  const size = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
   if (size !== milkdropSize) {
     milkdropSize = size;
-    window.MilkDrop.resize(w, h);
+    window.MilkDrop.resize(w, h, liteMode);
   }
 
   window.MilkDrop.render(dt / 1000);
@@ -3772,9 +3774,10 @@ function setJob(name, label) {
   /*
     Mirror the job map to the tray. The HUD chip is inside a bar that stays
     invisible until the cursor moves, so work taking minutes could finish with
-    nothing on screen having said it started. The tray tooltip always shows it,
-    and the few jobs worth interrupting for raise a notification (see
-    NOTIFY_ON_DONE in src/main/tray.js).
+    nothing on screen having said it started. The tray tooltip always shows
+    it (report_jobs in src-tauri/src/lib.rs) — Electron's version also raised
+    a desktop notification for the jobs worth interrupting for; that half
+    isn't ported.
   */
   if (window.player.reportJobs) {
     const finished = wasRunning && !label ? { id: name, label: jobDoneLabel(name) } : null;
@@ -4510,7 +4513,7 @@ function showLocalcliOffer(detected) {
           : `${c.label} should work but is not fully verified`;
       if (c.verified) btn.classList.add('chip--recommended');
       btn.addEventListener('click', async () => {
-        await window.player.localcliConsent(c.id);
+        try { await window.player.localcliConsent(c.id); } catch { /* command may not exist on this backend yet */ }
         closeLocalcliCard();
         setStatus(`AI features will use ${c.label} from now on`);
       });
@@ -4536,7 +4539,7 @@ if (els.localcliDismiss) {
   els.localcliDismiss.addEventListener('click', async () => {
     closeLocalcliCard();
     // Remembered as a decision so it does not ask again.
-    await window.player.localcliConsent('declined');
+    try { await window.player.localcliConsent('declined'); } catch { /* command may not exist on this backend yet */ }
   });
 }
 if (window.player.onLocalcliOffer) {
@@ -4597,7 +4600,7 @@ function flushHeatmap() {
 let listeningTrack = null;
 
 /** Whether transcription is enabled + which language/model to use. */
-let transcribeCfg = { enabled: true, language: '', model: '' };
+let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: false };
 
 /**
  * Whether the current track has *plain* lyrics available (real words with no
@@ -4653,7 +4656,7 @@ function flushTranscription() {
   if (!pcm) return;
 
   window.player
-    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined })
+    .transcribeAudio({ track, pcm, language: transcribeCfg.language || undefined, vocalIsolation: Boolean(transcribeCfg.vocalIsolation) })
     .catch((err) => console.warn('[transcribe] failed:', err && err.message));
 }
 
@@ -4942,10 +4945,14 @@ window.player.onLyrics((payload) => {
       setStatus('');
       /*
         Lyrics arrived. Keep listening anyway when they have no word timings
-        yet: the audio is what turns correct line-level lyrics into word-level
-        sync (see src/main/wordalign.js), and it can only be captured while the
-        song is actually playing. Main decides at the end whether to spend a
-        Whisper pass on it; this side just makes sure the audio exists.
+        yet: the audio is what would turn correct line-level lyrics into
+        word-level sync (word-level alignment isn't ported to the Rust
+        backend yet — see finalize_transcription in src-tauri/src/lib.rs,
+        which currently just declines to re-transcribe an already-synced
+        track rather than attaching word timing to it), and it can only be
+        captured while the song is actually playing. Main decides at the end
+        whether to spend a Whisper pass on it; this side just makes sure the
+        audio exists.
 
         Costs nothing when the user has not enabled audio capture — the
         recorder taps that same stream and simply declines to start without it.
@@ -5021,58 +5028,13 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /*
-  The size chip opens a menu instead of cycling. Cycling four modes with one
-  chip meant you could not jump to the one you wanted and could land on a
-  half-finished one by accident; a menu is predictable — every mode is a
-  labelled click and the current one is marked. The chip label reflects the
-  current mode so the corner still says what you are in.
+  Fullscreen-only removed bar/strip and the old cycle-through-four menu, but
+  wallpaper mode is worth keeping as a real feature — it has no "half-finished"
+  problem a menu was meant to solve, it's just on or off. One chip toggles it.
 */
-const DISPLAY_MODE_LABELS = {
-  full: '▭ Size', bar: '▬ Bar', strip: '▁ Strip',
-};
-const modeMenu = document.getElementById('mode-menu');
-
-function markModeMenu() {
-  if (!modeMenu) return;
-  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
-    item.setAttribute('aria-checked', String(item.dataset.mode === displayMode));
-  }
-}
-
-function openModeMenu() {
-  if (!modeMenu) return;
-  markModeMenu();
-  modeMenu.hidden = false;
-  document.body.classList.add('show-cursor');
-  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'true');
-}
-
-function closeModeMenu() {
-  if (!modeMenu) return;
-  modeMenu.hidden = true;
-  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'false');
-}
-
-if (els.modeBtn) {
-  els.modeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (modeMenu && modeMenu.hidden) openModeMenu(); else closeModeMenu();
-  });
-}
-
-if (modeMenu) {
-  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
-    item.addEventListener('click', () => {
-      window.player.setDisplayMode(item.dataset.mode);
-      closeModeMenu();
-    });
-  }
-  // Click anywhere else, or Esc, closes it.
-  document.addEventListener('click', (e) => {
-    if (!modeMenu.hidden && !modeMenu.contains(e.target) && e.target !== els.modeBtn) closeModeMenu();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modeMenu.hidden) closeModeMenu();
+if (els.wallpaperBtn) {
+  els.wallpaperBtn.addEventListener('click', () => {
+    window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
   });
 }
 
@@ -5136,6 +5098,37 @@ if (modeMenu) {
       } finally {
         autostartBtn.disabled = false;
       }
+    });
+  }
+}
+
+/* Whisper transcription language. The backend (get/set-transcribe-config) has
+   existed since the Tauri port; this is the first UI control for it — until
+   now `whisperLanguage` could only be set by hand-editing settings.json, and
+   omitting it silently mistranscribes non-English vocals as English. */
+{
+  const langSelect = document.getElementById('keybox-whisper-lang');
+  if (langSelect && window.player && window.player.getTranscribeConfig) {
+    window.player.getTranscribeConfig().then((cfg) => {
+      langSelect.value = (cfg && cfg.language) || '';
+    }).catch(() => {});
+    langSelect.addEventListener('change', () => {
+      window.player.setTranscribeConfig({ language: langSelect.value }).catch(() => {});
+    });
+  }
+
+  const viBtn = document.getElementById('keybox-vocal-isolation');
+  if (viBtn && window.player && window.player.getTranscribeConfig) {
+    const paint = (on) => {
+      viBtn.setAttribute('aria-pressed', String(on));
+      viBtn.textContent = on ? 'On' : 'Off';
+    };
+    window.player.getTranscribeConfig().then((cfg) => paint(Boolean(cfg && cfg.vocalIsolation))).catch(() => {});
+    viBtn.addEventListener('click', () => {
+      const next = viBtn.getAttribute('aria-pressed') !== 'true';
+      paint(next);
+      transcribeCfg.vocalIsolation = next;
+      window.player.setTranscribeConfig({ vocalIsolation: next }).catch(() => {});
     });
   }
 }
@@ -5255,10 +5248,7 @@ window.player.onDisplayMode(({ mode, insets }) => {
   root.setProperty('--shell-left', `${inset.left || 0}px`);
   root.setProperty('--shell-right', `${inset.right || 0}px`);
 
-  if (els.modeBtn) els.modeBtn.textContent = DISPLAY_MODE_LABELS[displayMode] || '▭ Size';
-  markModeMenu();
-  document.body.classList.toggle('mode-bar', displayMode === 'bar');
-  document.body.classList.toggle('mode-strip', displayMode === 'strip');
+  if (els.wallpaperBtn) els.wallpaperBtn.setAttribute('aria-pressed', String(displayMode === 'wallpaper'));
   /* Wallpaper draws the full layout — it IS the desktop, so there is as much
      room as fullscreen. It is not compact, and must not take the compact path
      that tears the GPU surfaces out of the page. */
@@ -5661,7 +5651,7 @@ async function populateLocalCliPicker() {
     btn.setAttribute('aria-pressed', String((c.id || null) === (chosen || null)));
     if (c.verified) btn.classList.add('chip--recommended');
     btn.addEventListener('click', async () => {
-      await window.player.localcliConsent(c.id);
+      try { await window.player.localcliConsent(c.id); } catch { /* command may not exist on this backend yet */ }
       populateLocalCliPicker();
       els.keyStatus.textContent = c.id ? `local AI: ${c.label}` : 'local AI off';
     });

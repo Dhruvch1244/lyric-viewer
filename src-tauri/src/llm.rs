@@ -31,9 +31,9 @@ fn hf_key() -> Option<String> {
     env_any(&["HF_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN"])
 }
 
-/// Whether any cloud provider is configured.
+/// Whether any provider — a cloud key or a consented local CLI — can run.
 pub fn is_available() -> bool {
-    gemini_key().is_some() || groq_key().is_some() || hf_key().is_some()
+    gemini_key().is_some() || groq_key().is_some() || hf_key().is_some() || crate::localcli::is_ready()
 }
 
 /// The provider that would answer first, for the renderer's status chip.
@@ -174,8 +174,9 @@ fn call_openai_compatible(url: &str, model: &str, key: &str, system: &str, user:
 }
 
 /// Best-effort JSON extraction from a completion that may wrap it in prose or a
-/// ```json fence.
-fn parse_json_loose(text: &str) -> Result<Value, String> {
+/// ```json fence. `pub(crate)` so `localcli.rs` can reuse it for CLI output,
+/// which has the same no-structured-output problem as the chat APIs below.
+pub(crate) fn parse_json_loose(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
         return Ok(v);
@@ -217,6 +218,16 @@ pub fn convert(system: &str, user: &str, schema: &Value) -> Result<Value, String
         match call_openai_compatible("https://router.huggingface.co/v1/chat/completions", &model, &key, system, user, schema) {
             Ok(v) => return Ok(v),
             Err(e) => failures.push(format!("hf: {e}")),
+        }
+    }
+
+    // The local CLI goes last, on purpose: it spends the user's own machine
+    // or tokens, so a cloud key they configured is tried first. It only
+    // appears once they have explicitly consented to one (see localcli.rs).
+    if crate::localcli::is_ready() {
+        match crate::localcli::call(system, user, schema) {
+            Ok(v) => return Ok(v),
+            Err(e) => failures.push(format!("local-cli: {e}")),
         }
     }
 

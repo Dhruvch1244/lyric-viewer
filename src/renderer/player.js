@@ -126,6 +126,27 @@
    */
   async function analyse(raw, track) {
     if (!window.SongAnalysis) return;
+
+    /*
+      Native analysis first. Rust (symphonia) decodes the file and runs the
+      envelope/onset DSP off the UI thread, so the opening frames of a track are
+      no longer stalled by a synchronous decode + multi-pass loop over millions
+      of samples on the main thread. Falls through to the Web Audio path below
+      if it is unavailable (a format symphonia cannot read, or a non-Tauri host).
+    */
+    if (track.localPath && window.player && window.player.analyzeLocalFile) {
+      try {
+        const a = await window.player.analyzeLocalFile(track.localPath);
+        if (a && a.ok && Array.isArray(a.level) && a.level.length) {
+          const summary = window.SongAnalysis.applyAnalysis(a, a.durationMs || track.durationMs || 0);
+          if (listeners.analysed) listeners.analysed(track, { ...summary, ms: 0 });
+          return;
+        }
+      } catch (err) {
+        console.warn('[player] native analysis failed, falling back:', err && err.message);
+      }
+    }
+
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       // decodeAudioData detaches the buffer it is given, so hand it a copy —
