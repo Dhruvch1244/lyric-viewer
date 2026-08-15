@@ -47,8 +47,11 @@ npm run icon        # only if the logo changed — regenerates the tiles
 # -> dist-store/Lyric-Overlay-<version>.msix  (unsigned, ready to upload)
 ```
 
-Or in CI: run the **store-msix** workflow (`workflow_dispatch`) or push a
-`store-v*` tag. It uploads the `.msix` as a build artifact.
+Or in CI: the **store-msix** workflow now runs on the same `v*` tag as the
+GitHub release — one tag builds both channels. `workflow_dispatch` and
+`store-v*` tags still work too, for a one-off rebuild without a new version.
+It always uploads the `.msix` as a build artifact; see "Automated
+submission" below for what happens after that.
 
 ### Version numbering
 
@@ -75,6 +78,43 @@ Add-AppxPackage dist-store/Lyric-Overlay-<version>.msix
 3. Submit for certification. First reviews take a few days and may flag the
    `runFullTrust` capability (justified: the app captures system audio via
    WASAPI loopback and reads "now playing" via SMTC).
+
+This first submission **must** be done by hand — the Store submission API
+can only update an app that's already live, it can't create one.
+
+## Automated submission (after the first release)
+
+Once the app has been through the manual first submission above, every
+future version can auto-submit for certification review from CI — the
+`store-msix` workflow's `publish` job does this automatically on a `v*` tag,
+using the official [`microsoft/microsoft-store-apppublisher`
+action](https://github.com/microsoft/microsoft-store-apppublisher) and the
+`msstore` CLI. It only *submits*; Microsoft's normal certification review
+still gates what actually goes live, same as a manual upload.
+
+This needs a one-time setup this repo's automation can't do for you (needs
+your Partner Center account):
+
+1. In [Microsoft Entra admin center](https://entra.microsoft.com/), register
+   an application (**Identity → Applications → App registrations → New
+   registration**). Note its **Application (client) ID** and **Directory
+   (tenant) ID**.
+2. Under that app's **Certificates & secrets**, create a client secret. Copy
+   the value immediately — it's shown once.
+3. In Partner Center → **Account settings → User management → Microsoft
+   Entra applications**, add the app you just registered and assign it the
+   **Manager** role.
+4. Find your **Seller ID** in Partner Center → **Account settings →
+   Organization profile** (or Developer settings).
+5. Find the **Store product ID** for Lyric Overlay in Partner Center →
+   **Lyric Overlay → App identity** (a short alphanumeric ID, distinct from
+   the Package Family Name above).
+6. Add five GitHub repo secrets (**Settings → Secrets and variables →
+   Actions**): `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`,
+   `AZURE_AD_APPLICATION_SECRET`, `SELLER_ID`, `STORE_PRODUCT_ID`.
+
+Until all five secrets exist, the `publish` job no-ops and the workflow still
+succeeds — it just built the `.msix` artifact, same as before this existed.
 
 ## Known follow-ups
 

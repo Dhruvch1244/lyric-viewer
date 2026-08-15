@@ -1,10 +1,12 @@
 name: store-msix
 
-# Build the Microsoft Store MSIX. Runs on demand (workflow_dispatch) or when a
-# store-v* tag is pushed. Produces an UNSIGNED .msix artifact — Microsoft signs
-# it on ingestion, so no code-signing secret is needed here. The GitHub-distributed
-# NSIS/MSI builds from release.yml are also unsigned (SignPath was dropped);
-# the Store channel is the only Authenticode-clean distribution path.
+# Build the Microsoft Store MSIX on the same tag release.yml builds from —
+# one version tag now drives both channels, instead of needing a second,
+# easy-to-forget `store-v*` tag. Produces an UNSIGNED .msix artifact —
+# Microsoft signs it on ingestion, so no code-signing secret is needed here.
+# The GitHub-distributed NSIS/MSI builds from release.yml are also unsigned
+# (SignPath was dropped); the Store channel is the only Authenticode-clean
+# distribution path.
 #
 # The MSIX omits the GitHub self-updater (scripts/build-msix.ps1 builds with
 # `--features store`); the Store delivers updates to packaged apps.
@@ -12,7 +14,8 @@ name: store-msix
 on:
   push:
     tags:
-      - 'store-v*'
+      - 'v*'
+      - 'store-v*' # kept for a manual one-off rebuild without a new version tag
   workflow_dispatch: {}
 
 jobs:
@@ -41,9 +44,69 @@ jobs:
         shell: powershell
         run: ./scripts/build-msix.ps1
 
+      - name: Confirm an MSIX was actually produced
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem dist-store/*.msix | Select-Object -First 1
+          if (-not $msix) { throw "no .msix produced" }
+
       - name: Upload MSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: lyric-overlay-msix
           path: dist-store/*.msix
           if-no-files-found: error
+
+  # Submits the built MSIX as a Partner Center update — but only once the repo
+  # has the four secrets below, which need a ONE-TIME manual setup this job
+  # cannot do for you: register an Entra ID app, assign it the Manager role
+  # on your Partner Center account, and complete the app's FIRST submission by
+  # hand (the API can only update an app that is already live in the Store —
+  # see docs/MICROSOFT-STORE.md). Until those secrets exist, this job no-ops
+  # so the workflow still succeeds; nothing here overwrites or auto-approves
+  # anything — msstore publish submits for the normal certification review.
+  publish:
+    needs: msix
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      SELLER_ID: ${{ secrets.SELLER_ID }}
+      STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
+    steps:
+      # Secrets are read from $env: (never interpolated into a run: string
+      # directly) — GitHub's own guidance against leaking a secret into a
+      # shell command line that could end up quoted back into logs.
+      - name: Check Store submission secrets are configured
+        id: check
+        shell: pwsh
+        run: |
+          $ready = $env:TENANT_ID -and $env:CLIENT_ID -and $env:CLIENT_SECRET -and $env:SELLER_ID -and $env:STORE_PRODUCT_ID
+          "ready=$([bool]$ready)" >> $env:GITHUB_OUTPUT
+
+      - name: Download the built MSIX
+        if: steps.check.outputs.ready == 'True'
+        uses: actions/download-artifact@v4
+        with:
+          name: lyric-overlay-msix
+          path: dist-store
+
+      - name: Configure Microsoft Store CLI
+        if: steps.check.outputs.ready == 'True'
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Submit the update for certification
+        if: steps.check.outputs.ready == 'True'
+        shell: pwsh
+        run: |
+          msstore reconfigure --tenantId $env:TENANT_ID --sellerId $env:SELLER_ID `
+            --clientId $env:CLIENT_ID --clientSecret $env:CLIENT_SECRET
+          $msix = Get-ChildItem dist-store/*.msix | Select-Object -First 1
+          msstore publish $msix.FullName -id $env:STORE_PRODUCT_ID
+
+      - name: Not yet configured
+        if: steps.check.outputs.ready != 'True'
+        run: echo "Store submission secrets aren't set — built the MSIX artifact only. See docs/MICROSOFT-STORE.md for the one-time setup."
