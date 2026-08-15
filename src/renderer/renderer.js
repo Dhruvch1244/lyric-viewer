@@ -514,7 +514,6 @@ function triggerDrop() {
   setTimeout(() => spawnRipple(1.0), 90);
   setTimeout(() => spawnRipple(0.7), 190);
   spawnConfetti(window.innerWidth, window.innerHeight, shiftHex((palette && palette[3]) || '#e94560', bgHue));
-  spawnEmojiBurst(window.innerWidth, window.innerHeight, DROP_EMOJI, 10);
   // Re-appear the whole troupe with mixed entrance animations for a big "moment"
   // (corners fly-in, warp-slide, materialize, spiral, pop, teleport…), and
   // MULTIPLY them: transient clones burst across the screen and dance hard, then
@@ -709,10 +708,9 @@ function setActive(index) {
   // The gap is measured from where the previous line STOPPED being sung, not
   // where it started; measuring from the start counts the line's own length as
   // silence and fires drops that aren't there.
-  let isDrop = false;
   if (index >= 0 && index === prev + 1) {
     const prevTime = index > 0 ? lineEndMs(index - 1) : 0;
-    if (cues[index].timeMs - prevTime > GAP_DROP_MS) { triggerDrop(); isDrop = true; }
+    if (cues[index].timeMs - prevTime > GAP_DROP_MS) triggerDrop();
   }
 
   if (index < 0) {
@@ -731,15 +729,6 @@ function setActive(index) {
   intensity = intensity * 0.4 + energy * 0.6;
   pulse = 1;
   spawnRipple(energy); // an expanding ring pings out on every new line
-
-  // A hype line gets its own, smaller reaction burst — triggerDrop() already
-  // fires one for drops, so skip here to avoid stacking two bursts on the
-  // same line. Same energy threshold the word-anim pool already uses for
-  // "this line is energetic" (line ~835 below), so the two read as one
-  // consistent read of the line rather than two different opinions on it.
-  if (!isDrop && energy > 0.55) {
-    spawnEmojiBurst(window.innerWidth, window.innerHeight, HYPE_EMOJI, 4);
-  }
 
   // Re-estimate the beat period from this line's cadence so every reactive layer
   // pulses in time with the song. Wordy/fast lines imply a quicker tempo; clamp
@@ -1055,7 +1044,6 @@ let vignette = null; // cached gradient, rebuilt on resize
 let bokeh = [];      // soft floating orbs
 let ripples = [];    // expanding rings, one per lyric line + drops
 let confetti = [];   // particle burst on drops
-let emojiParticles = []; // reaction-emoji burst on drops + hype lines
 let bars = [];       // equalizer bar seeds
 let bgHue = 0;       // global hue drift (deg) added to live-coloured layers
 let lastBackNow = 0; // for per-frame dt in the backdrop loop
@@ -1584,67 +1572,6 @@ function spawnConfetti(w, h, accent) {
     });
   }
   if (confetti.length > 500) confetti.splice(0, confetti.length - 500);
-}
-
-const DROP_EMOJI = ['🔥', '⚡', '💥', '✨', '🎉'];
-const HYPE_EMOJI = ['🔥', '🎤', '💯', '🙌', '🚀'];
-
-/**
- * Burst reaction emoji from centre-top, same launch physics as
- * spawnConfetti — a smaller, distinct sibling rather than folding into the
- * confetti particle shape, since drawing text needs its own font/measure
- * path instead of a filled rect.
- * @param {number} w @param {number} h
- * @param {string[]} pool emoji to pick from
- * @param {number} count
- */
-function spawnEmojiBurst(w, h, pool, count) {
-  const n = liteMode ? Math.round(count * 0.5) : count;
-  for (let i = 0; i < n; i += 1) {
-    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.0;
-    const sp = 5 + Math.random() * 11;
-    emojiParticles.push({
-      x: w / 2, y: h * 0.42,
-      vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-      size: 22 + Math.random() * 20, life: 1,
-      char: pool[(Math.random() * pool.length) | 0],
-      rot: (Math.random() - 0.5) * 0.6, vr: (Math.random() - 0.5) * 0.05,
-    });
-  }
-  if (emojiParticles.length > 120) emojiParticles.splice(0, emojiParticles.length - 120);
-}
-
-/*
-  Measured: setting ctx.font per particle per frame is catastrophic — 25
-  particles cost more than 300 confetti rects (16ms vs 1.6ms), because every
-  assignment re-resolves font metrics. Fixed size, set ONCE outside the loop;
-  the per-particle size variation moves to ctx.scale(), which composes into
-  the existing transform for close to nothing.
-*/
-const EMOJI_BASE_SIZE = 28;
-
-function drawEmojiParticles() {
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `${EMOJI_BASE_SIZE}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
-  for (const p of emojiParticles) {
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vy += 0.3; // gravity, same fall rate as confetti
-    p.vx *= 0.99;
-    p.life -= 0.010;
-    p.rot += p.vr;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rot);
-    ctx.scale(p.size / EMOJI_BASE_SIZE, p.size / EMOJI_BASE_SIZE);
-    ctx.globalAlpha = Math.max(0, p.life);
-    ctx.fillText(p.char, 0, 0);
-    ctx.restore();
-  }
-  ctx.globalAlpha = 1;
-  compactInPlace(emojiParticles, (p) => p.life > 0);
 }
 
 /* Wavy horizontal aurora bands, hue-shifted live so the wash keeps changing. */
@@ -3822,9 +3749,8 @@ function drawBackdrop(now) {
       }
     }
 
-    // Confetti + emoji bursts rendered last so they sit in front of the dancers.
+    // Confetti rendered last so it sits in front of the dancers.
     if (confetti.length) drawConfetti();
-    if (emojiParticles.length) drawEmojiParticles();
 
     ctx.globalCompositeOperation = 'source-over';
   } catch (err) {
