@@ -11,6 +11,18 @@
 //! and is what RFC 8252 ("OAuth 2.0 for Native Apps") recommends over custom
 //! schemes anyway — not a workaround, the better-engineered choice.
 //!
+//! PORT IS FIXED, NOT OS-ASSIGNED: an earlier version bound `127.0.0.1:0` (an
+//! OS-random port) and relied on RFC 8252 §7.3's "a loopback redirect URI
+//! registered without a port matches any port" exception. Spotify's own docs
+//! say `redirect_uri` "must exactly match one of the values you entered...
+//! including upper or lowercase, terminating slashes, and such" — no
+//! portless-wildcard carve-out is documented, and developer-forum reports
+//! confirm registering a loopback URI without a port does not reliably work
+//! in practice. Every login was therefore failing with a redirect_uri
+//! mismatch regardless of what the user registered. Fix: bind one of a small
+//! set of fixed candidate ports (`LOOPBACK_PORTS`) instead, all of which the
+//! user pre-registers as exact redirect URIs — see the 🔑 panel tooltip.
+//!
 //! No refresh token is persisted: the access token lives in memory for the
 //! session only. Importing a playlist is an occasional, deliberate action,
 //! not something that needs to survive a restart — one more OAuth click on
@@ -58,13 +70,28 @@ fn code_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest)
 }
 
-/// Bind a loopback listener on an OS-assigned free port. Returns the port and
-/// listener together since the redirect URI has to name the exact port
-/// before the browser ever opens.
+/// Fixed candidate ports for the loopback redirect listener — see the module
+/// doc for why these can't be OS-assigned. Uncommon, unregistered-with-IANA
+/// values chosen to minimise collision with anything else on the machine.
+/// Tried in order so one being transiently held by something else doesn't
+/// hard-fail the flow; all three should be registered as exact redirect URIs
+/// in the Spotify app (`http://127.0.0.1:<port>/callback` for each).
+const LOOPBACK_PORTS: [u16; 3] = [43_876, 43_877, 43_878];
+
+/// Bind a loopback listener on the first free port from `LOOPBACK_PORTS`.
+/// Returns the port and listener together since the redirect URI has to name
+/// the exact port before the browser ever opens.
 fn bind_loopback() -> std::io::Result<(TcpListener, u16)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    Ok((listener, port))
+    let mut last_err = None;
+    for &port in &LOOPBACK_PORTS {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => return Ok((listener, port)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::AddrInUse, "no loopback port available")
+    }))
 }
 
 /// Accept exactly one connection, pull `code` (or `error`) off the request
