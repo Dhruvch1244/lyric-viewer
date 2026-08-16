@@ -128,10 +128,11 @@ Honest list of what is actually weak, worst first.
 
 ### Quality gaps
 
-6. **Lyric coverage.** Better than when this was written — NetEase shipped as
-   a second synced source, and Kugou was added too (not originally planned,
-   but keyless and free like the others). Genius, the other source Sonar
-   proves works keyless, is still not in.
+6. ✅ **Lyric coverage — shipped.** NetEase and Kugou as second/third synced
+   sources, Genius as a second PLAIN source (keyless HTML scrape of the same
+   public search endpoint genius.com's own search box uses, same technique
+   Sonar and lyricsgenius use — see genius.rs), joining LRCLIB plain in the
+   chain a Whisper transcription aligns against.
 7. 🔶 **Word timing was fully interpolated — now partially real.** Real
    per-word timing now lands for any lyric line where a Whisper transcription
    anchors directly AND the real line's word count matches the transcribed
@@ -139,11 +140,15 @@ Honest list of what is actually weak, worst first.
    estimate for that line rather than a wrong positional guess). Unverified
    against a real model + real audio as of this writing — the logic is
    unit-tested, not live-run. See align.rs / whisper.js.
-8. **Transcription accuracy on dense music.** Whisper is a speech model; the
-   vocal gate helps with hallucinations over gaps but not with mishearing.
-   Optional Demucs vocal isolation before transcription shipped since this was
-   written (0.29.0-ish) as a partial answer — LLM correction of the raw
-   transcript (Phase 3) is the other half, still open.
+8. ✅ **Transcription accuracy on dense music — both halves shipped.** Optional
+   Demucs vocal isolation before transcription (0.29.0-ish), plus LLM
+   correction of the raw transcript (correct.rs — a straight port of the old
+   Electron-era `src/main/correct.js`, which existed before the Tauri
+   migration and was never carried over). Runs only when nothing anchored
+   real lyrics onto the transcription (source == "whisper"); a model that
+   merged/split a line rejects that whole batch rather than desyncing the
+   rest of the song. Whisper is still a speech model on sung vocals over a
+   dense mix, so this raises the floor rather than solving mishearing outright.
 9. **Transcription costs ~12 min of CPU per song** and is CPU-only — DirectML
    fails to allocate on this hardware. Also now runs via WASM in the webview
    (Tauri has no Node/onnxruntime-node), proxied to a Worker so it doesn't
@@ -235,17 +240,21 @@ good part.
 argues the "stop losing users" rationale below was right about priority, even
 where the specific solution changed.*
 
-### Phase 3 — Absorb the competitors' lyric strengths
+### Phase 3 — Absorb the competitors' lyric strengths ✅ shipped
 
-- 🔶 **NetEase as a second synced source — shipped**, plus **Kugou** (not
-  originally planned, added alongside it — same keyless deal). **Genius as a
-  second plain source is still open**; Sonar proves it works keyless too.
-- **LLM correction of transcriptions — still open.** Reuse the existing
-  provider stack: feed Whisper's raw transcript plus the track's title/artist
-  to Gemini/Groq and ask it to fix mishearings. This is exactly LyricWhiz's
-  ear/brain split, and the plumbing, caching and key panel are already built.
-  With vocal isolation now shipped (see Phase 5), this is likely the single
-  biggest transcription-quality jump still on the table.
+- ✅ **NetEase as a second synced source — shipped**, plus **Kugou** (not
+  originally planned, added alongside it — same keyless deal) and **Genius**
+  as a second PLAIN source (genius.rs — keyless HTML scrape, same technique
+  Sonar and lyricsgenius use, since Genius's real API excludes lyric text).
+- ✅ **LLM correction of transcriptions — shipped (correct.rs).** Feeds
+  Whisper's raw transcript plus the track's title/artist to whichever
+  provider is configured and asks it to fix mishearings — exactly LyricWhiz's
+  ear/brain split. Guarded to only run when nothing anchored real lyrics onto
+  the transcription (a real source correcting itself could only make it
+  wrong), and rejects a whole batch on a line-count mismatch rather than
+  risk desyncing the rest of the song. Existed in the old Electron app
+  (`src/main/correct.js`) and was never carried over in the Tauri
+  migration — this was a migration gap as much as a new feature.
 - 🔶 **Real word-level timing — partially shipped, unverified live.** Lands
   for a lyric line only when a Whisper transcription anchors it directly and
   the real line's word count matches the transcribed one exactly; every other
@@ -313,8 +322,8 @@ the leak.
 | 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium | ✅ Solved differently (Tauri, ~6MB) |
 | 5 | Auto-update | High | Low | ✅ Shipped |
 | 6 | Deeper audio analysis | High | Medium | ✅ Shipped (native symphonia DSP) |
-| 7 | NetEase + Genius lyric sources | High | Medium | 🔶 NetEase + Kugou shipped; Genius open |
-| 8 | LLM transcript correction | High | Low-Medium | Open — biggest lever still on the table |
+| 7 | NetEase + Genius lyric sources | High | Medium | ✅ Shipped (NetEase + Kugou + Genius) |
+| 8 | LLM transcript correction | High | Low-Medium | ✅ Shipped |
 | 9 | First-run card | Medium | Low | ✅ Shipped |
 | 10 | Wallpaper / screensaver mode | High | Medium-High | ✅ Shipped (0.30.0) |
 | 11 | More 2D layers moved onto the GPU | Medium | Medium | Open |
@@ -324,10 +333,9 @@ the leak.
 | 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
 | 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | Open — needs a service decision |
 
-What's actually left from this list: Genius (item 7), LLM transcript
-correction (8), GPU-layer migration (11), and per-genre visual profiles
-(Phase 4, not tabled above). Item 16 needs a decision (which service, what's
-collected) before it's implementable at all — not a queued task.
+What's actually left from this list: GPU-layer migration (11) and per-genre
+visual profiles (Phase 4, not tabled above). Item 16 needs a decision (which
+service, what's collected) before it's implementable at all — not a queued task.
 
 ---
 
