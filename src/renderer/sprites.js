@@ -426,6 +426,9 @@
     { match: 'prabh deep', label: 'Prabh Deep', members: [{ name: 'Prabh Deep', skin: '#b57843', cap: '#241a2e', brim: '#180f20', hoodie: '#2e2140', hoodieDark: '#1f1630', accent: '#b487ff', pants: '#171320', shoe: '#efefef' }] },
     { match: 'raftaar', label: 'Raftaar', members: [{ name: 'Raftaar', skin: '#c58a55', cap: '#0e1a12', brim: '#081109', hoodie: '#12301f', hoodieDark: '#0c2016', accent: '#43e06a', pants: '#111813', shoe: '#f0f0f0' }] },
     { match: 'mc stan', label: 'MC STΔN', members: [{ name: 'MC STΔN', skin: '#b07440', cap: '#1a1220', brim: '#100a15', hoodie: '#241830', hoodieDark: '#180f22', accent: '#ff6fd8', pants: '#141019', shoe: '#ededed' }] },
+    { match: 'emiway', label: 'EMIWAY', members: [{ name: 'EMIWAY', skin: '#a9754a', cap: '#241610', brim: '#170e0a', hoodie: '#3a1f12', hoodieDark: '#28150c', accent: '#ff8a3d', pants: '#1a120c', shoe: '#f0f0f0' }] },
+    { match: 'naezy', label: 'Naezy', members: [{ name: 'Naezy', skin: '#8a5a34', cap: '#1c1a10', brim: '#12100a', hoodie: '#31301c', hoodieDark: '#211f13', accent: '#c9a227', pants: '#16150e', shoe: '#e6e2d6' }] },
+    { match: 'brodha', label: 'Brodha V', members: [{ name: 'Brodha V', skin: '#9c6a3e', cap: '#0f1830', brim: '#0a1122', hoodie: '#182a4a', hoodieDark: '#101d33', accent: '#4f8fff', pants: '#0d1526', shoe: '#eef2ff' }] },
   ];
 
   /** Substring match against the (already-isolated) artist token. */

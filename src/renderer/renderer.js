@@ -1153,6 +1153,57 @@ let lastDrawnAt = 0;
 let drawCostMs = 8;
 
 /*
+  Dev-only per-section frame-budget guardrail. `drawCostMs` above already
+  tracks the WHOLE backdrop frame for the adaptive throttle, but it can't say
+  WHICH layer is expensive — that took a live bug report each time (the
+  0.31.0 emoji burst shipped, then needed a follow-up release measuring it at
+  58ms/frame, then a third release just to rip it out). This buckets the
+  heaviest always-on layers individually and warns in the console once one
+  holds an over-budget smoothed cost for 30 straight frames, so the same
+  regression shows up on the next local run instead of three releases later.
+
+  Off by default — zero cost beyond a boolean check per call site. Enable
+  with `localStorage.setItem('perfDebug','1')` and reload.
+*/
+const PERF_DEBUG = (() => {
+  try { return localStorage.getItem('perfDebug') === '1'; } catch { return false; }
+})();
+const PERF_BUDGET_MS = { galaxy: 4, bokeh: 1.5, glows: 2, sprites: 4, confetti: 2 };
+const perfCost = Object.fromEntries(Object.keys(PERF_BUDGET_MS).map((k) => [k, 0]));
+const perfOverBudgetFrames = Object.fromEntries(Object.keys(PERF_BUDGET_MS).map((k) => [k, 0]));
+let perfReportAt = 0;
+
+function perfStart() {
+  return PERF_DEBUG ? performance.now() : 0;
+}
+
+function perfEnd(key, t0) {
+  if (!PERF_DEBUG) return;
+  const dt = performance.now() - t0;
+  perfCost[key] += (dt - perfCost[key]) * 0.1;
+}
+
+function perfReport(now) {
+  if (!PERF_DEBUG) return;
+  for (const key of Object.keys(PERF_BUDGET_MS)) {
+    if (perfCost[key] > PERF_BUDGET_MS[key]) {
+      perfOverBudgetFrames[key] += 1;
+      if (perfOverBudgetFrames[key] === 30) {
+        console.warn(`[perf] "${key}" has held ${perfCost[key].toFixed(1)}ms/frame for 30 frames — over its ${PERF_BUDGET_MS[key]}ms budget`);
+      }
+    } else {
+      perfOverBudgetFrames[key] = 0;
+    }
+  }
+  if (now - perfReportAt > 5000) {
+    perfReportAt = now;
+    console.table(Object.fromEntries(Object.keys(PERF_BUDGET_MS).map((k) => [
+      k, { ms: +perfCost[k].toFixed(2), budget: PERF_BUDGET_MS[k] },
+    ])));
+  }
+}
+
+/*
   Smoothed interval between animation-frame callbacks (ms) — how fast frames are
   actually being PRESENTED, as opposed to how long our own work takes.
 
@@ -3478,7 +3529,9 @@ function drawBackdrop(now) {
 
     // Reactive background layers (each self-limits by scene flags + energy).
     if (scene.aurora) drawAurora(now, w, h, life);
+    let perfT0 = perfStart();
     if (scene.bokeh) drawBokeh(now, w, h, motion, life);
+    perfEnd('bokeh', perfT0);
     if (scene.rays && (life > 0.4 || dropFlash > 0.1)) drawRays(now, w, h, life);
     if (scene.eq) drawEqualizer(now, w, h, life);
     // Complex-maths layers: the phyllotaxis galaxy sits behind, the parametric
@@ -3492,7 +3545,9 @@ function drawBackdrop(now) {
     // it is not, so the two never draw at once.
     const gpuGalaxy = swirlOn && window.SwirlField
       && window.SwirlField.hasGalaxy && window.SwirlField.hasGalaxy();
+    perfT0 = perfStart();
     if (scene.galaxy && !gpuGalaxy) drawGalaxy(now, w, h, life);
+    perfEnd('galaxy', perfT0);
     // Behind the curves and the web, so anything else in the look sits inside
     // the tunnel rather than being swallowed by it.
     if (scene.wormhole) drawWormhole(w, h, dt, life);
@@ -3516,6 +3571,7 @@ function drawBackdrop(now) {
     // Vibrant colour glows — pre-rendered sprites drawn cheaply each frame.
     ctx.globalCompositeOperation = 'lighter';
     const maxDim = Math.max(w, h);
+    perfT0 = perfStart();
     for (const g of glows) {
       g.x += g.vx * motion;
       g.y += g.vy * motion;
@@ -3530,6 +3586,7 @@ function drawBackdrop(now) {
       const radius = g.r * maxDim * p;
       ctx.drawImage(g.sprite, cx - radius, cy - radius, radius * 2, radius * 2);
     }
+    perfEnd('glows', perfT0);
 
     // Stars — always drifting/twinkling; intensify with lyric energy.
     const boost = 0.7 + life * 0.9;
@@ -3735,6 +3792,7 @@ function drawBackdrop(now) {
       // being set redundantly by each actor's own draw() call, up to once per
       // troupe member and clone (≤ ~38/frame) instead of once for the pass.
       ctx.imageSmoothingEnabled = false;
+      perfT0 = perfStart();
       for (const actor of spriteActors) {
         actor.update(now, env);
         actor.draw(ctx, w, h, unit, now, env);
@@ -3747,10 +3805,13 @@ function drawBackdrop(now) {
         }
         compactInPlace(spriteClones, (c) => !c.expired);
       }
+      perfEnd('sprites', perfT0);
     }
 
     // Confetti rendered last so it sits in front of the dancers.
+    perfT0 = perfStart();
     if (confetti.length) drawConfetti();
+    perfEnd('confetti', perfT0);
 
     ctx.globalCompositeOperation = 'source-over';
   } catch (err) {
@@ -3759,6 +3820,7 @@ function drawBackdrop(now) {
     // Cost of the frame we just issued. Smoothed hard (0.1) because a single
     // long frame — a GC pause, a track change — must not swing the governor.
     if (startedAt) drawCostMs += (performance.now() - startedAt - drawCostMs) * 0.1;
+    perfReport(now);
     // Same stop-rather-than-idle rule as frame(): don't keep waking up once
     // hidden. onVisibility restarts the loop when the overlay comes back.
     if (overlayVisible) requestAnimationFrame(drawBackdrop);
@@ -6791,6 +6853,50 @@ function syncSpotifyPanel() {
   }).catch(() => { row.hidden = true; });
 }
 
+/*
+  Auto-refresh the imported playlist while connected, so tracks added to the
+  playlist later show up without the user remembering to click Import again.
+  Deliberately does NOT re-run Pre-sync itself — it only refills the textarea,
+  same as a manual Import would, so fetching/caching lyrics stays a conscious
+  click either way. Only overwrites the textarea if it still holds exactly
+  what the last (auto or manual) import put there, so it never clobbers text
+  the user pasted or edited by hand. Stops itself once the session's token
+  has expired — there is nothing to poll with once that happens, and the app
+  deliberately never persists a refresh token across restarts (see spotify.rs).
+*/
+const SPOTIFY_AUTO_REFRESH_MS = 5 * 60 * 1000;
+let spotifyAutoRefreshTimer = null;
+let lastSpotifyPlaylistId = null;
+let lastSpotifyImportText = '';
+
+function stopSpotifyAutoRefresh() {
+  if (spotifyAutoRefreshTimer) clearInterval(spotifyAutoRefreshTimer);
+  spotifyAutoRefreshTimer = null;
+}
+
+function startSpotifyAutoRefresh(playlistId, initialText, status) {
+  lastSpotifyPlaylistId = playlistId;
+  lastSpotifyImportText = initialText;
+  stopSpotifyAutoRefresh();
+  spotifyAutoRefreshTimer = setInterval(async () => {
+    try {
+      const live = await window.player.spotifyStatus();
+      if (!live || !live.connected) { stopSpotifyAutoRefresh(); return; }
+      const res = await window.player.spotifyPlaylistTracks(lastSpotifyPlaylistId);
+      if (!res || res.status !== 'ok') return; // transient network hiccup — try again next tick
+      const text = res.text || '';
+      if (text === lastSpotifyImportText) return; // unchanged
+      const unchangedInBox = els.presyncInput.value === lastSpotifyImportText;
+      lastSpotifyImportText = text;
+      if (unchangedInBox) {
+        els.presyncInput.value = text;
+        const lines = text.split('\n').filter(Boolean).length;
+        if (status) status.textContent = `playlist updated — ${lines} track${lines === 1 ? '' : 's'} loaded — press Pre-sync`;
+      }
+    } catch { /* skip this tick, try again next interval */ }
+  }, SPOTIFY_AUTO_REFRESH_MS);
+}
+
 {
   const connectBtn = document.getElementById('presync-spotify-connect');
   const playlistSelect = document.getElementById('presync-spotify-playlists');
@@ -6851,9 +6957,11 @@ function syncSpotifyPanel() {
       try {
         const res = await window.player.spotifyPlaylistTracks(id);
         if (res && res.status === 'ok') {
-          els.presyncInput.value = res.text || '';
-          const lines = (res.text || '').split('\n').filter(Boolean).length;
+          const text = res.text || '';
+          els.presyncInput.value = text;
+          const lines = text.split('\n').filter(Boolean).length;
           status.textContent = `${lines} track${lines === 1 ? '' : 's'} loaded — press Pre-sync`;
+          startSpotifyAutoRefresh(id, text, status);
         } else {
           status.textContent = (res && res.message) || 'import failed';
         }
