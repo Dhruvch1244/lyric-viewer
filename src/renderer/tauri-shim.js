@@ -126,6 +126,8 @@
     endLocalPlayback: () => call('end_local_playback', {}),
 
     reportJobs: (payload) => call('report_jobs', { payload }),
+    reportClientError: (message) => call('report_client_error', { message }),
+    openCrashLog: () => call('open_crash_log', {}, { status: 'error', message: 'unavailable' }),
     artworkCandidates: (track) => call('artwork_candidates', { track }, { candidates: [] }),
     chooseArtwork: (payload) => call('choose_artwork', { payload }),
     clearArtworkChoice: (track) => call('clear_artwork_choice', { track }),

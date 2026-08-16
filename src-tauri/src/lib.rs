@@ -13,6 +13,7 @@ mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
+mod crashlog;
 mod kugou;
 mod llm;
 mod localcli;
@@ -1229,6 +1230,31 @@ fn report_jobs(payload: Value, cur: State<Mutex<CurTrack>>, app: AppHandle) {
     }
 }
 
+/// Renderer-side error reporting into the same local crash log a Rust panic
+/// lands in (see crashlog.rs) — a `window.onerror`/`unhandledrejection` in
+/// renderer.js calls this so a JS-side crash is visible too, not just a
+/// backend one. Fire-and-forget from the JS side; nothing here can itself
+/// fail in a way worth surfacing back to a page that just errored.
+#[tauri::command]
+fn report_client_error(app: AppHandle, message: String) {
+    crashlog::append_client_error(&app, &message);
+}
+
+/// Reveal the local crash log in the file manager, for the "Open crash log"
+/// button in the 🔑 panel — a user hitting a real bug can attach it by hand
+/// to an email, same as the existing AI-content report flow next to it.
+#[tauri::command]
+fn open_crash_log(app: AppHandle) -> Value {
+    let Some(path) = crashlog::ensure_and_path(&app) else {
+        return json!({ "status": "error", "message": "could not resolve the log path" });
+    };
+    use tauri_plugin_opener::OpenerExt;
+    match app.opener().reveal_item_in_dir(&path) {
+        Ok(()) => json!({ "status": "ok" }),
+        Err(e) => json!({ "status": "error", "message": e.to_string() }),
+    }
+}
+
 /// Best-effort desktop notification — silent (informational, not an alarm),
 /// and a failure here (permission denied, platform unsupported) is not worth
 /// surfacing over.
@@ -1828,6 +1854,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = APP_HANDLE.set(handle.clone());
+            crashlog::install_panic_hook(handle.clone());
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
@@ -1910,6 +1937,8 @@ pub fn run() {
             spotify_playlists,
             spotify_playlist_tracks,
             report_jobs,
+            report_client_error,
+            open_crash_log,
             wallpaper_interact,
             artwork_candidates,
             choose_artwork,

@@ -1,7 +1,15 @@
 # Roadmap — the best music visualiser that also knows the words
 
 Strategy document, written after a competitive review in August 2026. This is a
-plan to argue with, not a backlog to grind. Nothing here is built yet.
+plan to argue with, not a backlog to grind.
+
+**Status note (2026-08-16):** most of this was written as "nothing here is
+built yet," but the app shipped fast enough that a lot of it is no longer
+true a few weeks later. Rather than let the doc quietly rot again, each item
+below is marked ✅ **shipped**, 🔁 **reversed** (tried, then deliberately
+undone — a real decision, not neglect), or left unmarked if it's still open.
+The competitive analysis in sections 1-2 holds up fine; it's the plan and gap
+list in sections 3-5 that needed the pass.
 
 ---
 
@@ -78,17 +86,30 @@ Honest list of what is actually weak, worst first.
 0c. **Audio analysis is shallow.** Three bands (bass/mid/treble) plus onset
    detection. MilkDrop presets run per-frame equations over the full spectrum.
    Richer analysis is a prerequisite for richer visuals.
-0d. **No wallpaper or screensaver mode.** Wallpaper Engine's whole proposition
-   is that it is always there. Ours must be launched and takes over the screen.
+0d. ✅ **Wallpaper mode — shipped (0.30.0), for real this time.** A first pass
+   (0.28.0) removed it by accident while going fullscreen-only; brought back
+   deliberately as a real feature with pointer-forwarding so the HUD stays
+   clickable behind the desktop icons, plus a `Ctrl+Alt+M` escape hatch.
 
 ### Blocking adoption
 
-1. **One display mode, and it is fullscreen.** The app takes over the screen or
-   it does nothing. Every competitor offers a small, always-on mode. This is the
-   single biggest reason someone tries it once and stops.
-2. **124 MB installer.** Competitors are a few MB. About 60 MB of ours is the
-   ONNX runtime, needed only by transcription — a feature most users will never
-   trigger.
+1. 🔁 **One display mode, and it is fullscreen — REVERSED, not solved.** This
+   gap's own reasoning (below) argued for adding a compact/taskbar mode.
+   0.28.0 went the opposite way instead: it removed Bar/Strip and the
+   Fullscreen/Bar/Strip menu entirely, coercing any persisted compact-mode
+   pref to Fullscreen on launch ("gone for good," per the commit). The code
+   paths were left dormant rather than deleted, but there's no menu, chip, or
+   persisted state that can reach them anymore. If this bounce problem is
+   still real, it needs a fresh decision, not a revival of the old menu.
+   ~~The app takes over the screen or it does nothing. Every competitor offers
+   a small, always-on mode. This is the single biggest reason someone tries
+   it once and stops.~~
+2. ✅ **124 MB installer — solved, differently than planned.** The plan here
+   was to split transcription into an optional download pack. What actually
+   fixed it: the Electron→Tauri rewrite. Signed installer is ~6MB now (vs the
+   124MB this gap was written about) — Tauri has no bundled browser runtime,
+   and Whisper's ONNX runtime/model download on first use regardless, so the
+   "optional pack" problem this was solving no longer exists as a problem.
 3. ~~**Audio reactivity needs a screen-capture permission prompt.**~~
    **Measured false, 0.21.0.** The loopback path does go through
    `getDisplayMedia`, but `main.js` installs a `setDisplayMediaRequestHandler`
@@ -97,26 +118,48 @@ Honest list of what is actually weak, worst first.
    through SendInput and photographing the screen 1.2s later: no dialog
    anywhere, and capture was already running. This gap was written before that
    handler existed and has been closed ever since.
-4. **No first-run experience.** New users get a transparent overlay and a row of
-   single-glyph chips with no explanation of what `अ`, `◐`, `♫` or `⚡` do.
-5. **No auto-update.** Every fix requires a manual re-download. At scale this
-   means most users stay on whatever version they first installed.
+4. ✅ **No first-run experience — shipped.** A first-run welcome card exists,
+   separate from the what's-new-after-update card (renderer.js, "first run"
+   section).
+5. ✅ **No auto-update — shipped.** `tauri-plugin-updater` (signed) on the
+   GitHub/NSIS channel; the Microsoft Store channel (once actually live —
+   see Phase 5) updates itself instead, which is why the `store` Cargo
+   feature compiles the updater plugin out for that build.
 
 ### Quality gaps
 
-6. **Lyric coverage is one and a half sources** (LRCLIB synced, LRCLIB plain).
-   Sonar has three.
-7. **Word timing is interpolated**, not real. Fine most of the time, visibly
-   wrong on lines with long held notes or rapid-fire delivery.
+6. **Lyric coverage.** Better than when this was written — NetEase shipped as
+   a second synced source, and Kugou was added too (not originally planned,
+   but keyless and free like the others). Genius, the other source Sonar
+   proves works keyless, is still not in.
+7. 🔶 **Word timing was fully interpolated — now partially real.** Real
+   per-word timing now lands for any lyric line where a Whisper transcription
+   anchors directly AND the real line's word count matches the transcribed
+   one exactly (a mishearing that merges/splits words keeps the interpolated
+   estimate for that line rather than a wrong positional guess). Unverified
+   against a real model + real audio as of this writing — the logic is
+   unit-tested, not live-run. See align.rs / whisper.js.
 8. **Transcription accuracy on dense music.** Whisper is a speech model; the
    vocal gate helps with hallucinations over gaps but not with mishearing.
+   Optional Demucs vocal isolation before transcription shipped since this was
+   written (0.29.0-ish) as a partial answer — LLM correction of the raw
+   transcript (Phase 3) is the other half, still open.
 9. **Transcription costs ~12 min of CPU per song** and is CPU-only — DirectML
-   fails to allocate on this hardware.
+   fails to allocate on this hardware. Also now runs via WASM in the webview
+   (Tauri has no Node/onnxruntime-node), proxied to a Worker so it doesn't
+   freeze the visuals — itself not yet verified against a real model download
+   + inference pass in WebView2.
 
 ### Structural
 
 10. **Windows-only.** Correct for now; SMTC is the whole detection layer.
-11. **Single maintainer, no crash reporting.** No idea what breaks in the wild.
+11. 🔶 **Single maintainer, no crash reporting — partially addressed.** An
+   always-on, local-only crash/error log now exists (crashlog.rs): Rust
+   panics and renderer JS errors both land in one file, discoverable via a
+   button in the 🔑 panel, attachable to a bug report by hand. What's still
+   missing is the "in the wild" half — nothing reports back to the
+   maintainer automatically; that needs a real decision (which service, what
+   gets collected, real opt-in UX) this doc isn't making unilaterally.
 
 ---
 
@@ -125,10 +168,16 @@ Honest list of what is actually weak, worst first.
 Five phases. Each is independently shippable — no phase is a prerequisite for
 the app staying useful.
 
-### Phase 1 — Win the visualiser half
+### Phase 1 — Win the visualiser half ✅ shipped
 
 The visual-variety gap is the one thing that cannot be closed incrementally,
-and it is the axis the whole category is judged on.
+and it is the axis the whole category is judged on. All four bullets below
+shipped: Butterchurn/MilkDrop as a second engine with a preset catalogue and
+thumbnails, a real named-preset system (since 0.10.0 — each song remembers
+its own look instead of a random shuffle), beat-synced preset transitions
+(`MILKDROP_SWITCH_MS` gates how often a drop can cut the look), and deeper
+native audio analysis (`analysis.rs`, symphonia-based per-song DSP). Kept
+below for the reasoning, which still holds.
 
 - **Adopt Butterchurn as a second visual engine.**
   [Butterchurn](https://github.com/jberg/butterchurn) is MilkDrop 2
@@ -162,37 +211,48 @@ and it is the axis the whole category is judged on.
 The app's problem is not capability, it is that people bounce before seeing the
 good part.
 
-- **Compact display modes.** Three: fullscreen (today), a compact floating bar,
-  and a click-through taskbar strip. Cycle with a hotkey and a chip; persist the
-  choice. The visualiser stays in fullscreen mode; compact modes show line +
-  artwork + a thin reactive accent.
-- **Wallpaper / screensaver mode.** Render to the desktop background rather than
-  an overlay. This is Wallpaper Engine's entire proposition and it turns the app
-  from something you launch into something that is simply on.
-- **Split transcription into an optional feature pack.** Ship a ~60 MB core
-  installer; download the ONNX runtime and model on first use of transcription,
-  into `userData`. Kills the size objection for everyone who never uses it.
-- **First-run overlay.** One dismissible card naming the chips and the two
-  hotkeys. Costs an hour, removes the "what is this" bounce.
-- **Auto-update** via `electron-updater` against GitHub Releases. Necessary
-  before any real distribution, and cheap while the audience is small.
+- 🔁 **Compact display modes — tried, then reversed.** Three: fullscreen
+  (today), a compact floating bar, and a click-through taskbar strip. Cycle
+  with a hotkey and a chip; persist the choice. The visualiser stays in
+  fullscreen mode; compact modes show line + artwork + a thin reactive accent.
+  ~~What actually happened: 0.28.0 removed Bar/Strip entirely and went
+  fullscreen-only, "for good" per the commit. The bounce-rate reasoning below
+  was never disproven — it was just outweighed by something at the time. If
+  this is revisited, it's a new decision, not a resurrection of dormant code.~~
+- ✅ **Wallpaper / screensaver mode — shipped (0.30.0).** Render to the desktop
+  background rather than an overlay. This is Wallpaper Engine's entire
+  proposition and it turns the app from something you launch into something
+  that is simply on.
+- ✅ **Installer size — solved differently.** Not via an optional feature pack;
+  via the Tauri migration (~6MB installer, no bundled browser runtime). See
+  gap #2 above.
+- ✅ **First-run overlay — shipped.** One dismissible card naming the chips,
+  separate from the what's-new-after-update card.
+- ✅ **Auto-update — shipped.** `tauri-plugin-updater` (GitHub/NSIS channel);
+  the Store channel updates itself once actually live (see Phase 5).
 
-*Rationale: none of this is glamorous, and all of it converts more installs into
-daily users than any feature below.*
+*Everything in this phase shipped except the compact-mode reversal — which
+argues the "stop losing users" rationale below was right about priority, even
+where the specific solution changed.*
 
 ### Phase 3 — Absorb the competitors' lyric strengths
 
-- **NetEase as a second synced source**, then **Genius as a second plain
-  source.** Sonar proves both work keyless. Ordered chain: LRCLIB synced →
-  NetEase synced → LRCLIB plain + align → Genius plain + align → Whisper alone.
-  The aligner already exists, so every plain source added multiplies in value.
-- **LLM correction of transcriptions.** Reuse the existing provider stack: feed
-  Whisper's raw transcript plus the track's title/artist to Gemini/Groq and ask
-  it to fix mishearings. This is exactly LyricWhiz's ear/brain split, and the
-  plumbing, caching and key panel are already built. Likely the biggest single
-  jump in transcription quality available without vocal isolation.
-- **Real word-level timing** where a source provides it; keep interpolation as
-  the fallback.
+- 🔶 **NetEase as a second synced source — shipped**, plus **Kugou** (not
+  originally planned, added alongside it — same keyless deal). **Genius as a
+  second plain source is still open**; Sonar proves it works keyless too.
+- **LLM correction of transcriptions — still open.** Reuse the existing
+  provider stack: feed Whisper's raw transcript plus the track's title/artist
+  to Gemini/Groq and ask it to fix mishearings. This is exactly LyricWhiz's
+  ear/brain split, and the plumbing, caching and key panel are already built.
+  With vocal isolation now shipped (see Phase 5), this is likely the single
+  biggest transcription-quality jump still on the table.
+- 🔶 **Real word-level timing — partially shipped, unverified live.** Lands
+  for a lyric line only when a Whisper transcription anchors it directly and
+  the real line's word count matches the transcribed one exactly; every other
+  line keeps the syllable-weighted interpolation as the honest fallback. See
+  align.rs / whisper.js. Needs one real transcription run with network to
+  confirm the whole pipeline actually produces measured timing in practice,
+  not just in unit tests.
 
 ### Phase 4 — Deepen our own signature look
 
@@ -202,13 +262,15 @@ the leak.
 - **More GPU layers.** Several 2D-canvas layers (galaxy, parametric curves,
   constellation) are the remaining per-frame CPU cost. Moving them into the
   existing shader would cut CPU and allow far higher particle counts.
-- **Visual presets.** A named set the user can cycle — "liquid", "starfield",
-  "minimal", "poster". Currently the look shuffles randomly, which makes it feel
-  arbitrary rather than designed.
+- ✅ **Visual presets — shipped**, since 0.10.0: a named set the user can
+  cycle, not a random shuffle. Each song remembers its own look.
 - **Per-genre visual profiles** driven by the sentiment/mood data already being
-  computed but currently used only for palette.
-- **Artist sprite coverage.** Purely additive, and now reliable because artist
-  names are cleaned at the SMTC boundary.
+  computed but currently used only for palette. Still open.
+- ✅ **Artist sprite coverage — ongoing, purely additive.** Registry has grown
+  well past the original set (Seedhe Maut, DIVINE, KR$NA, Prabh Deep, Raftaar,
+  MC STΔN, Emiway Bantai, Naezy, Brodha V as of this writing) and reliable
+  since artist names are cleaned at the SMTC boundary. More artists is always
+  a safe, low-risk addition here.
 
 ### Phase 5 — Reach
 
@@ -217,33 +279,55 @@ the leak.
   about. A WASAPI addon would have replaced a working path with a native one to
   solve a problem that stopped existing when the display-media handler was
   added.
-- **Vocal isolation (Demucs)** before transcription — the real accuracy ceiling.
-  Large model, large download; only worth it as an optional pack once Phase 1's
-  optional-pack machinery exists.
-- **Crash/error reporting**, opt-in.
+- ✅ **Vocal isolation (Demucs) before transcription — shipped**, as an
+  optional toggle (skipped outright in Lite mode) rather than gated behind
+  the "optional pack" machinery this item originally assumed — that
+  machinery turned out unnecessary once the Tauri migration solved installer
+  size a different way (see gap #2, Phase 2).
+- 🔶 **Crash/error reporting — local half shipped, remote half still open.**
+  An always-on local crash/error log now exists (crashlog.rs) — Rust panics
+  and renderer JS errors land in one file, openable from the 🔑 panel, meant
+  to be attached to a bug report by hand. What "opt-in" originally meant here
+  — reports reaching the maintainer automatically — still needs a real
+  decision: which service (if any), what's collected, and real consent UX.
+  Not something to default into without that decision being made deliberately.
+- **Microsoft Store listing isn't actually live yet.** The MSIX build +
+  Partner Center submission pipeline is automated (`ci/msix-auto-submit`,
+  `.github/workflows/store.yml`), but its `publish` job needs five repo
+  secrets (`AZURE_AD_TENANT_ID` etc.) that aren't configured, so it silently
+  no-ops on every run — and even with them, the very first submission has to
+  be done by hand (the Store API can only update an app that's already live,
+  see docs/MICROSOFT-STORE.md). So "Microsoft Store — Coming soon" on the
+  website is accurate, not stale copy — worth flagging since it's easy to
+  assume automation this thorough means it's already done.
 
 ---
 
 ## 5. Sequencing
 
-| # | Item | Impact | Effort |
-|---|---|---|---|
-| 1 | Butterchurn as a second engine (preset ecosystem) | Very high | Medium |
-| 2 | Preset system + beat-synced transitions | Very high | Medium |
-| 3 | Compact display modes | Very high | Medium |
-| 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium |
-| 5 | Auto-update | High | Low |
-| 6 | Deeper audio analysis | High | Medium |
-| 7 | NetEase + Genius lyric sources | High | Medium |
-| 8 | LLM transcript correction | High | Low-Medium |
-| 9 | First-run card | Medium | Low |
-| 10 | Wallpaper / screensaver mode | High | Medium-High |
-| 11 | More 2D layers moved onto the GPU | Medium | Medium |
-| ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — |
-| 13 | Vocal isolation (Demucs) | High (quality) | Very high |
+| # | Item | Impact | Effort | Status |
+|---|---|---|---|---|
+| 1 | Butterchurn as a second engine (preset ecosystem) | Very high | Medium | ✅ Shipped |
+| 2 | Preset system + beat-synced transitions | Very high | Medium | ✅ Shipped |
+| 3 | Compact display modes | Very high | Medium | 🔁 Reversed (0.28.0, fullscreen-only) |
+| 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium | ✅ Solved differently (Tauri, ~6MB) |
+| 5 | Auto-update | High | Low | ✅ Shipped |
+| 6 | Deeper audio analysis | High | Medium | ✅ Shipped (native symphonia DSP) |
+| 7 | NetEase + Genius lyric sources | High | Medium | 🔶 NetEase + Kugou shipped; Genius open |
+| 8 | LLM transcript correction | High | Low-Medium | Open — biggest lever still on the table |
+| 9 | First-run card | Medium | Low | ✅ Shipped |
+| 10 | Wallpaper / screensaver mode | High | Medium-High | ✅ Shipped (0.30.0) |
+| 11 | More 2D layers moved onto the GPU | Medium | Medium | Open |
+| ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — | Dropped |
+| 13 | Vocal isolation (Demucs) | High (quality) | Very high | ✅ Shipped, as an opt-in toggle |
+| 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
+| 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
+| 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | Open — needs a service decision |
 
-Items 5, 8 and 9 are small and high-leverage — do them opportunistically
-between the larger pieces.
+What's actually left from this list: Genius (item 7), LLM transcript
+correction (8), GPU-layer migration (11), and per-genre visual profiles
+(Phase 4, not tabled above). Item 16 needs a decision (which service, what's
+collected) before it's implementable at all — not a queued task.
 
 ---
 
