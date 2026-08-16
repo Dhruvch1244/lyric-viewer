@@ -146,7 +146,7 @@
           <span class="keybox__label">Spotify Client ID (for playlist import)</span>
           <input id="keybox-spotify-input" class="keybox__input" type="text"
                  placeholder="Client ID from your Spotify Developer app" autocomplete="off" spellcheck="false"
-                 title="Register an app at developer.spotify.com/dashboard, add a Redirect URI of http://127.0.0.1/callback (loopback address, no port — Spotify accepts any port at that address for a PKCE desktop flow), then paste the Client ID here." />
+                 title="Register an app at developer.spotify.com/dashboard, add all three Redirect URIs: http://127.0.0.1:43876/callback, http://127.0.0.1:43877/callback, and http://127.0.0.1:43878/callback (Spotify requires an exact port match, so the app tries each in turn — a portless loopback URI does not work), then paste the Client ID here. Also add your own Spotify account email under the app's Users and Access tab — new apps start in Development Mode, which only lets allow-listed accounts sign in." />
           <button id="keybox-spotify-save" class="chip" type="button">Save</button>
           <span id="keybox-spotify-status" class="keybox__status" role="status"></span>
         </div>
