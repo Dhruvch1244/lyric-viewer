@@ -23,6 +23,19 @@ pub struct Track {
     pub duration_ms: i64,
 }
 
+/// One word's measured timing, as produced by webview Whisper's word-level
+/// timestamps (see whisper.js) and carried through alignment in align.rs.
+/// Field names match what renderer.js's `renderWords`/`buildWordTimings`
+/// already expect — that contract existed before this had a producer.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WordTiming {
+    pub word: String,
+    #[serde(rename = "startMs")]
+    pub start_ms: i64,
+    #[serde(rename = "endMs")]
+    pub end_ms: i64,
+}
+
 /// One timestamped lyric line. Serialises to the shape the renderer expects,
 /// and deserialises back from a cached `lyrics` payload.
 #[derive(Serialize, Deserialize, Clone)]
@@ -32,6 +45,13 @@ pub struct Cue {
     pub text: String,
     #[serde(rename = "endMs", default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<i64>,
+    /// Present only when this line has measured (not interpolated) per-word
+    /// timing — today, only for lines a Whisper transcription anchored
+    /// directly (see align::align_lyrics). Absent everywhere else, which is
+    /// exactly the signal renderer.js already used to fall back to its own
+    /// syllable-weighted estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<WordTiming>>,
 }
 
 /// Words that mark a *different recording* — a studio LRC won't line up with a
@@ -222,7 +242,7 @@ pub fn parse_lrc(lrc: &str) -> Vec<Cue> {
             }
             continue;
         }
-        out.push(Cue { time_ms, text, end_ms: None });
+        out.push(Cue { time_ms, text, end_ms: None, words: None });
     }
     out
 }

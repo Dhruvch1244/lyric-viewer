@@ -70,6 +70,10 @@ pub fn to_devanagari(cues: &[Cue]) -> Option<Vec<Cue>> {
                 time_ms: c.time_ms,
                 text: converted.get(idx).cloned().unwrap_or_else(|| c.text.clone()),
                 end_ms: c.end_ms,
+                // The script conversion runs on the whole line, not word by
+                // word, so there's no per-word split to attach measured
+                // timing to here.
+                words: None,
             })
             .collect(),
     )

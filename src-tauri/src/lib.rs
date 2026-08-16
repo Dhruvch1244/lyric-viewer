@@ -1271,12 +1271,16 @@ fn source_is_whisper_derived(source: &Value) -> bool {
 /// plain lyrics where they exist (the correct words on the transcription's
 /// clock), cache it as normal synced lyrics for the next play, and report done.
 ///
-/// Every track with `hasWordTimings: false` — which today is every track,
-/// since nothing sets it true yet — makes the renderer listen-and-transcribe
-/// once ♫ has heard enough of it (see `beginTranscriptionListen` in
-/// renderer.js). Without this guard that would silently overwrite a track
-/// that already has correct LRCLIB-synced lyrics with a re-derived,
-/// Whisper-accuracy version on every single play.
+/// `hasWordTimings` on the output payload reflects whether ANY line actually
+/// got measured per-word timing out of align_lyrics — not every line does
+/// (see its word-count-match guard), so a track can be `true` with only a
+/// partial `cue.words` coverage across its lines. A track with `false` makes
+/// the renderer listen-and-transcribe again next play (see
+/// `beginTranscriptionListen` in renderer.js), on the theory that another
+/// pass might anchor lines the first one didn't. `already_synced` below is
+/// the guard against re-deriving a track that has real (non-Whisper) synced
+/// lyrics already — without it this would silently overwrite LRCLIB-correct
+/// lyrics with a Whisper-accuracy version on every single play.
 #[tauri::command]
 fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
@@ -1326,12 +1330,13 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     }
 
     let lines = final_cues.len();
+    let has_word_timings = final_cues.iter().any(|c| c.words.is_some());
     let payload_out = json!({
         "title": t.title, "artist": t.artist,
         "cues": final_cues,
         "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
         "source": { "name": source },
-        "status": "ok", "indic": false, "hasWordTimings": false,
+        "status": "ok", "indic": false, "hasWordTimings": has_word_timings,
     });
     if let Some(path) = lyrics_cache_path(&app, &key) {
         let _ = std::fs::write(&path, serde_json::to_string(&payload_out).unwrap_or_default());
