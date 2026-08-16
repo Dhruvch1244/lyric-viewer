@@ -107,6 +107,28 @@ const els = {
   heroArtist: document.getElementById('np-hero-artist'),
 };
 
+/*
+  Renderer-side crash visibility. The backend has had no way to see a JS
+  error since forever — a thrown exception here just silently stopped
+  whatever it was in the middle of, invisible to anyone but the person
+  watching devtools. Forwarded into the same local crash.log a Rust panic
+  lands in (see crashlog.rs), so a bug report has one file to attach instead
+  of "well it broke, I don't know why." Local-only, same as the Rust side —
+  nothing here is sent anywhere on its own. Registered before anything else
+  runs so it catches boot-time errors too.
+*/
+window.addEventListener('error', (e) => {
+  if (!window.player || !window.player.reportClientError) return;
+  const msg = e && e.error && e.error.stack ? e.error.stack : String((e && e.message) || e);
+  window.player.reportClientError(msg).catch(() => {});
+});
+window.addEventListener('unhandledrejection', (e) => {
+  if (!window.player || !window.player.reportClientError) return;
+  const reason = e && e.reason;
+  const msg = reason && reason.stack ? reason.stack : `unhandled rejection: ${String(reason)}`;
+  window.player.reportClientError(msg).catch(() => {});
+});
+
 let cuesLatin = [];
 let cuesDevanagari = null;
 let cuesEnglish = null;
@@ -5196,6 +5218,29 @@ if (els.wallpaperBtn) {
         }
       } else if (reportStatus) {
         reportStatus.textContent = 'Report inappropriate AI output to ' + email;
+      }
+    });
+  }
+}
+
+/* Crash/error log — reveals crash.log (see crashlog.rs) in the file manager
+   so it can be attached by hand to an email using the report flow above.
+   Local-only; this button doesn't send anything anywhere either. */
+{
+  const crashBtn = document.getElementById('keybox-crashlog');
+  const crashStatus = document.getElementById('keybox-crashlog-status');
+  if (crashBtn && window.player && window.player.openCrashLog) {
+    crashBtn.addEventListener('click', async () => {
+      crashBtn.disabled = true;
+      try {
+        const res = await window.player.openCrashLog();
+        if (crashStatus) {
+          crashStatus.textContent = res && res.status === 'ok'
+            ? 'opened — attach crash.log to a bug report email'
+            : (res && res.message) || 'could not open the log folder';
+        }
+      } finally {
+        crashBtn.disabled = false;
       }
     });
   }
