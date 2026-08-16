@@ -78,6 +78,9 @@ pub fn to_english(cues: &[Cue]) -> Option<(String, Vec<Cue>)> {
             time_ms: c.time_ms,
             text: translated.get(idx).cloned().unwrap_or_default(),
             end_ms: None,
+            // A translation's word count/order doesn't match the original's
+            // measured timing, so there's nothing honest to carry forward.
+            words: None,
         })
         .collect();
     Some((language, out))

@@ -7,7 +7,7 @@
 //! sequences (token-overlap similarity); unmatched lines interpolate between the
 //! anchors around them, so one mondegreen doesn't desync everything after it.
 
-use crate::lyrics::{token_similarity, Cue};
+use crate::lyrics::{self, token_similarity, Cue};
 
 const MATCH_FLOOR: f64 = 0.34;
 const GAP_PENALTY: f64 = -0.45;
@@ -115,7 +115,7 @@ pub fn align_lyrics(lines: &[String], cues: &[Cue], duration_ms: i64) -> (Vec<Cu
         let out = clean
             .iter()
             .enumerate()
-            .map(|(i, text)| Cue { time_ms: (step * (i as f64 + 1.0)).round() as i64, text: text.clone(), end_ms: None })
+            .map(|(i, text)| Cue { time_ms: (step * (i as f64 + 1.0)).round() as i64, text: text.clone(), end_ms: None, words: None })
             .collect();
         return (out, 0.0);
     };
@@ -167,7 +167,45 @@ pub fn align_lyrics(lines: &[String], cues: &[Cue], duration_ms: i64) -> (Vec<Cu
             t = last + 1;
         }
         last = t;
-        out.push(Cue { time_ms: t, text: text.clone(), end_ms: None });
+
+        // A directly-anchored line has a real raw Whisper cue behind it,
+        // which may carry measured per-word timing (see whisper.js). Only a
+        // DIRECT anchor has one at all — interpolated lines have no raw cue
+        // to draw from and keep words: None, same as before.
+        let (end_ms, words) = match matches[i].map(|idx| &cues[idx]) {
+            Some(raw) => {
+                let end_ms = raw.end_ms.filter(|&e| e > t);
+                let words = raw.words.as_ref().and_then(|raw_words| {
+                    // Only trust the mapping when the real line and the raw
+                    // transcription split into the same number of words —
+                    // a mishearing that merges/splits words (e.g. "good bye"
+                    // vs "goodbye") makes positional mapping meaningless, and
+                    // renderer.js already has a good syllable-weighted
+                    // fallback for exactly that case. Better to have real
+                    // timing on the lines Whisper got cleanly than guessed
+                    // timing on all of them.
+                    let tokens: Vec<&str> = text.split_whitespace().collect();
+                    if tokens.is_empty() || tokens.len() != raw_words.len() {
+                        return None;
+                    }
+                    Some(
+                        tokens
+                            .iter()
+                            .zip(raw_words.iter())
+                            .map(|(word, rw)| lyrics::WordTiming {
+                                word: (*word).to_string(),
+                                start_ms: rw.start_ms,
+                                end_ms: rw.end_ms,
+                            })
+                            .collect(),
+                    )
+                });
+                (end_ms, words)
+            }
+            None => (None, None),
+        };
+
+        out.push(Cue { time_ms: t, text: text.clone(), end_ms, words });
     }
     (out, anchors as f64 / clean.len() as f64)
 }
@@ -177,7 +215,11 @@ mod tests {
     use super::*;
 
     fn cue(t: i64, s: &str) -> Cue {
-        Cue { time_ms: t, text: s.into(), end_ms: None }
+        Cue { time_ms: t, text: s.into(), end_ms: None, words: None }
+    }
+
+    fn word(w: &str, start_ms: i64, end_ms: i64) -> lyrics::WordTiming {
+        lyrics::WordTiming { word: w.into(), start_ms, end_ms }
     }
 
     #[test]
@@ -209,5 +251,49 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert_eq!(coverage, 0.0);
         assert!(out[0].time_ms < out[1].time_ms && out[1].time_ms < out[2].time_ms);
+    }
+
+    #[test]
+    fn align_carries_word_timing_when_word_counts_match() {
+        let lines = vec!["hello world".to_string()];
+        let mut raw = cue(1000, "hello world");
+        raw.end_ms = Some(2000);
+        raw.words = Some(vec![word("hello", 1000, 1400), word("world", 1500, 2000)]);
+        let (out, _) = align_lyrics(&lines, &[raw], 5000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].end_ms, Some(2000));
+        let words = out[0].words.as_ref().expect("word timing should carry through");
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].word, "hello");
+        assert_eq!(words[0].start_ms, 1000);
+        assert_eq!(words[1].word, "world");
+        assert_eq!(words[1].end_ms, 2000);
+    }
+
+    #[test]
+    fn align_drops_word_timing_on_a_word_count_mismatch() {
+        // Real line is one word ("goodbye"); Whisper misheard it as two
+        // ("good", "bye"). Positional word-timing mapping would be nonsense
+        // here, so it must be left for renderer.js's own fallback instead.
+        let lines = vec!["goodbye".to_string()];
+        let mut raw = cue(1000, "good bye");
+        raw.words = Some(vec![word("good", 1000, 1300), word("bye", 1300, 1700)]);
+        let (out, _) = align_lyrics(&lines, &[raw], 5000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, "goodbye");
+        assert!(out[0].words.is_none());
+    }
+
+    #[test]
+    fn align_leaves_word_timing_none_on_interpolated_lines() {
+        // Only the first line anchors directly; the second has no raw cue of
+        // its own to draw word timing from.
+        let lines = vec!["hello world".to_string(), "unmatched line here".to_string()];
+        let mut raw = cue(1000, "hello world");
+        raw.words = Some(vec![word("hello", 1000, 1400), word("world", 1500, 2000)]);
+        let (out, _) = align_lyrics(&lines, &[raw], 10_000);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].words.is_some());
+        assert!(out[1].words.is_none());
     }
 }

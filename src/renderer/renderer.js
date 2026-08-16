@@ -5094,10 +5094,11 @@ window.player.onLyrics((payload) => {
       /*
         Lyrics arrived. Keep listening anyway when they have no word timings
         yet: the audio is what would turn correct line-level lyrics into
-        word-level sync (word-level alignment isn't ported to the Rust
-        backend yet — see finalize_transcription in src-tauri/src/lib.rs,
-        which currently just declines to re-transcribe an already-synced
-        track rather than attaching word timing to it), and it can only be
+        word-level sync (align::align_lyrics in the Rust backend attaches
+        real per-word timing to a line only when Whisper's word count for it
+        matches the real lyric line's — a mishearing that merges/splits words
+        leaves that line on the syllable-weighted estimate instead, which is
+        the honest thing to do rather than guess), and it can only be
         captured while the song is actually playing. Main decides at the end
         whether to spend a Whisper pass on it; this side just makes sure the
         audio exists.
