@@ -60,9 +60,9 @@
            click-through, so these are reachable in `bar` only — which is why
            the sync nudge also stays on Ctrl+Alt+←/→ in every mode. -->
       <div id="compact-controls" class="compact-controls">
-        <button id="cc-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
+        <button id="cc-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 3 1.4 8 8 13V3z"/><path d="M14.6 3 8 8l6.6 5V3z"/></svg></button>
         <button id="cc-translate" class="chip" type="button" title="Toggle translation">EN</button>
-        <button id="cc-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
+        <button id="cc-later" class="chip" type="button" title="Lyrics later (+100ms)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M1.4 3 8 8l-6.6 5V3z"/><path d="M8 3l6.6 5L8 13V3z"/></svg></button>
       </div>
     </header>
 
@@ -109,19 +109,19 @@
         <button id="btn-translate" class="chip" type="button">EN</button>
         <button id="btn-preset" class="chip" type="button" title="Visual preset">◈ Liquid</button>
         <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity">◐ vivid</button>
-        <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true">🅰</button>
+        <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.2 4.6h11.6M2.2 8h8.6M2.2 11.4h5.6"/></svg></button>
         <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻</button>
         <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫</button>
-        <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false">⚡</button>
-        <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false">🔑</button>
-        <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false">📋</button>
-        <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false">♪ Library</button>
+        <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg></button>
+        <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.1" cy="8" r="2.6"/><path d="M7.5 8H14M10.6 8v2M13 8v1.5"/></svg></button>
+        <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg></button>
+        <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg>Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
-        <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false">🖥 Wallpaper</button>
+        <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="8.4" rx="1"/><path d="M5.6 14h4.8M8 11v3"/></svg>Wallpaper</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
-        <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)">⏪</button>
+        <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 3 1.4 8 8 13V3z"/><path d="M14.6 3 8 8l6.6 5V3z"/></svg></button>
         <span id="hud-offset" class="chip chip--muted chip--drag" title="Drag to adjust sync · click to reset"></span>
-        <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)">⏩</button>
+        <button id="btn-sync-later" class="chip" type="button" title="Lyrics later (+100ms)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M1.4 3 8 8l-6.6 5V3z"/><path d="M8 3l6.6 5L8 13V3z"/></svg></button>
         <span id="hud-fps" class="chip chip--muted" title="Frames per second"></span>
         <span id="hud-bpm" class="chip chip--muted" title="Measured tempo (needs ♫ audio capture)" hidden></span>
         <span id="hud-work" class="chip chip--work" title="Background work in progress" hidden></span>
@@ -289,9 +289,9 @@
         <button id="mdp-filter-new" class="chip mdp__filter" type="button"
                 data-filter="unseen" aria-pressed="false"
                 title="Presets you have not looked at yet">Unseen</button>
-        <button id="mdp-random" class="chip chip--muted" type="button" title="Surprise me">🎲</button>
+        <button id="mdp-random" class="chip chip--muted" type="button" title="Surprise me"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.4"/><circle cx="5.2" cy="5.2" r="0.85" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="0.85" fill="currentColor" stroke="none"/><circle cx="10.8" cy="10.8" r="0.85" fill="currentColor" stroke="none"/></svg></button>
         <button id="mdp-pin" class="chip chip--muted" type="button"
-                title="Keep this preset for this song" aria-pressed="false">📌</button>
+                title="Keep this preset for this song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14.5s5-4.2 5-8.2A5 5 0 0 0 3 6.3c0 4 5 8.2 5 8.2z"/><circle cx="8" cy="6.2" r="1.7"/></svg></button>
         <button id="mdp-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
       </header>
       <p id="mdp-status" class="mdp__status" role="status"></p>
@@ -321,9 +321,9 @@
     <!-- Transport for local playback. Only shown while a local file is loaded;
          SMTC playback is controlled by whatever app owns it. -->
     <div id="transport" class="transport" hidden>
-      <button id="tr-prev" class="chip" type="button" title="Previous">⏮</button>
-      <button id="tr-play" class="chip" type="button" title="Play / pause (Space)">⏸</button>
-      <button id="tr-next" class="chip" type="button" title="Next">⏭</button>
+      <button id="tr-prev" class="chip" type="button" title="Previous"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><rect x="2.8" y="3" width="1.6" height="10"/><path d="M13 3 6.2 8 13 13V3z"/></svg></button>
+      <button id="tr-play" class="chip" type="button" title="Play / pause (Space)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><rect x="3.8" y="2.4" width="2.8" height="11.2"/><rect x="9.4" y="2.4" width="2.8" height="11.2"/></svg></button>
+      <button id="tr-next" class="chip" type="button" title="Next"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><rect x="11.6" y="3" width="1.6" height="10"/><path d="M3 3l6.8 5L3 13V3z"/></svg></button>
       <span id="tr-now" class="transport__now"></span>
       <button id="tr-stop" class="chip chip--muted" type="button" title="Stop and hand back to other players">✕</button>
     </div>
@@ -394,8 +394,8 @@
       <ul class="welcome__keys">
         <li><b>♫</b> learns the song — its energy, its tempo, a heads-up before the drop</li>
         <li><b>◈</b> changes the look · <b>◐</b> how much of your desktop shows through</li>
-        <li><b>अ</b> script · <b>EN</b> translation · <b>⚡</b> lite mode for a steadier frame rate</li>
-        <li><b>♪ Library</b> your songs — add files or a folder and play them here</li>
+        <li><b>अ</b> script · <b>EN</b> translation · <b><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg></b> lite mode for a steadier frame rate</li>
+        <li><b><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg> Library</b> your songs — add files or a folder and play them here</li>
       </ul>
       <ul class="welcome__keys welcome__keys--hotkeys">
         <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>H</kbd> hide or show the overlay</li>
