@@ -289,8 +289,26 @@ the leak.
   point at instead of another investigation from scratch.
 - ✅ **Visual presets — shipped**, since 0.10.0: a named set the user can
   cycle, not a random shuffle. Each song remembers its own look.
-- **Per-genre visual profiles** driven by the sentiment/mood data already being
-  computed but currently used only for palette. Still open.
+- ✅ **Per-mood visual profiles — shipped.** Correcting the framing first:
+  mood.js already drove more than palette (motion/turbulence/flicker/warmth
+  since an earlier session) — what was actually untouched by mood was WHICH
+  PRESET a song gets, chosen by `presets.js`'s `forTrack()` via a pure hash
+  of the track identity, mood-blind. Extended `forTrack(trackKey, moodKey)`
+  to bias that hash toward a curated subset per mood character (energetic →
+  concert/starfield/stage/geometry; dark → wormhole/geometry/concert; calm →
+  liquid/heatmap/vinyl; bright → vinyl/liquid/starfield) while keeping the
+  determinism the existing design explicitly relies on — same (track, mood)
+  always resolves to the same look, no persisted state to grow stale. Falls
+  through to the exact old unbiased behaviour for `neutral` or an unknown
+  mood, which covers the common case of mood not having resolved yet
+  (asynchronous, after lyrics) and the case of no LLM key configured at all
+  — nobody's existing experience changes unless mood data actually exists.
+  Re-applied once mood actually arrives (`onMood`, guarded to the current
+  track); the per-frame preset reconciliation already crossfades a changed
+  `presetId` smoothly (it's the same path the FPS governor's cost-based
+  substitution uses), so this needed no new transition logic. 4 new tests in
+  `test/presets.test.js` (determinism, subset containment, the
+  no-mood-data-changes-nothing guarantee, divergence across moods).
 - ✅ **Artist sprite coverage — ongoing, purely additive.** Registry has grown
   well past the original set (Seedhe Maut, DIVINE, KR$NA, Prabh Deep, Raftaar,
   MC STΔN, Emiway Bantai, Naezy, Brodha V as of this writing) and reliable
@@ -348,10 +366,12 @@ the leak.
 | 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
 | 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
 | 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | Open — needs a service decision |
+| 17 | Per-mood visual profile bias in preset selection | Medium | Low | ✅ Shipped |
 
-What's actually left from this list: GPU-layer migration (11) and per-genre
-visual profiles (Phase 4, not tabled above). Item 16 needs a decision (which
-service, what's collected) before it's implementable at all — not a queued task.
+Everything queueable from this list is now shipped or explicitly decided
+against. Item 16 is the one exception still genuinely open, and it needs a
+decision (which service, what's collected) before it's implementable at
+all — not something to default into.
 
 ---
 

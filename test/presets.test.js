@@ -244,6 +244,37 @@ test('forTrack is stable for a track and spread across tracks', () => {
   assert.ok(spread.size > 2, `expected variety across tracks, got ${[...spread].join(',')}`);
 });
 
+test('forTrack with no mood key behaves exactly like today (no LLM key configured)', () => {
+  // Backward-compatibility guarantee: a user with no mood data at all must
+  // see the unbiased hash-across-the-full-pool result, unchanged.
+  const withoutMood = VisualPresets.forTrack('Seedhe Maut|Nazar').id;
+  const withNeutral = VisualPresets.forTrack('Seedhe Maut|Nazar', 'neutral').id;
+  const withUnknown = VisualPresets.forTrack('Seedhe Maut|Nazar', 'not-a-real-mood').id;
+  assert.equal(withNeutral, withoutMood);
+  assert.equal(withUnknown, withoutMood);
+});
+
+test('forTrack stays deterministic per (track, mood) pair', () => {
+  const a = VisualPresets.forTrack('Artist|Title', 'energetic').id;
+  assert.equal(VisualPresets.forTrack('Artist|Title', 'energetic').id, a);
+});
+
+test('a mood-biased pick only ever lands inside that mood\'s subset', () => {
+  const energeticIds = ['concert', 'starfield', 'stage', 'geometry'];
+  for (let i = 0; i < 40; i += 1) {
+    const id = VisualPresets.forTrack(`artist ${i}|title ${i}`, 'energetic').id;
+    assert.ok(energeticIds.includes(id), `${id} is not an energetic-mood preset`);
+  }
+});
+
+test('different moods can pick different looks for the exact same song', () => {
+  // Not guaranteed for every possible track key, but true often enough that a
+  // fixed key with genuinely different pools on each side should diverge.
+  const calm = VisualPresets.forTrack('Test Artist|Test Song', 'calm').id;
+  const energetic = VisualPresets.forTrack('Test Artist|Test Song', 'energetic').id;
+  assert.notEqual(calm, energetic);
+});
+
 test('affordable substitutes a coherent preset instead of gutting one', () => {
   const concert = VisualPresets.byId('concert');
   // Lite mode is an explicit choice, so it steps in immediately.

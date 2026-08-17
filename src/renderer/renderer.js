@@ -5051,6 +5051,18 @@ window.player.onMood((data) => {
   currentMood = data.mood || null;
   applyMoodProfile();
   if (currentMood) setStatus(currentMood);
+  /*
+    Re-derive the look now that mood is actually known. At the moment a
+    track starts, applyLookForTrack already ran with whatever mood was known
+    THEN — usually none, since mood resolves asynchronously after lyrics do.
+    A no-op for an overridden track (applyLookForTrack checks that first) and
+    for a track whose mood-biased pick happens to match what was already
+    showing. When it does change something, the existing per-frame preset
+    reconciliation (see drawBackdrop) already crossfades a changed presetId
+    smoothly — the same path the FPS governor's substitution uses — so this
+    doesn't need its own transition logic.
+  */
+  applyLookForTrack(currentTrack);
 });
 
 /**
@@ -5714,7 +5726,7 @@ function applyLookForTrack(track) {
   const override = readLookOverrides()[trackLookKey(track)];
   presetId = override
     ? window.VisualPresets.byId(override).id
-    : window.VisualPresets.forTrack(trackLookKey(track)).id;
+    : window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key).id;
   applyPresetLabel();
 }
 
