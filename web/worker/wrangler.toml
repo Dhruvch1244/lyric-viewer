@@ -9,3 +9,13 @@ compatibility_date = "2026-01-01"
 # [[routes]]
 # pattern = "lyricoverlay.dhruvchoudhary.com/api/*"
 # zone_name = "dhruvchoudhary.com"
+
+# Optional: only needed for the desktop app's opt-in remote crash reporting
+# (see worker.js's header comment for the one-time setup commands). The
+# lyrics proxy above works fine without any of this.
+# [[kv_namespaces]]
+# binding = "CRASH_REPORTS"
+# id = "paste-the-id-wrangler-kv-namespace-create-prints-here"
+#
+# ADMIN_TOKEN is a secret, not a var — set with:
+#   npx wrangler secret put ADMIN_TOKEN

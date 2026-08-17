@@ -201,14 +201,24 @@
           <span id="keybox-report-status" class="keybox__status" role="status"></span>
         </div>
 
-        <!-- Local-only crash/error log (crashlog.rs) — nothing here is sent
-             anywhere on its own; this just makes it findable to attach to an
-             email using the report flow above. -->
+        <!-- Local crash/error log (crashlog.rs) — always written locally;
+             this just makes it findable to attach to an email using the
+             report flow above. -->
         <div class="keybox__local">
-          <span class="keybox__label">Crash / error log (local only)</span>
+          <span class="keybox__label">Crash / error log</span>
           <button id="keybox-crashlog" class="chip" type="button"
                   title="Open the local crash log's folder — attach it to a bug report">🐞 Open crash log</button>
           <span id="keybox-crashlog-status" class="keybox__status" role="status"></span>
+        </div>
+
+        <!-- Opt-in remote half of the same crash log — off by default. See
+             crashlog.rs / web/worker/src/worker.js: this goes to a Worker
+             the developer runs themselves, not a third-party service. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Send crash reports automatically</span>
+          <button id="keybox-crash-remote" class="chip" type="button"
+                  aria-pressed="false"
+                  title="When on, each local crash-log entry is also sent to the developer (no track/lyric info — just the error and app version). Off by default.">Off</button>
         </div>
       </div>
       <!-- Collapsible pre-sync panel, revealed by the 📋 chip. Paste a list of

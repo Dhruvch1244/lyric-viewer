@@ -1,23 +1,63 @@
-//! A local crash/error log — the only visibility into what breaks in the
-//! wild for a single-maintainer app with no telemetry service (see
-//! ROADMAP.md's "single maintainer, no crash reporting" gap). Deliberately
-//! local-only: nothing here is ever sent anywhere on its own. A user hitting
-//! a real bug can attach it to a bug report by hand — see the "Open crash
-//! log" button next to the existing report-email flow in the 🔑 panel.
+//! A crash/error log — the only visibility into what breaks in the wild for
+//! a single-maintainer app with no telemetry service (see ROADMAP.md's
+//! "single maintainer, no crash reporting" gap).
+//!
+//! ALWAYS local: every panic and renderer error lands in
+//! `app_config_dir()/crash.log` unconditionally, so a user hitting a real
+//! bug always has something to attach to a report by hand — see the "Open
+//! crash log" button next to the existing report-email flow in the 🔑 panel.
+//!
+//! OPTIONALLY remote, opt-in, off by default: when `Prefs::crash_reporting_enabled`
+//! is on (toggled in the same 🔑 panel, via `set_crash_reporting`), each entry
+//! is ALSO best-effort POSTed to a self-hosted endpoint (the maintainer's own
+//! Cloudflare Worker — see web/worker/src/worker.js) after the local write
+//! succeeds. This module knows nothing about `Prefs`' shape by design (a
+//! panic hook has no `State<Mutex<Prefs>>` to pull from) — it reads the
+//! live `CRASH_REPORTING_ENABLED` atomic lib.rs keeps in sync instead. The
+//! remote send never blocks the caller, never retries, and a failure (no
+//! network, endpoint not deployed) is silently swallowed — the same "must
+//! never make things worse for the user having a bug" rule the local half
+//! already follows.
 //!
 //! Structured `tauri_plugin_log` is debug-only (see lib.rs's `run()`) since
 //! verbose logging in a release build is noise most users will never read.
 //! Panics and renderer errors are a different thing: rare, always actionable,
 //! and otherwise invisible once installed on someone else's machine — worth
-//! capturing unconditionally.
+//! capturing unconditionally, at least locally.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde_json::json;
 use tauri::{AppHandle, Manager};
+
+/// The maintainer's own Worker (web/worker/src/worker.js), not a third-party
+/// service — see that file's header for the one-time KV/secret setup this
+/// endpoint needs before it accepts anything. A deployment without that
+/// setup just 503s, which `send_remote` treats the same as any other failure:
+/// silently, since nothing here is allowed to surface an error to the user.
+const REMOTE_ENDPOINT: &str = "https://lyricoverlay.dhruvchoudhary.com/api/crash-report";
+const REMOTE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Fire-and-forget POST on its own thread — never blocks `append`'s caller
+/// (which may itself be a panic hook mid-unwind). Deliberately minimal
+/// payload: no track/artist/title, no lyric text, nothing that reveals what
+/// someone was listening to. Just enough to debug the app itself.
+fn send_remote(kind: String, body: String) {
+    std::thread::spawn(move || {
+        let payload = json!({
+            "kind": kind,
+            "message": body,
+            "appVersion": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS,
+        });
+        let _ = ureq::post(REMOTE_ENDPOINT).timeout(REMOTE_TIMEOUT).send_json(payload);
+    });
+}
 
 /// Cap so months of use can't grow this file unboundedly. Crossing it drops
 /// the OLDER half rather than truncating outright — a crash log with only
@@ -69,6 +109,10 @@ fn append(app: &AppHandle, kind: &str, body: &str) {
         }
     } else if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
+    }
+
+    if crate::CRASH_REPORTING_ENABLED.load(Ordering::Relaxed) {
+        send_remote(kind.to_string(), body.to_string());
     }
 
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
