@@ -140,13 +140,17 @@ Honest list of what is actually weak, worst first.
    LRCLIB-plain miss, nothing else. See genius.rs's module doc for the full
    finding; revisit only if Genius's posture or a legitimate access path
    changes.
-7. 🔶 **Word timing was fully interpolated — now partially real.** Real
-   per-word timing now lands for any lyric line where a Whisper transcription
-   anchors directly AND the real line's word count matches the transcribed
-   one exactly (a mishearing that merges/splits words keeps the interpolated
-   estimate for that line rather than a wrong positional guess). Unverified
-   against a real model + real audio as of this writing — the logic is
-   unit-tested, not live-run. See align.rs / whisper.js.
+7. 🔶 **Word timing was fully interpolated — now partially real, but blocked
+   on a model limitation.** Real per-word timing lands for any lyric line
+   where a Whisper transcription anchors directly AND the real line's word
+   count matches the transcribed one exactly. A live verification pass
+   (2026-08-17) confirmed the WASM pipeline itself works end-to-end, but
+   found `return_timestamps: 'word'` specifically fails on the default model
+   (`onnx-community/whisper-base`) — it wasn't exported with
+   `output_attentions=True`, so the DTW alignment this mode needs has no
+   cross-attentions to work with. Chunk-level timestamps work fine on the
+   same model. Needs either a different model export or a graceful fallback
+   when word-level extraction isn't supported. See align.rs / whisper.js.
 8. ✅ **Transcription accuracy on dense music — both halves shipped.** Optional
    Demucs vocal isolation before transcription (0.29.0-ish), plus LLM
    correction of the raw transcript (correct.rs — a straight port of the old
@@ -159,8 +163,10 @@ Honest list of what is actually weak, worst first.
 9. **Transcription costs ~12 min of CPU per song** and is CPU-only — DirectML
    fails to allocate on this hardware. Also now runs via WASM in the webview
    (Tauri has no Node/onnxruntime-node), proxied to a Worker so it doesn't
-   freeze the visuals — itself not yet verified against a real model download
-   + inference pass in WebView2.
+   freeze the visuals — **confirmed live (2026-08-17)** end-to-end (model
+   download, WASM session creation, inference) after fixing five separate
+   packaging/CSP bugs the migration had left unnoticed. See
+   scripts/vendor-whisper.js for the full list.
 
 ### Structural
 
