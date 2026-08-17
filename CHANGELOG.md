@@ -2,6 +2,38 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.32.0 — 2026-08-17
+
+- **Fixed: importing local media appeared to freeze the app.** The native
+  file/folder picker was opening *behind* the always-on-top overlay window —
+  invisible and unclickable, not actually hung. This was the exact bug that
+  failed Microsoft Store certification's media-import check; fixed by
+  dropping always-on-top for the picker's duration, the same fix already
+  applied to the Spotify sign-in browser window.
+- **Fixed: Spotify "Connect" never completed.** The OAuth redirect listener
+  bound a random port on every attempt, which Spotify's exact-match
+  redirect-URI check always rejects. Now binds one of three fixed,
+  registerable ports.
+- **Real per-word lyric sync**, where a Whisper transcription anchors a line
+  cleanly enough to trust: measured timing on individual words instead of
+  the syllable-weighted estimate every line used before.
+- **An LLM can now clean up Whisper's mishearings** on songs with no real
+  lyrics available to check the transcript against, reusing whichever
+  provider is already configured — the ear/brain split behind LyricWhiz.
+- **Genius joins LRCLIB as a second source of real, unsynced lyrics** to
+  align a transcription against — keyless, like every other source here.
+- Spotify playlist imports now **auto-refresh** every few minutes instead of
+  needing a manual re-import.
+- **A song's mood now nudges which visual preset it's handed** — energetic
+  songs lean toward busier looks, calm ones toward sparser ones — on top of
+  the motion character mood already shaped.
+- **A crash/error log**, always kept locally and openable from the 🔑 panel,
+  plus an opt-in (off by default) toggle to also send it to the developer
+  automatically — no track, artist, title, or lyric text ever leaves the
+  machine through that path.
+- Three new artist sprites: Emiway Bantai, Naezy, Brodha V.
+- The website now states the signed installer's real size (~6MB).
+
 ## 0.31.2 — 2026-08-16
 
 - **Removed the emoji reaction burst entirely.** The 0.31.1 fix cut its
