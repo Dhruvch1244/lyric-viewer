@@ -13,7 +13,9 @@ mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
+mod correct;
 mod crashlog;
+mod genius;
 mod kugou;
 mod llm;
 mod localcli;
@@ -342,6 +344,14 @@ fn lyrics_cache_path(app: &AppHandle, key: &str) -> Option<std::path::PathBuf> {
     Some(dir.join(format!("{key}.json")))
 }
 
+/// Plain (unsynced) lyrics from whichever source has them first — LRCLIB's
+/// plain catalogue, then Genius. Both are used the same way downstream:
+/// force-aligned to a Whisper transcription's timing by align.rs, never shown
+/// as-is. LRCLIB first since it needs one request and no HTML scrape.
+fn fetch_plain_any(track: &lyrics::Track) -> Option<String> {
+    lyrics::fetch_plain(track).or_else(|| genius::fetch_plain(track))
+}
+
 /// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song
 /// heard before replays instantly and offline. Runs on its own thread so the
 /// network call never stalls SMTC position ticks.
@@ -417,12 +427,17 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
                 resolve_attribution(&app, &title, &artist, &key, cue_texts, None);
             }
             None => {
+                // No synced lyrics anywhere — check whether at least the real
+                // words exist (LRCLIB plain, then Genius) so the status line
+                // can say "timing needed" instead of a flat "not found" when
+                // there's actually something for a Whisper pass to align to.
+                let plain_available = fetch_plain_any(&track).is_some();
                 let _ = app.emit(
                     "lyrics",
                     json!({
                         "track": { "title": title, "artist": artist },
                         "cues": [], "status": "not-found", "indic": false,
-                        "plainAvailable": false, "origin": "network",
+                        "plainAvailable": plain_available, "origin": "network",
                     }),
                 );
             }
@@ -1285,12 +1300,13 @@ fn report_transcribe_progress(app: AppHandle, data: Value) {
     let _ = app.emit("transcribe-progress", data);
 }
 
-/// A cached lyrics payload's `source` is a bare string ("whisper" or
-/// "lrclib-plain+whisper") only when THIS function produced it; every real
-/// fetch (LRCLIB/NetEase/Kugou) stores an object. Used to tell "already has
-/// the correct synced lyrics" apart from "was itself transcribed".
+/// A cached lyrics payload's `source` is a bare string ("whisper",
+/// "lrclib-plain+whisper", or "whisper+llm") only when THIS function
+/// produced it; every real fetch (LRCLIB/NetEase/Kugou) stores an object.
+/// Used to tell "already has the correct synced lyrics" apart from "was
+/// itself transcribed".
 fn source_is_whisper_derived(source: &Value) -> bool {
-    matches!(source.as_str(), Some("whisper") | Some("lrclib-plain+whisper"))
+    matches!(source.as_str(), Some("whisper") | Some("lrclib-plain+whisper") | Some("whisper+llm"))
 }
 
 /// Finalise a webview Whisper result: align the raw transcription to the real
@@ -1342,7 +1358,7 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     // enough of them; otherwise keep the honest raw transcription.
     let mut final_cues = raw_cues.clone();
     let mut source = "whisper";
-    if let Some(plain) = lyrics::fetch_plain(&t) {
+    if let Some(plain) = fetch_plain_any(&t) {
         let lines = align::split_plain_lyrics(&plain);
         let (aligned, coverage) = align::align_lyrics(&lines, &raw_cues, t.duration_ms);
         if coverage >= 0.35 && !aligned.is_empty() {
@@ -1352,6 +1368,23 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                 "transcribe-progress",
                 json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }),
             );
+        }
+    }
+
+    // LLM correction — the "brain" half of the ear/brain split. Deliberately
+    // guarded on source == "whisper": if the block above anchored real
+    // LRCLIB lyrics onto Whisper's clock, the words are already correct and
+    // asking a model to "correct" them can only make them wrong. Runs
+    // exactly when there is nothing but what Whisper itself heard, which is
+    // also when it is worth the most.
+    if source == "whisper" {
+        let (corrected, changed) = correct::correct_transcript(&final_cues, &t.title, &t.artist, |batch, batches| {
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "correcting", "batch": batch, "batches": batches }));
+        });
+        if changed > 0 {
+            final_cues = corrected;
+            source = "whisper+llm";
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "corrected", "changed": changed }));
         }
     }
 
