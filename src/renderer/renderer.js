@@ -6042,7 +6042,9 @@ function libraryCard(it) {
 
   const art = document.createElement('div');
   art.className = 'library__art';
-  art.textContent = it.localPath ? '▶' : '♪';
+  art.innerHTML = it.localPath
+    ? '<svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M4 2.6v10.8L13 8 4 2.6z"/></svg>'
+    : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg>';
 
   const meta = document.createElement('div');
   meta.className = 'library__meta';
@@ -6842,7 +6844,11 @@ function updateTransport() {
   els.transport.hidden = !active;
   if (!active) return;
   const el = window.LocalPlayer.audioElement();
-  if (els.trPlay) els.trPlay.textContent = el && el.paused ? '▶' : '⏸';
+  if (els.trPlay) {
+    els.trPlay.innerHTML = el && el.paused
+      ? '<svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M4 2.6v10.8L13 8 4 2.6z"/></svg>'
+      : '<svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><rect x="3.8" y="2.4" width="2.8" height="11.2"/><rect x="9.4" y="2.4" width="2.8" height="11.2"/></svg>';
+  }
   if (els.trNow) {
     const q = window.LocalPlayer.queue;
     const i = window.LocalPlayer.index;
