@@ -1717,11 +1717,15 @@ fn local_item(path: &std::path::Path) -> Value {
 #[tauri::command]
 fn open_local_files(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
-    let picked = app
-        .dialog()
-        .file()
-        .add_filter("Audio", AUDIO_EXTS)
-        .blocking_pick_files();
+    // See AlwaysOnTopGuard: without dropping always-on-top first, this picker
+    // opens invisibly behind the overlay — the exact bug that failed Store
+    // certification's media-import check (it reads as the app hanging).
+    let _surfaced = AlwaysOnTopGuard::engage(&app);
+    let mut builder = app.dialog().file().add_filter("Audio", AUDIO_EXTS);
+    if let Some(win) = app.get_webview_window("main") {
+        builder = builder.set_parent(&win);
+    }
+    let picked = builder.blocking_pick_files();
     match picked {
         Some(paths) => json!(paths
             .into_iter()
@@ -1735,7 +1739,12 @@ fn open_local_files(app: AppHandle) -> Value {
 #[tauri::command]
 fn open_local_folder(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
-    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+    let _surfaced = AlwaysOnTopGuard::engage(&app);
+    let mut builder = app.dialog().file();
+    if let Some(win) = app.get_webview_window("main") {
+        builder = builder.set_parent(&win);
+    }
+    let Some(folder) = builder.blocking_pick_folder() else {
         return json!([]);
     };
     let Ok(dir) = folder.into_path() else { return json!([]) };
@@ -1762,6 +1771,41 @@ fn open_local_folder(app: AppHandle) -> Value {
 fn read_local_file(file_path: String) -> tauri::ipc::Response {
     let bytes = std::fs::read(&file_path).unwrap_or_default();
     tauri::ipc::Response::new(bytes)
+}
+
+/// Drops the overlay's always-on-top for the lifetime of the guard, restoring
+/// it on drop (success, error, or an early return — RAII covers every path a
+/// plain "restore at the end" would miss).
+///
+/// The overlay is `alwaysOnTop: true` by design, so ANY other top-level
+/// window this app opens — a browser tab (see spotify.rs, the original use
+/// of this pattern), a native file/folder picker (open_local_files /
+/// open_local_folder) — opens BEHIND it, invisible and unclickable, unless
+/// this runs first. Not a hang: the app is waiting on a dialog the user
+/// cannot see or click, which reads as "stopped responding" from the
+/// outside — this shape of bug is exactly what failed Microsoft Store
+/// certification's 10.1.2.10 functionality check on media import (the
+/// picker in open_local_files/open_local_folder had no guard until this).
+pub(crate) struct AlwaysOnTopGuard {
+    window: Option<tauri::WebviewWindow>,
+}
+
+impl AlwaysOnTopGuard {
+    pub(crate) fn engage(app: &tauri::AppHandle) -> Self {
+        let window = app.get_webview_window("main");
+        if let Some(w) = &window {
+            let _ = w.set_always_on_top(false);
+        }
+        AlwaysOnTopGuard { window }
+    }
+}
+
+impl Drop for AlwaysOnTopGuard {
+    fn drop(&mut self) {
+        if let Some(w) = &self.window {
+            let _ = w.set_always_on_top(true);
+        }
+    }
 }
 
 /// Show the overlay if hidden, hide it if shown; tell the renderer either way
