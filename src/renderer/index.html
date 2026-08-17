@@ -5,9 +5,40 @@
     <!-- 'wasm-unsafe-eval' lets onnxruntime-web compile the Whisper WASM without
          granting full eval; connect-src allows the model download from HuggingFace
          (the model is cached by the webview after the first fetch); worker-src
-         allows the ort worker. Everything else stays locked down. -->
+         allows the ort worker. Everything else stays locked down.
+
+         https://*.hf.co (confirmed live, 2026-08-17): HuggingFace's newer
+         "Xet" storage backend 302-redirects large model files (the actual
+         .onnx weights, not config.json — that one stays on huggingface.co)
+         to a *.hf.co CDN host, e.g. us.aws.cdn.hf.co — a different domain
+         entirely from *.huggingface.co, which is all this policy used to
+         allow. Without it every weight file fetch fails with a generic
+         "Failed to fetch" that looks identical to a real network outage;
+         config.json succeeding while the .onnx files fail was the tell.
+         This is HuggingFace's own infrastructure changing under an
+         allowlist written before Xet existed, not a bug here. -->
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-TzmFh45c44H05Ni+whdF2YUd4jerVgJw8OS7kYJQECU='; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://hf.co https://*.hf.co;" />
+    <!-- transformers.web.min.js has two static (unconditional) top-level
+         bare-specifier imports buried in its chunks — `onnxruntime-web/webgpu`
+         and `onnxruntime-common` — present regardless of whisper.js always
+         passing device:'wasm' and never touching WebGPU. Bare specifiers only
+         resolve under a bundler or an import map; there is no bundler here,
+         so without this the whole pipeline fails to load. Both found live,
+         one at a time, each by the transcription attempt failing with
+         "Failed to resolve module specifier <name>" the moment the previous
+         one got fixed — see scripts/vendor-whisper.js for what actually gets
+         vendored for each. Inline, not `src=`: this WebView2's Chromium
+         version doesn't support external import maps (`<script
+         type="importmap" src="...">` silently no-ops — also confirmed live).
+         Inline needs a CSP hash exception (see the meta tag above) rather
+         than 'unsafe-inline', which would open up every inline script on the
+         page, not just this one JSON blob.
+
+         If this content ever changes, the CSP hash above has to change with
+         it — the two are matched by exact byte content:
+           node -e "console.log('sha256-' + require('crypto').createHash('sha256').update('<the exact new script text>','utf8').digest('base64'))" -->
+    <script type="importmap">{"imports":{"onnxruntime-web/webgpu":"./vendor/transformers/ort.webgpu.bundle.min.mjs","onnxruntime-common":"./vendor/transformers/onnxruntime-common/index.js"}}</script>
     <title>Lyric Player</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
