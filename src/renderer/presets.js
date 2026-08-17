@@ -341,8 +341,30 @@
   );
 
   /**
-   * The look for a given track — random across songs, identical every time you
-   * play the same one.
+   * Which RANDOM_POOL presets suit each mood character, for `forTrack`'s
+   * optional mood bias. Deliberately a SUBSET per mood, not one fixed preset
+   * — a single answer per mood would make every "energetic" song look
+   * identical, which defeats the reason RANDOM_POOL exists at all.
+   *
+   * `neutral`, and any mood key not listed here, intentionally fall through
+   * to the full pool in `forTrack` below — that includes "no mood known yet",
+   * which is the common case at the exact moment a preset first gets chosen
+   * (mood resolves asynchronously, after lyrics). A user with no LLM key
+   * configured — so mood never resolves at all — sees exactly today's
+   * behaviour, unchanged. See mood.js for where these keys come from.
+   */
+  const MOOD_POOLS = {
+    energetic: ['concert', 'starfield', 'stage', 'geometry'],
+    dark: ['wormhole', 'geometry', 'concert'],
+    calm: ['liquid', 'heatmap', 'vinyl'],
+    bright: ['vinyl', 'liquid', 'starfield'],
+  };
+
+  /**
+   * The look for a given track — random across songs, identical every time
+   * you play the same one, optionally biased toward the song's mood
+   * character without losing that determinism: same (track, mood) always
+   * resolves to the same look.
    *
    * Chosen by hashing the track identity rather than rolling dice and saving
    * the result. Same outcome, no storage to grow stale, and a song looks the
@@ -350,14 +372,18 @@
    * stored; see the renderer.)
    *
    * @param {string} trackKey stable "artist|title" identity
+   * @param {string} [moodKey] a MoodProfile key — 'calm'/'energetic'/'dark'/'bright'/'neutral'
    * @returns {Preset}
    */
-  function forTrack(trackKey) {
+  function forTrack(trackKey, moodKey) {
     const key = String(trackKey || '');
     if (!key) return byId(DEFAULT_ID);
     let hash = 0;
     for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-    return RANDOM_POOL[hash % RANDOM_POOL.length];
+    const ids = MOOD_POOLS[moodKey];
+    const pool = ids ? RANDOM_POOL.filter((p) => ids.includes(p.id)) : null;
+    const chosen = pool && pool.length ? pool : RANDOM_POOL;
+    return chosen[hash % chosen.length];
   }
 
   /**
