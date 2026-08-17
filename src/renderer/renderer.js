@@ -1190,7 +1190,7 @@ let drawCostMs = 8;
 const PERF_DEBUG = (() => {
   try { return localStorage.getItem('perfDebug') === '1'; } catch { return false; }
 })();
-const PERF_BUDGET_MS = { galaxy: 4, bokeh: 1.5, glows: 2, sprites: 4, confetti: 2 };
+const PERF_BUDGET_MS = { galaxy: 4, bokeh: 1.5, glows: 2, sprites: 4, confetti: 2, mathCurves: 2, constellation: 2 };
 const perfCost = Object.fromEntries(Object.keys(PERF_BUDGET_MS).map((k) => [k, 0]));
 const perfOverBudgetFrames = Object.fromEntries(Object.keys(PERF_BUDGET_MS).map((k) => [k, 0]));
 let perfReportAt = 0;
@@ -3573,8 +3573,12 @@ function drawBackdrop(now) {
     // Behind the curves and the web, so anything else in the look sits inside
     // the tunnel rather than being swallowed by it.
     if (scene.wormhole) drawWormhole(w, h, dt, life);
+    perfT0 = perfStart();
     if (scene.math) drawMathCurves(now, w, h, life, motion);
+    perfEnd('mathCurves', perfT0);
+    perfT0 = perfStart();
     if (scene.web) drawConstellation(now, w, h, life);
+    perfEnd('constellation', perfT0);
     // The stage floor goes down before anything that stands on it.
     if (scene.stage) drawStage(w, h, now, accentLive, tintLive);
 
@@ -5047,6 +5051,18 @@ window.player.onMood((data) => {
   currentMood = data.mood || null;
   applyMoodProfile();
   if (currentMood) setStatus(currentMood);
+  /*
+    Re-derive the look now that mood is actually known. At the moment a
+    track starts, applyLookForTrack already ran with whatever mood was known
+    THEN — usually none, since mood resolves asynchronously after lyrics do.
+    A no-op for an overridden track (applyLookForTrack checks that first) and
+    for a track whose mood-biased pick happens to match what was already
+    showing. When it does change something, the existing per-frame preset
+    reconciliation (see drawBackdrop) already crossfades a changed presetId
+    smoothly — the same path the FPS governor's substitution uses — so this
+    doesn't need its own transition logic.
+  */
+  applyLookForTrack(currentTrack);
 });
 
 /**
@@ -5735,7 +5751,7 @@ function applyLookForTrack(track) {
   const override = readLookOverrides()[trackLookKey(track)];
   presetId = override
     ? window.VisualPresets.byId(override).id
-    : window.VisualPresets.forTrack(trackLookKey(track)).id;
+    : window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key).id;
   applyPresetLabel();
 }
 

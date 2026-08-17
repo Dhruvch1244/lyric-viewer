@@ -158,13 +158,13 @@ Honest list of what is actually weak, worst first.
 ### Structural
 
 10. **Windows-only.** Correct for now; SMTC is the whole detection layer.
-11. 🔶 **Single maintainer, no crash reporting — partially addressed.** An
-   always-on, local-only crash/error log now exists (crashlog.rs): Rust
-   panics and renderer JS errors both land in one file, discoverable via a
-   button in the 🔑 panel, attachable to a bug report by hand. What's still
-   missing is the "in the wild" half — nothing reports back to the
-   maintainer automatically; that needs a real decision (which service, what
-   gets collected, real opt-in UX) this doc isn't making unilaterally.
+11. ✅ **Single maintainer, no crash reporting — shipped.** An always-on
+   local crash/error log (crashlog.rs): Rust panics and renderer JS errors
+   both land in one file, discoverable via a button in the 🔑 panel,
+   attachable to a bug report by hand. Plus the "in the wild" half: opt-in
+   (off by default) automatic reporting to the maintainer's own Cloudflare
+   Worker — not a third-party service — with a deliberately minimal payload
+   (no track/artist/title/lyric text, ever).
 
 ---
 
@@ -268,13 +268,47 @@ where the specific solution changed.*
 This is the differentiator, so it deserves real investment once Phase 1 stops
 the leak.
 
-- **More GPU layers.** Several 2D-canvas layers (galaxy, parametric curves,
-  constellation) are the remaining per-frame CPU cost. Moving them into the
-  existing shader would cut CPU and allow far higher particle counts.
+- ❌ **More GPU layers — investigated, not doing it.** Galaxy is already on
+  the GPU (instanced quads inside the swirl shader, since 0.23.0) with a CPU
+  `drawGalaxy` fallback only for when that path is unavailable — this line
+  was stale about galaxy specifically. That leaves parametric curves
+  (drawMathCurves) and the constellation web (drawConstellation), and
+  swirl.js's own header comment argues AGAINST moving them: "the 2D-canvas
+  layers... are great at *discrete* things (stars, confetti, ripples,
+  parametric curves)... the GPU owns the soft, continuous 'liquid' look."
+  That's a real design rationale, not an oversight — the GPU wins on this
+  app so far have all been either full-screen per-pixel field work (the
+  swirl) or large instanced particle counts (260-star galaxy); a ~100-point
+  line strip and a ~28-node link graph are a different shape of cheap.
+  Checked live: both already carry adaptive-quality throttling (coarser
+  sampling / fewer nodes under load, same as everything else), and
+  constellation was already specifically optimised once (378 individual
+  strokes batched down to 8 via Path2D bucketing). Extended the perf
+  guardrail to track both anyway (`mathCurves`/`constellation` budgets) so
+  if either genuinely becomes a hot path later, there's already a number to
+  point at instead of another investigation from scratch.
 - ✅ **Visual presets — shipped**, since 0.10.0: a named set the user can
   cycle, not a random shuffle. Each song remembers its own look.
-- **Per-genre visual profiles** driven by the sentiment/mood data already being
-  computed but currently used only for palette. Still open.
+- ✅ **Per-mood visual profiles — shipped.** Correcting the framing first:
+  mood.js already drove more than palette (motion/turbulence/flicker/warmth
+  since an earlier session) — what was actually untouched by mood was WHICH
+  PRESET a song gets, chosen by `presets.js`'s `forTrack()` via a pure hash
+  of the track identity, mood-blind. Extended `forTrack(trackKey, moodKey)`
+  to bias that hash toward a curated subset per mood character (energetic →
+  concert/starfield/stage/geometry; dark → wormhole/geometry/concert; calm →
+  liquid/heatmap/vinyl; bright → vinyl/liquid/starfield) while keeping the
+  determinism the existing design explicitly relies on — same (track, mood)
+  always resolves to the same look, no persisted state to grow stale. Falls
+  through to the exact old unbiased behaviour for `neutral` or an unknown
+  mood, which covers the common case of mood not having resolved yet
+  (asynchronous, after lyrics) and the case of no LLM key configured at all
+  — nobody's existing experience changes unless mood data actually exists.
+  Re-applied once mood actually arrives (`onMood`, guarded to the current
+  track); the per-frame preset reconciliation already crossfades a changed
+  `presetId` smoothly (it's the same path the FPS governor's cost-based
+  substitution uses), so this needed no new transition logic. 4 new tests in
+  `test/presets.test.js` (determinism, subset containment, the
+  no-mood-data-changes-nothing guarantee, divergence across moods).
 - ✅ **Artist sprite coverage — ongoing, purely additive.** Registry has grown
   well past the original set (Seedhe Maut, DIVINE, KR$NA, Prabh Deep, Raftaar,
   MC STΔN, Emiway Bantai, Naezy, Brodha V as of this writing) and reliable
@@ -332,18 +366,19 @@ the leak.
 | 8 | LLM transcript correction | High | Low-Medium | ✅ Shipped |
 | 9 | First-run card | Medium | Low | ✅ Shipped |
 | 10 | Wallpaper / screensaver mode | High | Medium-High | ✅ Shipped (0.30.0) |
-| 11 | More 2D layers moved onto the GPU | Medium | Medium | Open |
+| 11 | More 2D layers moved onto the GPU | Medium | Medium | ❌ Investigated — not doing it (see Phase 4) |
 | ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — | Dropped |
 | 13 | Vocal isolation (Demucs) | High (quality) | Very high | ✅ Shipped, as an opt-in toggle |
 | 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
 | 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
 | 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | ✅ Shipped — self-hosted Worker, opt-in |
+| 17 | Per-mood visual profile bias in preset selection | Medium | Low | ✅ Shipped |
 
-What's actually left from this list: GPU-layer migration (11) and per-genre
-visual profiles (Phase 4, not tabled above) — both addressed on a separate
-branch/PR not yet merged as of this note. Item 16 (remote crash reporting)
-is no longer open: shipped via the maintainer's own Worker, opt-in, off by
-default.
+Everything queueable from this list is now shipped or explicitly decided
+against — including item 16, once the one open exception: remote crash
+reporting went out to the maintainer's own Cloudflare Worker (opt-in, off
+by default), not a third-party service, which is what the decision this
+line used to be waiting on actually was.
 
 ---
 
