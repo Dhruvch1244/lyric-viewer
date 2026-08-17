@@ -638,10 +638,10 @@ function buildColumn() {
 function renderWords(el, index) {
   const cue = cues[index];
   /*
-    Measured timings win. `cue.words` is present when this song has been through
-    word-level alignment (correct words from the lyric source, measured timing
-    from Whisper) — not yet ported to the Rust backend, so this never fires
-    today. Falls back to estimating the split from syllables (wordtiming.js).
+    Measured timings win. `cue.words` is present when a Whisper transcription
+    anchored this line directly AND the real line's word count matched the
+    transcribed one exactly (see align::align_lyrics on the Rust side) —
+    otherwise falls back to estimating the split from syllables (wordtiming.js).
   */
   const timings = Array.isArray(cue.words) && cue.words.length > 0
     ? cue.words
