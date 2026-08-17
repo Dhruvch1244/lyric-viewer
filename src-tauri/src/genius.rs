@@ -1,11 +1,32 @@
-//! Genius — a second PLAIN (unsynced) lyric source, keyless.
+//! Genius — a second PLAIN (unsynced) lyric source, keyless. **Currently
+//! non-functional in practice — see the CONFIRMED BLOCKED note below before
+//! trusting this module for anything.**
 //!
 //! Genius's official OAuth developer API deliberately excludes lyrics text
-//! (their terms reserve lyric display for their own site), so — like every
-//! open-source Genius scraper (lyricsgenius, Sonar, etc.) — this goes through
-//! two public, unauthenticated surfaces instead: the website's own search
-//! endpoint (what genius.com's search box itself calls, not the developer
-//! API) to find the song's page, then that page's HTML for the actual words.
+//! (their terms reserve lyric display for their own site), so this was built
+//! to go through two public, unauthenticated surfaces instead — the same
+//! technique open-source Genius scrapers (lyricsgenius, Sonar) are documented
+//! as using: the website's own search endpoint (what genius.com's search box
+//! itself calls, not the developer API) to find the song's page, then that
+//! page's HTML for the actual words.
+//!
+//! CONFIRMED BLOCKED (2026-08-17, live test): `search_hits`'s request to
+//! `/api/search/multi` gets a Cloudflare-managed JS challenge every time
+//! (`Cf-Mitigated: challenge`, HTTP 403), not a simple header check —
+//! confirmed via 3 consecutive real requests, and via curl with a full
+//! browser-shaped header set, both blocked identically. A plain HTTP client
+//! cannot execute the JS challenge Cloudflare requires, and this project
+//! does not build tooling to defeat bot-detection/anti-scraping measures —
+//! that line doesn't move for "but it would help a feature work." Left in
+//! place because it fails CLOSED (silently returns `None`, exactly like a
+//! song this app doesn't have — see `fetch_plain_any` in lib.rs), so it
+//! costs one extra ~12s-timeout-bounded network round trip on an LRCLIB
+//! plain miss and nothing else. The parsing logic (extract_lyrics_containers
+//! / html_lyrics_to_text / best_url) is still unit-tested and still correct
+//! for whatever HTML it's given — it simply never receives any, in practice,
+//! from the current live endpoint. If Genius's Cloudflare posture ever
+//! relaxes, or a legitimate (ToS-compliant) access path turns up, this
+//! module is ready to work again without changes.
 //!
 //! No API key needed — matches every other lyric source in this app (LRCLIB,
 //! NetEase, Kugou). Used the same way LRCLIB's plain lyrics are: force-aligned
@@ -256,5 +277,30 @@ mod tests {
             { "result": { "title": "Blinding Lights", "primary_artist": { "name": "The Weeknd" } } },
         ]);
         assert!(best_url(hits.as_array().unwrap(), &track("Blinding Lights", "The Weeknd")).is_none());
+    }
+
+    // Live network test — run explicitly with `cargo test -- --ignored`.
+    // Never run in CI: genius.com's markup or search endpoint can change
+    // without warning, which is exactly the kind of breakage this exists to
+    // catch, not something that should fail an unrelated PR's build.
+    //
+    // KNOWN FAILING as of 2026-08-17 — see the module doc's "CONFIRMED
+    // BLOCKED" note. Left asserting real success (not inverted to expect a
+    // 403) on purpose: this test's job is to say whether Genius actually
+    // works today, and right now the honest answer is no.
+    #[test]
+    #[ignore]
+    fn live_fetch_known_song() {
+        let t = track("Blinding Lights", "The Weeknd");
+        let hits = search_hits(&t);
+        assert!(!hits.is_empty(), "expected Genius search to return hits");
+        let url = best_url(&hits, &t);
+        eprintln!("best url: {url:?}");
+        assert!(url.is_some(), "expected a confident match for a well-known song");
+        let plain = fetch_plain(&t);
+        assert!(plain.is_some(), "expected fetch_plain to return lyric text");
+        let text = plain.unwrap();
+        assert!(text.len() > 100, "lyrics text looks too short: {} chars", text.len());
+        eprintln!("first 200 chars: {}", &text.chars().take(200).collect::<String>());
     }
 }
