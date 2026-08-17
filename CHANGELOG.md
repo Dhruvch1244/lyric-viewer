@@ -20,8 +20,6 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 - **An LLM can now clean up Whisper's mishearings** on songs with no real
   lyrics available to check the transcript against, reusing whichever
   provider is already configured — the ear/brain split behind LyricWhiz.
-- **Genius joins LRCLIB as a second source of real, unsynced lyrics** to
-  align a transcription against — keyless, like every other source here.
 - Spotify playlist imports now **auto-refresh** every few minutes instead of
   needing a manual re-import.
 - **A song's mood now nudges which visual preset it's handed** — energetic

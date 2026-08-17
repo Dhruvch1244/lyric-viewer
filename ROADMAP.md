@@ -128,11 +128,18 @@ Honest list of what is actually weak, worst first.
 
 ### Quality gaps
 
-6. ✅ **Lyric coverage — shipped.** NetEase and Kugou as second/third synced
-   sources, Genius as a second PLAIN source (keyless HTML scrape of the same
-   public search endpoint genius.com's own search box uses, same technique
-   Sonar and lyricsgenius use — see genius.rs), joining LRCLIB plain in the
-   chain a Whisper transcription aligns against.
+6. 🔶 **Lyric coverage — mostly shipped; Genius doesn't actually work.**
+   NetEase and Kugou shipped as second/third synced sources, confirmed live.
+   Genius as a second plain source was ALSO shipped, but a live verification
+   pass (2026-08-17) found it Cloudflare-blocked with a JS challenge
+   (`Cf-Mitigated: challenge`) on every request — not a bug in the scraping
+   logic, a real anti-bot wall a plain HTTP client cannot pass, and not
+   something this project will build tooling to defeat. Left in the fallback
+   chain because it fails closed (silently `None`, same as a song this app
+   doesn't have) — costs one extra bounded-timeout network round trip on an
+   LRCLIB-plain miss, nothing else. See genius.rs's module doc for the full
+   finding; revisit only if Genius's posture or a legitimate access path
+   changes.
 7. 🔶 **Word timing was fully interpolated — now partially real.** Real
    per-word timing now lands for any lyric line where a Whisper transcription
    anchors directly AND the real line's word count matches the transcribed
@@ -240,12 +247,18 @@ good part.
 argues the "stop losing users" rationale below was right about priority, even
 where the specific solution changed.*
 
-### Phase 3 — Absorb the competitors' lyric strengths ✅ shipped
+### Phase 3 — Absorb the competitors' lyric strengths 🔶 mostly shipped
 
 - ✅ **NetEase as a second synced source — shipped**, plus **Kugou** (not
-  originally planned, added alongside it — same keyless deal) and **Genius**
-  as a second PLAIN source (genius.rs — keyless HTML scrape, same technique
-  Sonar and lyricsgenius use, since Genius's real API excludes lyric text).
+  originally planned, added alongside it — same keyless deal), both
+  confirmed live.
+- 🔶 **Genius as a second PLAIN source — built, not actually reachable.**
+  genius.rs implements the same keyless HTML-scrape technique
+  Sonar/lyricsgenius are documented as using, but a live check
+  (2026-08-17) found genius.com's search endpoint behind a Cloudflare JS
+  challenge on every request — a real anti-bot wall, not a fixable bug.
+  Left in the fallback chain since it fails harmlessly closed; see
+  genius.rs's module doc for the finding.
 - ✅ **LLM correction of transcriptions — shipped (correct.rs).** Feeds
   Whisper's raw transcript plus the track's title/artist to whichever
   provider is configured and asks it to fix mishearings — exactly LyricWhiz's
@@ -362,7 +375,7 @@ the leak.
 | 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium | ✅ Solved differently (Tauri, ~6MB) |
 | 5 | Auto-update | High | Low | ✅ Shipped |
 | 6 | Deeper audio analysis | High | Medium | ✅ Shipped (native symphonia DSP) |
-| 7 | NetEase + Genius lyric sources | High | Medium | ✅ Shipped (NetEase + Kugou + Genius) |
+| 7 | NetEase + Genius lyric sources | High | Medium | 🔶 NetEase + Kugou work; Genius Cloudflare-blocked |
 | 8 | LLM transcript correction | High | Low-Medium | ✅ Shipped |
 | 9 | First-run card | Medium | Low | ✅ Shipped |
 | 10 | Wallpaper / screensaver mode | High | Medium-High | ✅ Shipped (0.30.0) |
@@ -374,11 +387,12 @@ the leak.
 | 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | ✅ Shipped — self-hosted Worker, opt-in |
 | 17 | Per-mood visual profile bias in preset selection | Medium | Low | ✅ Shipped |
 
-Everything queueable from this list is now shipped or explicitly decided
-against — including item 16, once the one open exception: remote crash
-reporting went out to the maintainer's own Cloudflare Worker (opt-in, off
-by default), not a third-party service, which is what the decision this
-line used to be waiting on actually was.
+Everything queueable from this list is now shipped, explicitly decided
+against, or (item 7's Genius half) confirmed built-but-blocked by a third
+party's anti-bot wall this project won't engineer around. Item 16's
+decision — remote crash reporting went to the maintainer's own Cloudflare
+Worker, opt-in, off by default, not a third-party service — is also
+resolved.
 
 ---
 
