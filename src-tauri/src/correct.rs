@@ -255,4 +255,34 @@ mod tests {
         assert_eq!(out.len(), 0);
         assert_eq!(changed, 0);
     }
+
+    // Live network test — run explicitly with `cargo test -- --ignored`.
+    // Needs a real configured provider (GEMINI_API_KEY etc.) in the
+    // environment; skips itself (does not fail) if none is present, since a
+    // CI runner or a contributor's machine won't have one.
+    #[test]
+    #[ignore]
+    fn live_correct_a_deliberate_mishearing() {
+        if !llm::is_available() {
+            eprintln!("skipped: no LLM provider configured in this environment");
+            return;
+        }
+        // Real line: "I said, ooh, I'm blinded by the lights" — phonetically
+        // plausible Whisper mishearing of "lights" as "lice" is the kind of
+        // error this module exists to catch, using the song's own fame as
+        // the correction signal a speech model doesn't have.
+        let cues = [cue(1000, "i said ooh im blinded by the lice")];
+        let (out, changed) = correct_transcript(&cues, "Blinding Lights", "The Weeknd", |b, n| {
+            eprintln!("batch {b}/{n}");
+        });
+        eprintln!("corrected text: {}", out[0].text);
+        assert_eq!(out.len(), 1, "line count must never change");
+        assert_eq!(out[0].time_ms, 1000, "timing must never change");
+        assert!(changed > 0, "expected the model to fix the mishearing, got: {}", out[0].text);
+        assert!(
+            out[0].text.to_lowercase().contains("light"),
+            "expected a correction toward 'lights', got: {}",
+            out[0].text
+        );
+    }
 }
