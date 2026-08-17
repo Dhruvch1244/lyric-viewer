@@ -268,9 +268,25 @@ where the specific solution changed.*
 This is the differentiator, so it deserves real investment once Phase 1 stops
 the leak.
 
-- **More GPU layers.** Several 2D-canvas layers (galaxy, parametric curves,
-  constellation) are the remaining per-frame CPU cost. Moving them into the
-  existing shader would cut CPU and allow far higher particle counts.
+- ❌ **More GPU layers — investigated, not doing it.** Galaxy is already on
+  the GPU (instanced quads inside the swirl shader, since 0.23.0) with a CPU
+  `drawGalaxy` fallback only for when that path is unavailable — this line
+  was stale about galaxy specifically. That leaves parametric curves
+  (drawMathCurves) and the constellation web (drawConstellation), and
+  swirl.js's own header comment argues AGAINST moving them: "the 2D-canvas
+  layers... are great at *discrete* things (stars, confetti, ripples,
+  parametric curves)... the GPU owns the soft, continuous 'liquid' look."
+  That's a real design rationale, not an oversight — the GPU wins on this
+  app so far have all been either full-screen per-pixel field work (the
+  swirl) or large instanced particle counts (260-star galaxy); a ~100-point
+  line strip and a ~28-node link graph are a different shape of cheap.
+  Checked live: both already carry adaptive-quality throttling (coarser
+  sampling / fewer nodes under load, same as everything else), and
+  constellation was already specifically optimised once (378 individual
+  strokes batched down to 8 via Path2D bucketing). Extended the perf
+  guardrail to track both anyway (`mathCurves`/`constellation` budgets) so
+  if either genuinely becomes a hot path later, there's already a number to
+  point at instead of another investigation from scratch.
 - ✅ **Visual presets — shipped**, since 0.10.0: a named set the user can
   cycle, not a random shuffle. Each song remembers its own look.
 - **Per-genre visual profiles** driven by the sentiment/mood data already being
@@ -326,7 +342,7 @@ the leak.
 | 8 | LLM transcript correction | High | Low-Medium | ✅ Shipped |
 | 9 | First-run card | Medium | Low | ✅ Shipped |
 | 10 | Wallpaper / screensaver mode | High | Medium-High | ✅ Shipped (0.30.0) |
-| 11 | More 2D layers moved onto the GPU | Medium | Medium | Open |
+| 11 | More 2D layers moved onto the GPU | Medium | Medium | ❌ Investigated — not doing it (see Phase 4) |
 | ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — | Dropped |
 | 13 | Vocal isolation (Demucs) | High (quality) | Very high | ✅ Shipped, as an opt-in toggle |
 | 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
