@@ -293,13 +293,19 @@ the leak.
   the "optional pack" machinery this item originally assumed — that
   machinery turned out unnecessary once the Tauri migration solved installer
   size a different way (see gap #2, Phase 2).
-- 🔶 **Crash/error reporting — local half shipped, remote half still open.**
-  An always-on local crash/error log now exists (crashlog.rs) — Rust panics
-  and renderer JS errors land in one file, openable from the 🔑 panel, meant
-  to be attached to a bug report by hand. What "opt-in" originally meant here
-  — reports reaching the maintainer automatically — still needs a real
-  decision: which service (if any), what's collected, and real consent UX.
-  Not something to default into without that decision being made deliberately.
+- ✅ **Crash/error reporting — both halves shipped.** Local: an always-on
+  crash/error log (crashlog.rs) — Rust panics and renderer JS errors land in
+  one file, openable from the 🔑 panel, meant to be attached to a bug report
+  by hand. Remote: opt-in, off by default ("Send crash reports automatically"
+  in the same panel) — when on, each entry is ALSO best-effort POSTed to the
+  maintainer's own Cloudflare Worker (web/worker/src/worker.js's new
+  `/api/crash-report`/`/api/crash-reports` endpoints, KV-backed, admin-token-
+  gated for reading them back), not a third-party telemetry service. Payload
+  is deliberately minimal — kind, message, app version, OS — no track,
+  artist, title, or lyric text ever leaves the machine through this path.
+  Requires the maintainer to run the one-time KV/secret setup documented in
+  that file; without it the endpoint 503s and the app silently keeps working
+  exactly as if reporting were off.
 - **Microsoft Store listing isn't actually live yet.** The MSIX build +
   Partner Center submission pipeline is automated (`ci/msix-auto-submit`,
   `.github/workflows/store.yml`), but its `publish` job needs five repo
@@ -331,11 +337,13 @@ the leak.
 | 13 | Vocal isolation (Demucs) | High (quality) | Very high | ✅ Shipped, as an opt-in toggle |
 | 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
 | 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
-| 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | Open — needs a service decision |
+| 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | ✅ Shipped — self-hosted Worker, opt-in |
 
 What's actually left from this list: GPU-layer migration (11) and per-genre
-visual profiles (Phase 4, not tabled above). Item 16 needs a decision (which
-service, what's collected) before it's implementable at all — not a queued task.
+visual profiles (Phase 4, not tabled above) — both addressed on a separate
+branch/PR not yet merged as of this note. Item 16 (remote crash reporting)
+is no longer open: shipped via the maintainer's own Worker, opt-in, off by
+default.
 
 ---
 

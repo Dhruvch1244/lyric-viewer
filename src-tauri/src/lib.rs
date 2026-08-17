@@ -49,6 +49,13 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 /// every subsequent provider failure.
 static OFFERED_CLI: AtomicBool = AtomicBool::new(false);
 
+/// Live mirror of `Prefs::crash_reporting_enabled`, readable from crashlog.rs
+/// (a panic hook has no `State<Mutex<Prefs>>` to pull from, and crashlog.rs
+/// deliberately doesn't know Prefs' shape) without needing to lock the prefs
+/// mutex from a context that might itself be panicking. Kept in sync by
+/// `set_crash_reporting` and seeded from the persisted value at startup.
+pub(crate) static CRASH_REPORTING_ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// Called from `llm::convert()` when every configured provider (cloud and
 /// local-CLI) has just failed or none is configured. Offers the local-CLI
 /// fallback exactly at the moment it would actually help, rather than as a
@@ -111,6 +118,10 @@ struct Prefs {
     transcribe_model: String,
     display_mode: String,
     vocal_isolation: bool,
+    /// Opt-in, off by default: whether crashlog.rs also POSTs a crash/error
+    /// entry to the (self-hosted, maintainer-controlled) remote endpoint on
+    /// top of always writing it locally. See crashlog.rs's module doc.
+    crash_reporting_enabled: bool,
 }
 
 impl Default for Prefs {
@@ -124,6 +135,7 @@ impl Default for Prefs {
             transcribe_model: String::new(),
             display_mode: "full".into(),
             vocal_isolation: false,
+            crash_reporting_enabled: false,
         }
     }
 }
@@ -627,7 +639,20 @@ fn get_prefs(state: State<Mutex<Prefs>>) -> Value {
         "script": p.script,
         "showTranslation": p.show_translation,
         "appVersion": env!("CARGO_PKG_VERSION"),
+        "crashReportingEnabled": p.crash_reporting_enabled,
     })
+}
+
+/// Toggle opt-in remote crash reporting (see crashlog.rs). Off by default;
+/// this is the only thing that can turn it on, and it always stays a
+/// deliberate, visible choice in the 🔑 panel — never inferred, never turned
+/// on for the user.
+#[tauri::command]
+fn set_crash_reporting(enabled: bool, state: State<Mutex<Prefs>>, app: AppHandle) {
+    let mut p = state.lock().unwrap();
+    p.crash_reporting_enabled = enabled;
+    save_prefs(&app, &p);
+    CRASH_REPORTING_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -1948,6 +1973,7 @@ pub fn run() {
                 prefs.display_mode = "full".into();
             }
             let mode = prefs.display_mode.clone();
+            CRASH_REPORTING_ENABLED.store(prefs.crash_reporting_enabled, Ordering::Relaxed);
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(CurTrack::default()));
             app.manage(UpdateStore(Mutex::new(json!({ "available": false }))));
@@ -2021,6 +2047,7 @@ pub fn run() {
             report_jobs,
             report_client_error,
             open_crash_log,
+            set_crash_reporting,
             wallpaper_interact,
             artwork_candidates,
             choose_artwork,

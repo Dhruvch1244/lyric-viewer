@@ -5247,6 +5247,31 @@ if (els.wallpaperBtn) {
   }
 }
 
+/* Remote crash reporting toggle — opt-in, off by default (see crashlog.rs /
+   web/worker/src/worker.js). Source of truth is the persisted pref, read
+   back via getPrefs() on load rather than assumed on, same caution as the
+   autostart toggle just below. */
+{
+  const remoteBtn = document.getElementById('keybox-crash-remote');
+  if (remoteBtn && window.player && window.player.getPrefs && window.player.setCrashReporting) {
+    const paint = (on) => {
+      remoteBtn.setAttribute('aria-pressed', String(on));
+      remoteBtn.textContent = on ? 'On' : 'Off';
+    };
+    window.player.getPrefs().then((p) => paint(Boolean(p && p.crashReportingEnabled))).catch(() => {});
+    remoteBtn.addEventListener('click', async () => {
+      const next = remoteBtn.getAttribute('aria-pressed') !== 'true';
+      paint(next);
+      remoteBtn.disabled = true;
+      try {
+        await window.player.setCrashReporting(next);
+      } finally {
+        remoteBtn.disabled = false;
+      }
+    });
+  }
+}
+
 /* Launch-on-startup toggle. Source of truth is the OS itself (registry Run
    key via tauri-plugin-autostart) rather than a local pref, so the label is
    read back from get_autostart() on load instead of assumed. On the Store
