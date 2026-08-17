@@ -2,6 +2,29 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.33.0 — 2026-08-18
+
+- **In-browser Whisper transcription actually works now.** It had been
+  completely broken since the Tauri migration without anyone noticing —
+  five distinct packaging/CSP bugs, each only visible once the previous one
+  was fixed (a missing import map for two bare module specifiers, a wrongly
+  vendored `onnxruntime-common` copy that failed with an unrelated-looking
+  quantization error, a missing WASM variant, and HuggingFace's newer "Xet"
+  CDN falling outside the old CSP allowlist). Confirmed live end-to-end:
+  model download, WASM session creation, and inference all work.
+- **Redesigned the app's UI chrome** — HUD chips, the key/pre-sync panels,
+  the library/cover-art/preset pickers, first-run and update cards — in a
+  flat, warm-dark monochrome style with crisp borders and minimal shadow.
+  Every emoji glyph in the chrome (🔑📋♪🖥🎲📌 and the transport controls)
+  is now a plain monochrome icon. The lyric display, swirl backdrop, and
+  band meters are unchanged — that's the product's own visual identity,
+  not chrome.
+- **Corrected the record on Genius as a lyrics source**: it's blocked by a
+  Cloudflare JS challenge and was never actually working, despite being
+  listed as shipped. Left in place (it fails closed, at the cost of one
+  bounded-timeout network call on a miss) but no longer claimed as a real
+  source until something changes on Genius's end.
+
 ## 0.32.0 — 2026-08-17
 
 - **Fixed: importing local media appeared to freeze the app.** The native
