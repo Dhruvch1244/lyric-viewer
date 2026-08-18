@@ -68,6 +68,7 @@
     onMood: (cb) => on('mood', cb),
     onAttribution: (cb) => on('attribution', cb),
     onWallpaperPointer: (cb) => on('wallpaper-pointer', cb),
+    onWallpaperPower: (cb) => on('wallpaper-power', cb),
     onArtwork: (cb) => on('artwork', cb),
     onBeatmap: (cb) => on('beatmap', cb),
     onHeatmap: (cb) => on('heatmap', cb),

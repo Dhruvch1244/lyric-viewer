@@ -17,14 +17,21 @@ use std::ffi::c_void;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, RedrawWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
+};
+use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetClassNameW, GetParent, GetWindowLongPtrW, GetWindowRect, SendMessageTimeoutW,
-    SetParent, SetWindowLongPtrW, SetWindowPos, WindowFromPoint, GWL_STYLE, HWND_TOP, HWND_TOPMOST,
-    SEND_MESSAGE_TIMEOUT_FLAGS, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CHILD,
-    WS_POPUP,
+    FindWindowExW, GetClassNameW, GetForegroundWindow, GetParent, GetWindowLongPtrW, GetWindowRect,
+    IsIconic, SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, WindowFromPoint,
+    GWL_STYLE, HWND_TOP, HWND_TOPMOST, SEND_MESSAGE_TIMEOUT_FLAGS, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, WS_CHILD, WS_POPUP,
 };
 
 /// Progman's "spawn a WorkerW" message. Undocumented, and the whole basis.
@@ -266,5 +273,98 @@ pub fn is_cursor_over_desktop(our_raw: isize, x: i32, y: i32) -> bool {
             }
         }
         false
+    }
+}
+
+// ------------------------------------------------ power-aware auto-suspend
+//
+// Wallpaper Engine and Lively Wallpaper both stop rendering when they'd
+// otherwise be pure waste: running on battery, behind a locked screen, or
+// behind another app's exclusive fullscreen (a game). A reparented window
+// behind the icons has no way to know any of this on its own — nothing
+// tells it the icons are covered — so `start_power_watcher` in lib.rs polls
+// these three checks and the renderer parks its render loop on the result.
+
+/// True when running on battery power. `None` means the query failed or the
+/// line status is unknown (some desktops/VMs report this) — callers should
+/// treat that as "don't suspend" rather than guess.
+pub fn on_battery() -> Option<bool> {
+    let mut status = SYSTEM_POWER_STATUS::default();
+    unsafe { GetSystemPowerStatus(&mut status).ok()? };
+    match status.ACLineStatus {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
+    }
+}
+
+/// True while the workstation is locked, or a secure-desktop prompt (UAC) is
+/// up. `OpenInputDesktop` can only open the desktop actually receiving
+/// input, so it fails exactly when something else — winlogon's lock screen,
+/// consent.exe — owns it instead of the interactive desktop we're on.
+pub fn is_locked() -> bool {
+    unsafe {
+        match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_SWITCHDESKTOP) {
+            Ok(hdesk) => {
+                let _ = CloseDesktop(hdesk);
+                false
+            }
+            Err(_) => true,
+        }
+    }
+}
+
+/// True when the foreground window looks like an exclusive/borderless
+/// fullscreen app on its own monitor — a game, a video player — rather than
+/// the desktop, the taskbar, or our own reparented window.
+pub fn foreground_is_fullscreen(our_raw: isize) -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if is_null(fg) {
+            return false;
+        }
+        if fg.0 == hwnd_from_raw(our_raw).0 {
+            return false;
+        }
+        if DESKTOP_CLASSES.contains(&class_name_of(fg).as_str()) {
+            return false;
+        }
+        if IsIconic(fg).as_bool() {
+            return false;
+        }
+        let mut wr = RECT::default();
+        if GetWindowRect(fg, &mut wr).is_err() {
+            return false;
+        }
+        let hmon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(hmon, &mut mi).as_bool() {
+            return false;
+        }
+        let mr = mi.rcMonitor;
+        wr.left <= mr.left && wr.top <= mr.top && wr.right >= mr.right && wr.bottom >= mr.bottom
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Not a real fullscreen app; whatever has focus when this runs (a
+    /// terminal, an editor) is exactly the "must not false-positive on an
+    /// ordinary window" case. Manually cross-check on_battery()/is_locked()
+    /// against `powercfg /batteryreport` or the taskbar power icon — there is
+    /// no automated ground truth for "is this desktop plugged in right now".
+    #[test]
+    #[ignore] // live desktop state — run with `cargo test -- --ignored` interactively
+    fn live_power_state_reads_without_panicking() {
+        let battery = on_battery();
+        let locked = is_locked();
+        eprintln!("on_battery: {battery:?}, is_locked: {locked}");
+        // A running, unlocked interactive session (this test can only run in
+        // one) must never itself report as locked.
+        assert!(!locked, "test process is definitionally on the input desktop");
+        let fullscreen = foreground_is_fullscreen(0);
+        eprintln!("foreground_is_fullscreen (raw=0, i.e. never 'us'): {fullscreen}");
     }
 }

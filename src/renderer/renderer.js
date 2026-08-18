@@ -336,6 +336,18 @@ let liteMode = false;
    hide. Both render loops park on this — see the onVisibility handler. */
 let overlayVisible = true;
 
+/* Whether wallpaper mode has been auto-paused by the backend (on battery,
+   screen locked, or another app has exclusive fullscreen — see
+   start_power_watcher in lib.rs and the onWallpaperPower handler). Only ever
+   true while actually in wallpaper mode; independent of overlayVisible so a
+   manual Ctrl+Alt+H hide and an automatic power-triggered pause can't stomp
+   on each other's state. */
+let wallpaperSuspended = false;
+
+/* The single gate both render loops actually check. Both conditions have to
+   allow rendering — either one being false must stop it. */
+function canRender() { return overlayVisible && !wallpaperSuspended; }
+
 /* Last progress width actually written, in tenths of a percent. -1 forces the
    next frame to write, which is what resets it on a track change. */
 let lastProgressPct = -1;
@@ -971,10 +983,11 @@ function updateTranslation(index) {
 
 function frame() {
   try {
-    // Hidden overlay: nothing here has a visible effect, and the DOM writes
-    // below are the expensive kind. Position is derived from a timestamp, not
-    // accumulated, so skipping frames loses nothing.
-    if (!overlayVisible) return;
+    // Hidden overlay, or wallpaper mode auto-paused (battery/lock/fullscreen):
+    // nothing here has a visible effect, and the DOM writes below are the
+    // expensive kind. Position is derived from a timestamp, not accumulated,
+    // so skipping frames loses nothing.
+    if (!canRender()) return;
 
     const positionMs = estimatePosition();
     if (cues.length > 0) {
@@ -1027,10 +1040,10 @@ function frame() {
   } catch (err) {
     console.error('[frame]', err);
   } finally {
-    // Hidden overlay: stop rescheduling entirely rather than waking up every
-    // vsync just to hit the early return above. onVisibility restarts the
-    // loop when the overlay comes back.
-    if (overlayVisible) requestAnimationFrame(frame);
+    // Hidden or auto-paused: stop rescheduling entirely rather than waking up
+    // every vsync just to hit the early return above. onVisibility/
+    // onWallpaperPower restart the loop when either condition clears.
+    if (canRender()) requestAnimationFrame(frame);
   }
 }
 
@@ -3089,11 +3102,12 @@ function drawBackdrop(now) {
   // without repeating itself.
   let startedAt = 0;
   try {
-    // Hidden overlay: draw nothing at all. This is the single largest saving
-    // available while hidden — the swirl shader, the galaxy and the sprites all
-    // hang off this function. Placed above the cadence sampler so the parked
-    // frames are not mistaken for a stalling compositor.
-    if (!overlayVisible) return;
+    // Hidden overlay, or wallpaper mode auto-paused: draw nothing at all. This
+    // is the single largest saving available while parked — the swirl shader,
+    // the galaxy and the sprites all hang off this function. Placed above the
+    // cadence sampler so the parked frames are not mistaken for a stalling
+    // compositor.
+    if (!canRender()) return;
 
     // Compact modes have no backdrop: there is no room for one, and the point
     // of them is to composite fewer pixels. Everything below this line draws.
@@ -3849,8 +3863,8 @@ function drawBackdrop(now) {
     if (startedAt) drawCostMs += (performance.now() - startedAt - drawCostMs) * 0.1;
     perfReport(now);
     // Same stop-rather-than-idle rule as frame(): don't keep waking up once
-    // hidden. onVisibility restarts the loop when the overlay comes back.
-    if (overlayVisible) requestAnimationFrame(drawBackdrop);
+    // parked. onVisibility/onWallpaperPower restart the loop when it clears.
+    if (canRender()) requestAnimationFrame(drawBackdrop);
   }
 }
 
@@ -5570,22 +5584,41 @@ window.player.onDisplayMode(({ mode, insets }) => {
   }
 });
 
+/* Shared by onVisibility and onWallpaperPower below: two independent gates
+   feed canRender(), so either one clearing can be the transition that makes
+   rendering possible again — whichever it is, do the same restart. */
+function resumeRenderingIfNeeded(wasRendering) {
+  if (wasRendering || !canRender()) return;
+  // Forget the timestamps from before the pause so the first frame back does
+  // not see a multi-minute dt and jump every animation forward.
+  lastBackNow = 0;
+  lastFrameAt = 0;
+  lastDrawnAt = 0;
+  // Both loops stopped rescheduling themselves while parked (see frame() and
+  // drawBackdrop()) — kick them back off now that there's something to draw.
+  requestAnimationFrame(drawBackdrop);
+  requestAnimationFrame(frame);
+}
+
 window.player.onVisibility(({ visible }) => {
-  const wasVisible = overlayVisible;
+  const wasRendering = canRender();
   overlayVisible = visible !== false;
-  // Resuming: forget the timestamps from before the pause so the first frame
-  // back does not see a multi-minute dt and jump every animation forward.
-  if (overlayVisible) {
-    lastBackNow = 0;
-    lastFrameAt = 0;
-    lastDrawnAt = 0;
-    // Both loops stopped rescheduling themselves while hidden (see frame()
-    // and drawBackdrop()) — kick them back off now that there's something to draw.
-    if (!wasVisible) {
-      requestAnimationFrame(drawBackdrop);
-      requestAnimationFrame(frame);
-    }
+  resumeRenderingIfNeeded(wasRendering);
+});
+
+/* Wallpaper mode auto-paused/resumed by the backend's battery/lock/fullscreen
+   watcher (see start_power_watcher in lib.rs). `reason` is informational —
+   surfaced on the wallpaper chip's title so a "why did this stop" question
+   has an answer, but the render-loop gate itself doesn't care which reason. */
+window.player.onWallpaperPower(({ suspended, reason }) => {
+  const wasRendering = canRender();
+  wallpaperSuspended = Boolean(suspended);
+  if (els.wallpaperBtn) {
+    els.wallpaperBtn.title = wallpaperSuspended
+      ? `Desktop wallpaper mode — paused (${reason || 'power saving'})`
+      : 'Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)';
   }
+  resumeRenderingIfNeeded(wasRendering);
 });
 
 window.player.onIdle(() => {

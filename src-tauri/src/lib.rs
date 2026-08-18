@@ -94,6 +94,14 @@ static WALLPAPER_ATTACHED: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 static WALLPAPER_SURFACED: AtomicBool = AtomicBool::new(false);
 
+/// True while wallpaper mode has paused its own rendering because the system
+/// is on battery, locked, or another app owns exclusive fullscreen. See
+/// `start_power_watcher`. Mirrors what Wallpaper Engine / Lively Wallpaper do
+/// on Windows — a reparented window behind the icons has no way to notice
+/// any of this on its own.
+#[cfg(windows)]
+static WALLPAPER_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -763,6 +771,12 @@ fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
         // exactly how a stuck "can't get out" report happens.
         let was_surfaced = WALLPAPER_SURFACED.swap(false, Ordering::Relaxed);
         WALLPAPER_ATTACHED.store(false, Ordering::Relaxed);
+        // Don't wait for the power watcher's next poll tick to notice we left:
+        // a stale "suspended" flag would freeze the render loop in the fullscreen
+        // mode being switched to, which has nothing to do with battery/lock/games.
+        if WALLPAPER_SUSPENDED.swap(false, Ordering::Relaxed) {
+            let _ = app.emit("wallpaper-power", json!({ "suspended": false, "reason": Value::Null }));
+        }
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.set_always_on_top(false);
         }
@@ -800,6 +814,41 @@ fn start_pointer_forwarding(app: AppHandle) {
 
 #[cfg(not(windows))]
 fn start_pointer_forwarding(_app: AppHandle) {}
+
+/// Pause wallpaper rendering when it would be pure waste: on battery, behind
+/// a locked screen, or behind another app's exclusive fullscreen (a game) —
+/// the same three triggers Wallpaper Engine and Lively Wallpaper both use.
+/// Only while attached; a 2s poll is plenty for state that changes on human
+/// timescales (unplugging, alt-tabbing into a game), unlike the pointer-
+/// forwarding loop above which has to track a moving cursor.
+#[cfg(windows)]
+fn start_power_watcher(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if !WALLPAPER_ATTACHED.load(Ordering::Relaxed) {
+            continue;
+        }
+        let Some(hwnd) = window_hwnd(&app) else { continue };
+        let (suspend, reason) = if wallpaper::is_locked() {
+            (true, "lock")
+        } else if wallpaper::on_battery().unwrap_or(false) {
+            (true, "battery")
+        } else if wallpaper::foreground_is_fullscreen(hwnd) {
+            (true, "fullscreen")
+        } else {
+            (false, "")
+        };
+        if suspend != WALLPAPER_SUSPENDED.swap(suspend, Ordering::Relaxed) {
+            let _ = app.emit(
+                "wallpaper-power",
+                json!({ "suspended": suspend, "reason": if suspend { Value::from(reason) } else { Value::Null } }),
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_power_watcher(_app: AppHandle) {}
 
 #[cfg(not(windows))]
 fn apply_wallpaper(_app: &AppHandle, _old_mode: &str, _new_mode: &str) {}
@@ -2065,9 +2114,11 @@ pub fn run() {
 
             // Begin streaming "now playing" from Windows, and (Windows only)
             // the pointer-forwarding loop wallpaper mode needs for clicks to
-            // reach a window reparented behind the desktop icons.
+            // reach a window reparented behind the desktop icons, plus the
+            // battery/lock/fullscreen watcher that pauses it.
             start_smtc(handle.clone());
             start_pointer_forwarding(handle.clone());
+            start_power_watcher(handle.clone());
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(

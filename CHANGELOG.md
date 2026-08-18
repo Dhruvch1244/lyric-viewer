@@ -26,6 +26,16 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   timing to the *existing, trusted* line text and timing wherever a line
   cleanly anchors to what Whisper heard — the synced text/timing a real
   source already got right never gets touched or replaced, only enriched.
+- **Wallpaper mode now pauses itself on battery, at the lock screen, or
+  behind a fullscreen app** — the same three triggers Wallpaper Engine and
+  Lively Wallpaper use to avoid being the reason a laptop drains fast or a
+  game drops frames. A window reparented behind the desktop icons has no way
+  to notice any of this on its own, so a background watcher polls
+  `GetSystemPowerStatus`, `OpenInputDesktop`, and the foreground window's
+  monitor coverage every 2 seconds and parks the render loop the instant one
+  of them applies, resuming automatically the moment none do. Live-verified
+  against real OS state (matched the taskbar's actual AC/battery status
+  exactly) rather than just compiled.
 
 ## 0.33.0 — 2026-08-18
 
