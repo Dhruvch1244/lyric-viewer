@@ -24,13 +24,13 @@ mod mood;
 mod netease;
 mod presets;
 mod spotify;
+#[cfg(windows)]
+mod smtc;
 mod translate;
 mod transliterate;
 #[cfg(windows)]
 mod wallpaper;
 
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -106,11 +106,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The PowerShell 5.1 SMTC poller, embedded so it needs no resource-path
-/// resolution and works identically in `tauri dev` and a bundled install. It is
-/// written to a temp file at startup and spawned from there.
-const SMTC_POLL_PS1: &str = include_str!("../smtc-poll.ps1");
-
 // ---------------------------------------------------------------- preferences
 
 /// Persisted user preferences. Field names map to the camelCase the renderer
@@ -184,40 +179,14 @@ fn save_prefs(app: &AppHandle, prefs: &Prefs) {
 
 // ------------------------------------------------------------- SMTC watcher
 
-/// One SMTC sample as emitted by smtc-poll.ps1.
-#[derive(Deserialize)]
-struct SmtcMessage {
-    ok: bool,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    session: Option<SmtcSession>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct SmtcSession {
-    #[serde(default)]
-    source_app: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    artist: Option<String>,
-    #[serde(default)]
-    album: Option<String>,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    position_ms: i64,
-    #[serde(default)]
-    end_ms: i64,
-    #[serde(default)]
-    staleness_ms: i64,
-}
+/// How often to sample the timeline. Unchanged from the old poller's default.
+#[cfg(windows)]
+const SMTC_INTERVAL_MS: u64 = 250;
 
 /// Best-effort current position, projecting past SMTC's stale `positionMs` while
 /// playing — mirrors `estimatePositionMs` in the old smtc.js.
-fn estimate_position(s: &SmtcSession) -> i64 {
+#[cfg(windows)]
+fn estimate_position(s: &smtc::Session) -> i64 {
     if s.status != "Playing" {
         return s.position_ms;
     }
@@ -234,117 +203,147 @@ fn estimate_position(s: &SmtcSession) -> i64 {
     }
 }
 
-/// Spawn the PowerShell poller and stream SMTC state to the webview as
-/// `track` / `tick` / `idle` events. Runs on its own thread for the app's life.
-fn start_smtc(app: AppHandle) {
-    // Materialise the embedded script so PowerShell has a real file to run.
-    let script_path = std::env::temp_dir().join("lyric-overlay-smtc-poll.ps1");
-    if let Err(err) = std::fs::write(&script_path, SMTC_POLL_PS1) {
-        eprintln!("[smtc] could not write poller script: {err}");
-        return;
+/// Poll SMTC natively and stream state to the webview as `track` / `tick` /
+/// `idle` events. Runs on its own thread for the app's life.
+///
+/// Was a PowerShell 5.1 child process streaming JSON lines over a pipe; see
+/// smtc.rs for why that went away. The event shapes emitted here are
+/// unchanged, so nothing downstream — renderer or otherwise — can tell the
+/// difference apart from the process no longer existing.
+/// Emit `track` (only when the song actually changed) and always `tick` for
+/// one sample, exactly the shape the poll loop and `resync_smtc` both need —
+/// pulled out so there is exactly one place that builds these events rather
+/// than two copies that could quietly drift apart.
+#[cfg(windows)]
+fn emit_smtc_sample(app: &AppHandle, s: &smtc::Session, current_key: &mut Option<String>) {
+    let key = format!("{} {}", s.artist, s.title);
+    if current_key.as_deref() != Some(key.as_str()) {
+        *current_key = Some(key);
+        let _ = app.emit(
+            "track",
+            json!({
+                "title": s.title,
+                "artist": s.artist,
+                "album": s.album,
+                "sourceApp": s.source_app,
+                "durationMs": s.end_ms,
+            }),
+        );
+        // Kick off the lyric + artwork lookups for the new song.
+        resolve_lyrics(app.clone(), s.title.clone(), s.artist.clone(), s.end_ms);
+        resolve_artwork(app.clone(), s.title.clone(), s.artist.clone(), s.end_ms);
     }
+    let _ = app.emit(
+        "tick",
+        json!({
+            "status": s.status,
+            "positionMs": estimate_position(s),
+            "durationMs": s.end_ms,
+        }),
+    );
+}
 
+#[cfg(windows)]
+fn start_smtc(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut cmd = Command::new("powershell.exe");
-        cmd.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(&script_path)
-        .args(["-IntervalMs", "250"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-
-        // Don't flash a console window (the app is windows_subsystem = "windows").
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
+        // WinRT calls need an initialised apartment on this thread. The old
+        // code got one free inside PowerShell's own process; a bare
+        // std::thread has none, and every call would fail without this.
+        unsafe {
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
 
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
+        let mut watcher = match smtc::Watcher::new() {
+            Ok(w) => w,
             Err(err) => {
-                eprintln!("[smtc] failed to spawn powershell: {err}");
+                eprintln!("[smtc] WinRT session manager unavailable: {err}");
                 return;
             }
         };
 
-        let stdout = match child.stdout.take() {
-            Some(s) => s,
-            None => return,
-        };
-
         let mut current_key: Option<String> = None;
-        for line in BufReader::new(stdout).lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(SMTC_INTERVAL_MS));
+
             // While a local file is playing, ignore SMTC entirely — otherwise its
             // "no session" idle would clear the track the app is playing itself.
             if LOCAL_ACTIVE.load(Ordering::Relaxed) {
                 continue;
             }
-            let msg: SmtcMessage = match serde_json::from_str(trimmed) {
-                Ok(m) => m,
-                Err(_) => continue, // ignore banner/noise lines
-            };
-            if !msg.ok {
-                if let Some(e) = msg.error {
-                    eprintln!("[smtc] {e}");
+
+            let sample = match watcher.poll() {
+                Ok(s) => s,
+                // A transient WinRT hiccup is NOT "playback stopped" — emitting
+                // idle here would clear the track and re-trigger a full lyric
+                // lookup on a blip. Skip the tick and try again.
+                Err(err) => {
+                    eprintln!("[smtc] {err}");
+                    continue;
                 }
-                continue;
+            };
+
+            // Recorded on every poll (not just changes) so a late-attaching
+            // frontend can pull the current state via resync_smtc instead of
+            // relying on having caught the one push event that announced it —
+            // see resync_smtc for why that one-shot push is not enough on its
+            // own now that this poll loop starts fast enough to sometimes win
+            // the race against the webview's own page load.
+            if let Some(state) = app.try_state::<Mutex<Option<smtc::Session>>>() {
+                *state.lock().unwrap() = sample.clone();
             }
 
-            match msg.session {
+            match &sample {
                 None => {
                     if current_key.is_some() {
                         current_key = None;
                         let _ = app.emit("idle", ());
                     }
                 }
-                Some(s) => {
-                    let title = s.title.clone().unwrap_or_default();
-                    let artist = s.artist.clone().unwrap_or_default();
-                    let key = format!("{artist} {title}");
-                    if current_key.as_deref() != Some(&key) {
-                        current_key = Some(key);
-                        let _ = app.emit(
-                            "track",
-                            json!({
-                                "title": title,
-                                "artist": artist,
-                                "album": s.album.clone().unwrap_or_default(),
-                                "sourceApp": s.source_app,
-                                "durationMs": s.end_ms,
-                            }),
-                        );
-                        // Kick off the lyric + artwork lookups for the new song.
-                        resolve_lyrics(app.clone(), title.clone(), artist.clone(), s.end_ms);
-                        resolve_artwork(app.clone(), title.clone(), artist.clone(), s.end_ms);
-                    }
-                    let _ = app.emit(
-                        "tick",
-                        json!({
-                            "status": s.status,
-                            "positionMs": estimate_position(&s),
-                            "durationMs": s.end_ms,
-                        }),
-                    );
-                }
+                Some(s) => emit_smtc_sample(&app, s, &mut current_key),
             }
         }
     });
 }
+
+/// Now-playing detection is SMTC-specific, so non-Windows builds simply have
+/// none — same as before the port.
+#[cfg(not(windows))]
+fn start_smtc(_app: AppHandle) {}
+
+/// Replay the last-known SMTC sample as fresh `track`/`tick` events.
+///
+/// A song already playing when the app launches gets exactly ONE `track`
+/// push — its key never changes again on its own, so nothing re-announces it
+/// later. Tauri events are fire-and-forget with no queue for a listener that
+/// attaches late, so if that single push lands before the webview has run
+/// far enough to call `onTrack`, it is gone forever and the UI is stuck on
+/// "waiting for playback" despite a real, unchanging session sitting right
+/// there. The old PowerShell poller was slow enough (process spawn, script
+/// parse, WinRT projection load) to always lose that race in the page's
+/// favour by accident; the native poll here is fast enough to sometimes win
+/// it, which is what actually surfaced this.
+///
+/// The frontend calls this once during boot, *after* `onTrack`/`onTick` are
+/// already registered — so unlike the poll loop's own push, this one is
+/// ordered by construction rather than by luck.
+#[cfg(windows)]
+#[tauri::command]
+fn resync_smtc(app: AppHandle, state: State<Mutex<Option<smtc::Session>>>) {
+    let sample = state.lock().unwrap().clone();
+    if let Some(s) = sample {
+        // A fresh Option<String> each call: this is a resync, not a diff
+        // against whatever the poll loop's own `current_key` happens to be,
+        // so `track` (and the lyric/artwork lookups it kicks off) fires every
+        // time regardless of that loop's independent dedup state.
+        let mut key = None;
+        emit_smtc_sample(&app, &s, &mut key);
+    }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn resync_smtc() {}
 
 // ------------------------------------------------------------- lyric lookup
 
@@ -2164,6 +2163,8 @@ pub fn run() {
             CRASH_REPORTING_ENABLED.store(prefs.crash_reporting_enabled, Ordering::Relaxed);
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(CurTrack::default()));
+            #[cfg(windows)]
+            app.manage(Mutex::<Option<smtc::Session>>::new(None));
             app.manage(UpdateStore(Mutex::new(json!({ "available": false }))));
             app.manage(Mutex::<Option<spotify::SpotifyToken>>::new(None));
 
@@ -2245,6 +2246,7 @@ pub fn run() {
             clear_artwork_choice,
             import_lyrics,
             clear_manual_lyrics,
+            resync_smtc,
             open_local_files,
             open_local_folder,
             read_local_file,

@@ -2,6 +2,19 @@
 .SYNOPSIS
     Streams Windows System Media Transport Controls (SMTC) state as JSON lines on stdout.
 
+.NOTES
+    DIAGNOSTIC TOOL ONLY — the app no longer runs this.
+
+    The app used to spawn this script as a long-lived child process and read
+    its JSON from a pipe. That is now done natively in-process (src/smtc.rs),
+    which removed a ~92MB PowerShell 5.1 process and the dependency on a
+    Windows PowerShell version Microsoft no longer develops.
+
+    It is kept because `npm run probe` uses it to answer "what does Windows
+    actually report right now?" without launching the app — useful when a
+    media app's now-playing looks wrong and you need to tell "the app is
+    misreading it" apart from "Windows itself reports it that way".
+
 .DESCRIPTION
     Reads the active media session for ANY media app (Spotify desktop, a browser
     playing YouTube Music, etc.) via the WinRT GlobalSystemMediaTransportControls API.

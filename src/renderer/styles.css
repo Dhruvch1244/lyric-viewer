@@ -754,6 +754,18 @@ body.lang-devanagari .word--active {
   100% { transform: none; }
 }
 
+/* ---- Reduced motion ----
+   `body.reduced-motion` is set from renderer.js's matchMedia listener rather
+   than by a second `prefers-reduced-motion` block here, so the canvas layer
+   and the CSS layer can never disagree about whether it is on (they did, for
+   a long time: CSS honoured it, the whole visual engine did not).
+
+   The whole-stage shake is the CSS half of the drop effect whose fullscreen
+   flash is capped in renderer.js — leaving it would keep throwing the lyrics
+   someone is trying to READ around the screen. Word entrances stay; they are
+   small, local, and are the feature. */
+body.reduced-motion .stage.fx-shake { animation: none; }
+
 /* ---- One-time capture nudge ----
    Sits above where the HUD appears, and stays visible regardless of the HUD's
    cursor-driven fade — the whole point is that it reaches someone who has not
