@@ -2,6 +2,21 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.34.0 — 2026-08-18
+
+- **Floating bar and taskbar strip display modes are back.** A "Display"
+  chip opens a menu (Fullscreen / Floating bar / Taskbar strip) instead of
+  the old cycle-through-four button, so every mode is one labelled click
+  and the current one stays marked — `Ctrl+Alt+D` still cycles the same
+  three from the keyboard. Taskbar strip is a 96px edge along the bottom
+  with no interactive chrome (nothing fits at that height), so it's real
+  OS-level click-through (`set_ignore_cursor_events`) rather than a
+  CSS trick — clicks pass straight through to whatever's underneath,
+  taskbar included. Verified live: `Ctrl+Alt+D` correctly cycles and
+  persists full → bar → strip → full, window geometry matches exactly
+  (strip pinned to the last 96px of the monitor), and a click inside the
+  strip's bounds hits the taskbar underneath, not the overlay.
+
 ## 0.33.0 — 2026-08-18
 
 - **In-browser Whisper transcription actually works now.** It had been

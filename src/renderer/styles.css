@@ -818,11 +818,11 @@ body.lang-devanagari .word--active {
   gap: 0.15rem;
   padding: 0.4rem;
   min-width: 15rem;
-  background: color-mix(in srgb, #05060c 92%, transparent);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--chrome-surface);
+  border: 1px solid var(--chrome-border);
   border-radius: 14px;
-  backdrop-filter: blur(18px);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px -12px rgba(17, 17, 17, 0.18);
 }
 
 .mode-menu[hidden] { display: none; }
@@ -835,10 +835,10 @@ body.lang-devanagari .word--active {
   text-align: left;
   font: inherit;
   font-size: 0.9rem;
-  color: var(--ink-mid);
+  color: var(--chrome-ink-dim);
   background: none;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--chrome-radius-sm);
   padding: 0.55rem 0.7rem;
   cursor: pointer;
 }
@@ -846,23 +846,23 @@ body.lang-devanagari .word--active {
 .mode-menu__item small {
   margin-left: auto;
   font-size: 0.68rem;
-  color: var(--ink-dim);
+  color: var(--chrome-ink-faint);
 }
 
-.mode-menu__glyph { width: 1.2rem; text-align: center; }
+.mode-menu__glyph { width: 1.2rem; height: 1.2rem; flex: none; }
 
 .mode-menu__item:hover,
 .mode-menu__item:focus-visible {
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--chrome-ink);
+  background: var(--chrome-surface-solid);
+  border-color: var(--chrome-border);
   outline: none;
 }
 
 .mode-menu__item[aria-checked="true"] {
-  color: var(--ink);
-  border-color: var(--accent-live, var(--accent, #e94560));
-  background: color-mix(in srgb, var(--accent, #e94560) 16%, transparent);
+  color: var(--chrome-ink);
+  border-color: var(--chrome-ink-faint);
+  background: var(--chrome-surface-solid);
 }
 
 /* ---- Wallpaper mode: keep the controls out from under the shell ---- */
