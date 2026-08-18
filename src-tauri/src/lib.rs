@@ -465,6 +465,77 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
     });
 }
 
+/// Manual escape hatch for when every auto-fetch source (LRCLIB/NetEase/
+/// Kugou) misses or mismatches and Whisper hasn't run (or can't — an
+/// instrumental section, a language it botches): let the user pick a real
+/// `.lrc` file themselves. LyricsX and lyricoverlay.com both offer this;
+/// this app had no equivalent even though the parser it needs already
+/// existed (parse_lrc, shared with the real fetch sources).
+///
+/// Cached with an object `source` (`{"name": "manual"}`), the same shape
+/// every real fetch uses — so `finalize_transcription`'s already-synced
+/// guard treats it exactly like a genuine LRCLIB hit: never silently
+/// overwritten by a lower-accuracy Whisper pass, but still eligible for the
+/// same real per-word-timing upgrade an LRCLIB track gets.
+#[tauri::command]
+fn import_lyrics(track: Value, app: AppHandle) -> Value {
+    use tauri_plugin_dialog::DialogExt;
+    let t = track_from_value(&track);
+    if t.title.is_empty() {
+        return json!({ "status": "error", "message": "no track playing" });
+    }
+    // Same fix as open_local_files: without dropping always-on-top first,
+    // the picker opens invisibly behind the overlay.
+    let _surfaced = AlwaysOnTopGuard::engage(&app);
+    let mut builder = app.dialog().file().add_filter("Lyric files", &["lrc", "txt"]);
+    if let Some(win) = app.get_webview_window("main") {
+        builder = builder.set_parent(&win);
+    }
+    let Some(picked) = builder.blocking_pick_file() else {
+        return json!({ "status": "cancelled" });
+    };
+    let Ok(path) = picked.into_path() else {
+        return json!({ "status": "error", "message": "could not resolve that file path" });
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return json!({ "status": "error", "message": "could not read that file" });
+    };
+    let cues = lyrics::parse_lrc(&text);
+    if cues.is_empty() {
+        return json!({ "status": "error", "message": "no timed [mm:ss.xx] lines found in that file" });
+    }
+    let key = track_key(&t.artist, &t.title);
+    let lines = cues.len();
+    let payload = json!({
+        "title": t.title, "artist": t.artist,
+        "cues": cues,
+        "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+        "source": { "name": "manual" },
+        "status": "ok", "indic": false, "hasWordTimings": false,
+    });
+    if let Some(cache_path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::write(&cache_path, serde_json::to_string(&payload).unwrap_or_default());
+    }
+    let mut out = payload;
+    out["track"] = json!({ "title": t.title, "artist": t.artist });
+    out["origin"] = json!("manual");
+    out["transliterationAvailable"] = json!(llm::is_available());
+    out["translationAvailable"] = json!(llm::is_available());
+    let _ = app.emit("lyrics", out);
+    json!({ "status": "ok", "lines": lines })
+}
+
+/// Forget an imported `.lrc` and go back to the automatic sources.
+#[tauri::command]
+fn clear_manual_lyrics(track: Value, app: AppHandle) {
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::remove_file(path);
+    }
+    resolve_lyrics(app.clone(), t.title, t.artist, t.duration_ms);
+}
+
 /// The lyric texts from a cached `lyrics` payload, for re-running mood analysis.
 fn cue_texts_of(payload: &Value) -> Vec<String> {
     payload
@@ -2172,6 +2243,8 @@ pub fn run() {
             artwork_candidates,
             choose_artwork,
             clear_artwork_choice,
+            import_lyrics,
+            clear_manual_lyrics,
             open_local_files,
             open_local_folder,
             read_local_file,

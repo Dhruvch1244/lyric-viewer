@@ -36,6 +36,12 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   of them applies, resuming automatically the moment none do. Live-verified
   against real OS state (matched the taskbar's actual AC/battery status
   exactly) rather than just compiled.
+- **Import your own `.lrc` file for a song.** A new chip next to the cover-art
+  picker is an escape hatch for when LRCLIB/NetEase/Kugou all miss or
+  mismatch and Whisper hasn't run — pick a real `.lrc` file and it's cached
+  as if it were a genuine synced source, including being eligible for the
+  same real per-word-timing upgrade a proper synced hit gets. Click again to
+  drop it and go back to the automatic sources.
 
 ## 0.33.0 — 2026-08-18
 

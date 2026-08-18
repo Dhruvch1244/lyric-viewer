@@ -133,6 +133,8 @@
     artworkCandidates: (track) => call('artwork_candidates', { track }, { candidates: [] }),
     chooseArtwork: (payload) => call('choose_artwork', { payload }),
     clearArtworkChoice: (track) => call('clear_artwork_choice', { track }),
+    importLyrics: (track) => call('import_lyrics', { track }, { status: 'error', message: 'unavailable' }),
+    clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
 
     presyncList: (text) => call('presync_list', { text }),
     spotifyStatus: () => call('spotify_status', {}, { hasClientId: false, connected: false }),

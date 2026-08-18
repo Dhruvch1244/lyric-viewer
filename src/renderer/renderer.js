@@ -73,6 +73,7 @@ const els = {
   modeBtn: document.getElementById('btn-mode'),
   wallpaperBtn: document.getElementById('btn-wallpaper'),
   posterBtn: document.getElementById('btn-poster'),
+  importLyricsBtn: document.getElementById('btn-import-lyrics'),
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
   posterStatus: document.getElementById('poster-status'),
@@ -4747,6 +4748,12 @@ let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: fa
  */
 let plainLyricsAvailable = false;
 
+/* Whether the current track's lyrics came from a user-imported .lrc file
+   rather than an auto-fetch source — drives the import chip's toggle state
+   (import when off, revert-to-automatic when on). See import_lyrics /
+   clear_manual_lyrics in lib.rs. */
+let manualLyricsActive = false;
+
 /**
  * Start recording the current song so it can be transcribed once it ends.
  * Requires live loopback capture (the ♫ chip) — without real audio there is
@@ -5112,6 +5119,14 @@ window.player.onLyrics((payload) => {
   // primary — fold any extra collaborators in so each gets a dancer.
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
 
+  manualLyricsActive = Boolean(payload.source && payload.source.name === 'manual');
+  if (els.importLyricsBtn) {
+    els.importLyricsBtn.setAttribute('aria-pressed', String(manualLyricsActive));
+    els.importLyricsBtn.title = manualLyricsActive
+      ? 'Imported .lrc active — click to go back to automatic lyrics'
+      : 'Import a .lrc file for this song';
+  }
+
   /* Applied after the enrichment above, which can add dancers: the mapping is
      from credited names to actors, so it has to see the final cast. */
   setAttribution(payload.attribution || null);
@@ -5174,6 +5189,7 @@ function showSourceBadge(origin) {
     disk: { text: '⚡ preloaded', title: 'Loaded instantly from the on-disk cache (offline)' },
     memory: { text: '⚡ cached', title: 'Reused from this session — no re-fetch' },
     network: { text: '↓ fetched', title: 'Fetched from the network just now' },
+    manual: { text: '✎ imported', title: 'Loaded from a .lrc file you picked' },
   };
   const info = map[origin];
   if (!info) { els.source.hidden = true; return; }
@@ -6311,6 +6327,30 @@ if (els.posterAuto) {
     artworkChosenUrl = null;
     for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
     els.posterStatus.textContent = 'back to the automatic pick';
+  });
+}
+
+/* Manual .lrc import — an escape hatch for when every auto-fetch source
+   misses or mismatches. One chip, two states: import when off, revert to
+   automatic when on (mirrors posterAuto's "back to the automatic pick"). */
+if (els.importLyricsBtn) {
+  els.importLyricsBtn.addEventListener('click', async () => {
+    if (!currentTrack) { setStatus('nothing playing yet'); return; }
+    const track = {
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      durationMs: currentTrack.durationMs || durationMs,
+    };
+    if (manualLyricsActive) {
+      await window.player.clearManualLyrics(track);
+      setStatus('back to automatic lyrics');
+      return;
+    }
+    setStatus('choose a .lrc file…');
+    const result = await window.player.importLyrics(track);
+    if (result.status === 'ok') setStatus(`imported ${result.lines} line${result.lines === 1 ? '' : 's'}`);
+    else if (result.status === 'error') setStatus(`import failed: ${result.message || ''}`);
+    // 'cancelled' — backed out of the picker, no status needed.
   });
 }
 
