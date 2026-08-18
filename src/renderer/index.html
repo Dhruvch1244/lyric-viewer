@@ -237,12 +237,17 @@
         </div>
 
         <!-- Experimental, off by default — isolates vocals from the mix
-             before transcribing (see demucs.js). Untested against the real
-             model; may just cost extra download/CPU for no gain. -->
+             before transcribing (see demucs.js). Was completely non-functional
+             until this session (wrong model filename -> every fetch 404'd,
+             silent fallback to the raw signal); now corrected against the
+             model's own reference contract and shape/output-verified
+             standalone, but still not run end-to-end in the actual WASM
+             webview path this feature ships in. A real download is a real
+             cost worth stating: ~158MB, one-time, only paid if turned on. -->
         <div class="keybox__local">
           <span class="keybox__label">Isolate vocals before transcribing (experimental)</span>
           <button id="keybox-vocal-isolation" class="chip" type="button"
-                  aria-pressed="false" title="Try to separate vocals from the mix before Whisper transcribes — may improve accuracy on dense mixes, unverified">Off</button>
+                  aria-pressed="false" title="Try to separate vocals from the mix before Whisper transcribes — may improve accuracy on dense mixes. ~158MB one-time download; unverified end-to-end">Off</button>
         </div>
 
         <div class="keybox__local">

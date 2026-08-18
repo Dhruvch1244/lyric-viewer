@@ -2,6 +2,44 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.35.0 — 2026-08-18
+
+- **"Now playing" detection is native.** The PowerShell 5.1 process that
+  streamed SMTC state over a pipe is gone — it measured ~92MB resident for
+  the app's whole life (17% of total footprint) and pinned the app to a
+  Windows PowerShell version Microsoft no longer develops (PowerShell 7
+  removed the WinRT projection it needed). Detection is now direct WinRT
+  calls through the `windows` crate already used for wallpaper mode: same
+  events, same shapes, nothing downstream can tell the difference except the
+  process no longer existing. Fixed a real startup race the migration
+  surfaced along the way: a song already playing when the app launches gets
+  exactly one fire-and-forget `track` event, and the old PowerShell spawn
+  was slow enough to always lose that race to the page's own load, by
+  accident hiding a bug that was always possible. The faster native poll
+  sometimes won it instead, so the frontend now explicitly asks the backend
+  to replay its last-known state once its own listeners are registered,
+  closing the race by construction rather than by luck. Verified against
+  live playback via WebView2's remote-debugging protocol — title/artist
+  matched Windows' own report exactly, both for a track already playing on
+  launch and for a live track change afterward.
+- **Wallpaper-mode visuals now respect "reduce motion."** `prefers-reduced-motion`
+  was honoured in CSS but reached nothing drawn on the canvas — the drop
+  effect's fullscreen flash (plus a white core spike on top of it) and a
+  genuinely randomised fullscreen strobe both ignored the OS setting
+  completely, the exact large-area rapid-luminance-change profile WCAG 2.3.1
+  exists for. Now: the strobe and the whole-stage shake are skipped entirely
+  under reduced motion, and the drop flash is capped well below the
+  threshold rather than removed, so a drop still reads as "something
+  happened" without the flash.
+- **Fixed vocal isolation** — the experimental "isolate vocals before
+  transcribing" pre-pass had been completely non-functional since it
+  shipped: the model filename it fetched didn't exist, so every attempt
+  404'd and silently fell back to the raw signal. Rewritten against the
+  model's own reference implementation (not just the file name — the
+  correct fixed input length, correct four-stem output layout, and correct
+  overlap-add windowing were all wrong too) and shape/output-verified
+  standalone against the live model.
+
 ## 0.34.0 — 2026-08-18
 
 - **Floating bar and taskbar strip display modes are back.** A "Display"

@@ -333,6 +333,43 @@ let audioEnv = null;
    The lyric column, wash, glows, stars, and sprites all stay on. */
 let liteMode = false;
 
+/* ------------------------------------------------------------ reduced motion */
+/*
+  Honours the OS "reduce motion" / "reduce animations" setting for the CANVAS
+  layer. styles.css already had three `prefers-reduced-motion` blocks, but CSS
+  cannot reach anything drawn into a canvas — so the entire visual engine
+  (fullscreen drop flashes, shockwaves, confetti) ignored the setting
+  completely until this existed.
+
+  That matters more than a preference here: the drop effect floods the WHOLE
+  screen with a high-contrast flash and spikes a white core over it, repeatedly,
+  driven by the music. Large-area rapid luminance change is the specific
+  photosensitive-seizure hazard WCAG 2.3.1 is about, so a user who has asked
+  their OS for less motion must not get it.
+
+  Deliberately NOT a full stop: reduced motion should leave the app useful, not
+  broken. Lyrics still sync, colour still drifts, the backdrop still lives —
+  what goes away is the fullscreen strobing and the violent bursts. Live via a
+  `change` listener so toggling the OS setting takes effect without a restart.
+*/
+const reducedMotionQuery = window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)')
+  : null;
+let reducedMotion = Boolean(reducedMotionQuery && reducedMotionQuery.matches);
+
+function applyReducedMotion() {
+  // Mirror it onto <body> so CSS rules can key off the same signal rather than
+  // maintaining a second, independently-drifting media query.
+  document.body.classList.toggle('reduced-motion', reducedMotion);
+}
+
+if (reducedMotionQuery) {
+  const onChange = (e) => { reducedMotion = e.matches; applyReducedMotion(); };
+  // addEventListener is the modern form; older WebViews only have addListener.
+  if (reducedMotionQuery.addEventListener) reducedMotionQuery.addEventListener('change', onChange);
+  else if (reducedMotionQuery.addListener) reducedMotionQuery.addListener(onChange);
+}
+
 /* Whether the overlay window is on screen. False after Ctrl+Alt+H or the tray's
    hide. Both render loops park on this — see the onVisibility handler. */
 let overlayVisible = true;
@@ -3723,10 +3760,17 @@ function drawBackdrop(now) {
     // a shockwave ring expands as it decays — visible even through the glass.
     if (dropFlash > 0.01) {
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = Math.min(0.75, dropFlash * 0.75);
+      /* The seizure-hazard line (see reducedMotion, above): these two fills
+         cover the FULL viewport, and the white one spikes hard on top of the
+         accent. Under reduced motion the accent flood is kept but held far
+         below the flash threshold — a drop still reads as "something
+         happened" through colour — and the white core is dropped entirely,
+         since it is the high-contrast luminance jump that does the harm. */
+      const floodCap = reducedMotion ? 0.12 : 0.75;
+      ctx.globalAlpha = Math.min(floodCap, dropFlash * floodCap);
       ctx.fillStyle = accentLive;
       ctx.fillRect(0, 0, w, h);
-      if (dropFlash > 0.6) {
+      if (dropFlash > 0.6 && !reducedMotion) {
         ctx.globalAlpha = (dropFlash - 0.6) * 1.1;
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, w, h);
@@ -3768,7 +3812,13 @@ function drawBackdrop(now) {
     // Screen flicker / strobe: on the beat and during hype the whole frame gets
     // a brief additive veil. A per-frame random keeps it a genuine flicker rather
     // than a smooth fade, punching the "moment" hard on drops.
-    if (flicker > 0.02) {
+    /* Skipped entirely under reduced motion, unlike the drop flash above which
+       merely gets capped. This one is a genuine fullscreen strobe — randomised
+       per frame, alternating white and accent — so its effective rate is
+       unbounded and can land anywhere in the band photosensitive epilepsy
+       cares about. There is no "gentle" version of it worth keeping; the
+       flicker state itself still decays normally, so nothing else desyncs. */
+    if (flicker > 0.02 && !reducedMotion) {
       // Mood shapes how hard the screen strobes: a calm song barely flickers, a
       // dark or driving one leans in. Applied at the point of use so the flicker
       // state still decays normally.
@@ -7273,6 +7323,7 @@ applyPresetLabel();
 els.spritesBtn.setAttribute('aria-pressed', String(spritesEnabled));
 els.perfBtn.setAttribute('aria-pressed', String(liteMode));
 applyLyricsVisibility();
+applyReducedMotion();
 
 /* If audio-reactive was on last session, re-enable it. getDisplayMedia may need a
    user gesture, so attempt immediately and, on failure, retry on the first click. */
@@ -7301,3 +7352,14 @@ window.player.getOffset().then((data) => {
 });
 setStatus('waiting for playback…');
 applyMoodProfile(); // sets body[data-mood="neutral"] so CSS always has a value
+
+/*
+  A song already playing when the app launches gets exactly ONE `track` push
+  from the Rust side, and Tauri events are fire-and-forget — nothing re-sends
+  it if this listener wasn't attached yet when it fired, and an unchanging
+  song never produces a second one to catch. onTrack/onTick above are already
+  registered by the time synchronous script execution reaches this line, so
+  asking the backend to replay whatever it currently knows here is ordered by
+  construction, not by which of two independent things happens to run first.
+*/
+window.player.resyncSmtc();

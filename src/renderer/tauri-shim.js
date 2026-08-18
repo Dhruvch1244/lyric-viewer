@@ -83,6 +83,9 @@
     onNativeAudio: (cb) => on('native-audio', cb),
 
     /* ---- invoke commands (renderer → main). snake_case per Tauri. ---- */
+    // Re-announce whatever SMTC already knows, once onTrack/onTick are
+    // registered — see resync_smtc in lib.rs for the race this closes.
+    resyncSmtc: () => call('resync_smtc', {}),
     setDisplayMode: (mode) => call('set_display_mode', { mode }),
     getDisplayMode: () => call('get_display_mode', {}, 'full'),
     wallpaperInteract: (on) => call('wallpaper_interact', { on }),
