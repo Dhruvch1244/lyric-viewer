@@ -148,6 +148,8 @@
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg></button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg>Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
+        <button id="btn-import-lyrics" class="chip" type="button" title="Import a .lrc file for this song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="1.4" width="10" height="13.2" rx="1.2"/><path d="M5.4 5h5.2M5.4 8h5.2M5.4 11h3.2"/></svg></button>
+        <button id="btn-mode" class="chip" type="button" title="Display size — Fullscreen, Bar, or Strip (Ctrl+Alt+D to cycle)" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.4" width="12" height="11.2" rx="1.3"/><path d="M2 5.8h12"/></svg>Display</button>
         <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="8.4" rx="1"/><path d="M5.6 14h4.8M8 11v3"/></svg>Wallpaper</button>
         <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse and pin" aria-pressed="false" hidden>✳</button>
         <button id="btn-sync-earlier" class="chip" type="button" title="Lyrics earlier (−100ms)"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 3 1.4 8 8 13V3z"/><path d="M14.6 3 8 8l6.6 5V3z"/></svg></button>
@@ -157,6 +159,24 @@
         <span id="hud-bpm" class="chip chip--muted" title="Measured tempo (needs ♫ audio capture)" hidden></span>
         <span id="hud-work" class="chip chip--work" title="Background work in progress" hidden></span>
         <span id="hud-source" class="chip chip--muted" title="Where the current lyrics loaded from" hidden></span>
+      </div>
+
+      <!-- Display-size menu, revealed by the Display chip. A menu rather than a
+           cycle button: every mode is one labelled click, and the current one is
+           marked, instead of landing on one by accident partway through a cycle. -->
+      <div id="mode-menu" class="mode-menu" hidden role="menu" aria-label="Display size">
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="full">
+          <svg class="mode-menu__glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/></svg>
+          Fullscreen<small>the whole screen</small>
+        </button>
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="bar">
+          <svg class="mode-menu__glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/><rect x="2.7" y="2.7" width="10.6" height="3.2" rx="0.8" fill="currentColor" stroke="none"/></svg>
+          Floating bar<small>a small always-on line</small>
+        </button>
+        <button class="mode-menu__item" type="button" role="menuitemradio" data-mode="strip">
+          <svg class="mode-menu__glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/><rect x="2.7" y="10.1" width="10.6" height="3.2" rx="0.8" fill="currentColor" stroke="none"/></svg>
+          Taskbar strip<small>click-through, along the bottom</small>
+        </button>
       </div>
 
       <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user

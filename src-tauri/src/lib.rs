@@ -94,6 +94,14 @@ static WALLPAPER_ATTACHED: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 static WALLPAPER_SURFACED: AtomicBool = AtomicBool::new(false);
 
+/// True while wallpaper mode has paused its own rendering because the system
+/// is on battery, locked, or another app owns exclusive fullscreen. See
+/// `start_power_watcher`. Mirrors what Wallpaper Engine / Lively Wallpaper do
+/// on Windows — a reparented window behind the icons has no way to notice
+/// any of this on its own.
+#[cfg(windows)]
+static WALLPAPER_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -457,6 +465,77 @@ fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i6
     });
 }
 
+/// Manual escape hatch for when every auto-fetch source (LRCLIB/NetEase/
+/// Kugou) misses or mismatches and Whisper hasn't run (or can't — an
+/// instrumental section, a language it botches): let the user pick a real
+/// `.lrc` file themselves. LyricsX and lyricoverlay.com both offer this;
+/// this app had no equivalent even though the parser it needs already
+/// existed (parse_lrc, shared with the real fetch sources).
+///
+/// Cached with an object `source` (`{"name": "manual"}`), the same shape
+/// every real fetch uses — so `finalize_transcription`'s already-synced
+/// guard treats it exactly like a genuine LRCLIB hit: never silently
+/// overwritten by a lower-accuracy Whisper pass, but still eligible for the
+/// same real per-word-timing upgrade an LRCLIB track gets.
+#[tauri::command]
+fn import_lyrics(track: Value, app: AppHandle) -> Value {
+    use tauri_plugin_dialog::DialogExt;
+    let t = track_from_value(&track);
+    if t.title.is_empty() {
+        return json!({ "status": "error", "message": "no track playing" });
+    }
+    // Same fix as open_local_files: without dropping always-on-top first,
+    // the picker opens invisibly behind the overlay.
+    let _surfaced = AlwaysOnTopGuard::engage(&app);
+    let mut builder = app.dialog().file().add_filter("Lyric files", &["lrc", "txt"]);
+    if let Some(win) = app.get_webview_window("main") {
+        builder = builder.set_parent(&win);
+    }
+    let Some(picked) = builder.blocking_pick_file() else {
+        return json!({ "status": "cancelled" });
+    };
+    let Ok(path) = picked.into_path() else {
+        return json!({ "status": "error", "message": "could not resolve that file path" });
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return json!({ "status": "error", "message": "could not read that file" });
+    };
+    let cues = lyrics::parse_lrc(&text);
+    if cues.is_empty() {
+        return json!({ "status": "error", "message": "no timed [mm:ss.xx] lines found in that file" });
+    }
+    let key = track_key(&t.artist, &t.title);
+    let lines = cues.len();
+    let payload = json!({
+        "title": t.title, "artist": t.artist,
+        "cues": cues,
+        "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+        "source": { "name": "manual" },
+        "status": "ok", "indic": false, "hasWordTimings": false,
+    });
+    if let Some(cache_path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::write(&cache_path, serde_json::to_string(&payload).unwrap_or_default());
+    }
+    let mut out = payload;
+    out["track"] = json!({ "title": t.title, "artist": t.artist });
+    out["origin"] = json!("manual");
+    out["transliterationAvailable"] = json!(llm::is_available());
+    out["translationAvailable"] = json!(llm::is_available());
+    let _ = app.emit("lyrics", out);
+    json!({ "status": "ok", "lines": lines })
+}
+
+/// Forget an imported `.lrc` and go back to the automatic sources.
+#[tauri::command]
+fn clear_manual_lyrics(track: Value, app: AppHandle) {
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::remove_file(path);
+    }
+    resolve_lyrics(app.clone(), t.title, t.artist, t.duration_ms);
+}
+
 /// The lyric texts from a cached `lyrics` payload, for re-running mood analysis.
 fn cue_texts_of(payload: &Value) -> Vec<String> {
     payload
@@ -763,6 +842,12 @@ fn apply_wallpaper(app: &AppHandle, old_mode: &str, new_mode: &str) {
         // exactly how a stuck "can't get out" report happens.
         let was_surfaced = WALLPAPER_SURFACED.swap(false, Ordering::Relaxed);
         WALLPAPER_ATTACHED.store(false, Ordering::Relaxed);
+        // Don't wait for the power watcher's next poll tick to notice we left:
+        // a stale "suspended" flag would freeze the render loop in the fullscreen
+        // mode being switched to, which has nothing to do with battery/lock/games.
+        if WALLPAPER_SUSPENDED.swap(false, Ordering::Relaxed) {
+            let _ = app.emit("wallpaper-power", json!({ "suspended": false, "reason": Value::Null }));
+        }
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.set_always_on_top(false);
         }
@@ -801,11 +886,60 @@ fn start_pointer_forwarding(app: AppHandle) {
 #[cfg(not(windows))]
 fn start_pointer_forwarding(_app: AppHandle) {}
 
+/// Pause wallpaper rendering when it would be pure waste: on battery, behind
+/// a locked screen, or behind another app's exclusive fullscreen (a game) —
+/// the same three triggers Wallpaper Engine and Lively Wallpaper both use.
+/// Only while attached; a 2s poll is plenty for state that changes on human
+/// timescales (unplugging, alt-tabbing into a game), unlike the pointer-
+/// forwarding loop above which has to track a moving cursor.
+#[cfg(windows)]
+fn start_power_watcher(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if !WALLPAPER_ATTACHED.load(Ordering::Relaxed) {
+            continue;
+        }
+        let Some(hwnd) = window_hwnd(&app) else { continue };
+        let (suspend, reason) = if wallpaper::is_locked() {
+            (true, "lock")
+        } else if wallpaper::on_battery().unwrap_or(false) {
+            (true, "battery")
+        } else if wallpaper::foreground_is_fullscreen(hwnd) {
+            (true, "fullscreen")
+        } else {
+            (false, "")
+        };
+        if suspend != WALLPAPER_SUSPENDED.swap(suspend, Ordering::Relaxed) {
+            let _ = app.emit(
+                "wallpaper-power",
+                json!({ "suspended": suspend, "reason": if suspend { Value::from(reason) } else { Value::Null } }),
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_power_watcher(_app: AppHandle) {}
+
 #[cfg(not(windows))]
 fn apply_wallpaper(_app: &AppHandle, _old_mode: &str, _new_mode: &str) {}
 
-/// Apply a display mode: persist it, enter/leave wallpaper, resize, and tell the
-/// renderer. Shared by the command and the Ctrl+Alt+M hotkey.
+/// Strip is a 96px click-through edge along the taskbar — nothing in it is
+/// interactive (no chip, panel, or control fits at that height; see the CSS
+/// comment on `.mode-compact`), so the whole window stops intercepting input
+/// rather than trying to hit-test individual elements. Every other mode gets
+/// normal input back. This is a real OS-level property (WS_EX_TRANSPARENT
+/// under the hood) — CSS `pointer-events` cannot do this, since the window
+/// itself has to decline the click before it ever reaches page content.
+fn apply_click_through(app: &AppHandle, mode: &str) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_ignore_cursor_events(mode == "strip");
+    }
+}
+
+/// Apply a display mode: persist it, enter/leave wallpaper, resize, set
+/// click-through, and tell the renderer. Shared by the command, the
+/// Ctrl+Alt+M wallpaper hotkey, and the Ctrl+Alt+D cycle hotkey.
 fn set_mode(app: &AppHandle, mode: &str) {
     let old_mode = match app.try_state::<Mutex<Prefs>>() {
         Some(st) => {
@@ -825,12 +959,29 @@ fn set_mode(app: &AppHandle, mode: &str) {
     // layout math treats "wallpaper" and "full" identically either way.
     apply_wallpaper(app, &old_mode, mode);
     size_overlay(app, mode);
+    apply_click_through(app, mode);
     let _ = app.emit("display-mode", json!({ "mode": mode, "insets": {} }));
 }
 
 #[tauri::command]
 fn set_display_mode(mode: String, app: AppHandle) {
     set_mode(&app, &mode);
+}
+
+/// Cycle Full → Bar → Strip → Full — the keyboard escape hatch strip mode
+/// specifically needs, since it deliberately has no clickable UI at all (see
+/// apply_click_through). Wallpaper is a separate toggle (Ctrl+Alt+M) and
+/// always exits back to Full here rather than joining the cycle, so this key
+/// also doubles as a general "get me back to normal" from any mode.
+fn cycle_display_mode(app: &AppHandle) {
+    let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
+    let current = st.lock().unwrap().display_mode.clone();
+    let next = match current.as_str() {
+        "full" => "bar",
+        "bar" => "strip",
+        _ => "full",
+    };
+    set_mode(app, next);
 }
 
 /// Start native WASAPI loopback capture of the system output. Returns true
@@ -1369,11 +1520,45 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                 let already_synced = has_cues
                     && !source_is_whisper_derived(existing.get("source").unwrap_or(&Value::Null));
                 if already_synced {
-                    let _ = app.emit(
-                        "transcribe-progress",
-                        json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
-                    );
-                    return json!({ "status": "skipped", "reason": "already-synced" });
+                    let existing_has_words =
+                        existing.get("hasWordTimings").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if existing_has_words {
+                        let _ = app.emit(
+                            "transcribe-progress",
+                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                        );
+                        return json!({ "status": "skipped", "reason": "already-synced" });
+                    }
+                    // Real synced text (LRCLIB/NetEase/Kugou), just no per-word
+                    // timing yet — this is exactly what beginTranscriptionListen
+                    // in renderer.js is fishing for. Attach words to the trusted
+                    // line text/timing rather than falling through to the
+                    // whisper-only path below, which would replace both with a
+                    // lower-accuracy transcription (the exact bug 0.30.0 fixed).
+                    let existing_cues: Vec<lyrics::Cue> = existing
+                        .get("cues")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    let merged = align::attach_word_timings(existing_cues, &raw_cues, t.duration_ms);
+                    let upgraded_lines = merged.iter().filter(|c| c.words.is_some()).count();
+                    if upgraded_lines > 0 {
+                        let mut updated = existing.clone();
+                        updated["cues"] = serde_json::to_value(&merged).unwrap_or(Value::Null);
+                        updated["hasWordTimings"] = json!(true);
+                        let _ = std::fs::write(&path, serde_json::to_string(&updated).unwrap_or_default());
+                        let _ = app.emit(
+                            "transcribe-progress",
+                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() }),
+                        );
+                        return json!({ "status": "ok", "lines": upgraded_lines });
+                    }
+                    // Nothing anchored cleanly this pass — leave the cache
+                    // untouched (still correct, just still line-level) so the
+                    // renderer's hasWordTimings stays false and tries again on
+                    // a future play, same retry semantics as the whisper-only
+                    // path below.
+                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
+                    return json!({ "status": "skipped", "reason": "no-anchors" });
                 }
             }
         }
@@ -1889,13 +2074,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Register the global hotkeys: Ctrl+Alt+Left/Right/0 nudge the sync offset,
-/// Ctrl+Alt+H shows/hides the overlay, Ctrl+Alt+M toggles wallpaper mode.
+/// Ctrl+Alt+H shows/hides the overlay, Ctrl+Alt+M toggles wallpaper mode,
+/// Ctrl+Alt+D cycles Full/Bar/Strip.
 ///
-/// M is deliberately global (works even when the window has no focus and
-/// isn't clickable) — the click-driven wallpaper_interact path depends on
-/// pointer forwarding, and wallpaper mode must never be a dead end if that
-/// hiccups. A global shortcut still fires on a window reparented behind the
-/// desktop icons.
+/// M and D are deliberately global (work even when the window has no focus
+/// and isn't clickable). For M, the click-driven wallpaper_interact path
+/// depends on pointer forwarding, and wallpaper mode must never be a dead
+/// end if that hiccups. For D, strip mode is click-through end to end (see
+/// apply_click_through) — a global shortcut is the ONLY way out of it, not
+/// just a convenience.
 fn register_hotkeys(app: &AppHandle) {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -1914,6 +2101,7 @@ fn register_hotkeys(app: &AppHandle) {
                 Code::Digit0 => change_offset(app, 0, Some(0)),
                 Code::KeyH => toggle_overlay(app),
                 Code::KeyM => toggle_wallpaper(app),
+                Code::KeyD => cycle_display_mode(app),
                 _ => {}
             }
         })
@@ -1923,7 +2111,7 @@ fn register_hotkeys(app: &AppHandle) {
         return;
     }
     let gs = app.global_shortcut();
-    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH, Code::KeyM] {
+    for code in [Code::ArrowLeft, Code::ArrowRight, Code::Digit0, Code::KeyH, Code::KeyM, Code::KeyD] {
         let _ = gs.register(Shortcut::new(Some(ctrl_alt), code));
     }
 }
@@ -1965,11 +2153,11 @@ pub fn run() {
             let _ = build_tray(&handle);
             register_hotkeys(&handle);
 
-            // Load persisted prefs into shared state. Bar/strip are gone for
-            // good (fullscreen-only); wallpaper mode stays a real option, so
-            // only coerce a legacy bar/strip value, not wallpaper.
+            // Load persisted prefs into shared state. All four modes (full,
+            // bar, strip, wallpaper) are real; only an unrecognised value
+            // (e.g. from a future/rolled-back version) gets coerced.
             let mut prefs = load_prefs(&handle);
-            if prefs.display_mode != "full" && prefs.display_mode != "wallpaper" {
+            if !matches!(prefs.display_mode.as_str(), "full" | "bar" | "strip" | "wallpaper") {
                 prefs.display_mode = "full".into();
             }
             let mode = prefs.display_mode.clone();
@@ -1990,15 +2178,18 @@ pub fn run() {
             // translated to "full") so it lands on whichever monitor the
             // cursor is on at launch, not always the primary one.
             size_overlay(&handle, &mode);
+            apply_click_through(&handle, &mode);
             if mode == "wallpaper" {
                 apply_wallpaper(&handle, "full", "wallpaper");
             }
 
             // Begin streaming "now playing" from Windows, and (Windows only)
             // the pointer-forwarding loop wallpaper mode needs for clicks to
-            // reach a window reparented behind the desktop icons.
+            // reach a window reparented behind the desktop icons, plus the
+            // battery/lock/fullscreen watcher that pauses it.
             start_smtc(handle.clone());
             start_pointer_forwarding(handle.clone());
+            start_power_watcher(handle.clone());
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -2052,6 +2243,8 @@ pub fn run() {
             artwork_candidates,
             choose_artwork,
             clear_artwork_choice,
+            import_lyrics,
+            clear_manual_lyrics,
             open_local_files,
             open_local_folder,
             read_local_file,

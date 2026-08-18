@@ -70,8 +70,10 @@ const els = {
   ccEarlier: document.getElementById('cc-earlier'),
   ccLater: document.getElementById('cc-later'),
   ccTranslate: document.getElementById('cc-translate'),
+  modeBtn: document.getElementById('btn-mode'),
   wallpaperBtn: document.getElementById('btn-wallpaper'),
   posterBtn: document.getElementById('btn-poster'),
+  importLyricsBtn: document.getElementById('btn-import-lyrics'),
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
   posterStatus: document.getElementById('poster-status'),
@@ -334,6 +336,18 @@ let liteMode = false;
 /* Whether the overlay window is on screen. False after Ctrl+Alt+H or the tray's
    hide. Both render loops park on this — see the onVisibility handler. */
 let overlayVisible = true;
+
+/* Whether wallpaper mode has been auto-paused by the backend (on battery,
+   screen locked, or another app has exclusive fullscreen — see
+   start_power_watcher in lib.rs and the onWallpaperPower handler). Only ever
+   true while actually in wallpaper mode; independent of overlayVisible so a
+   manual Ctrl+Alt+H hide and an automatic power-triggered pause can't stomp
+   on each other's state. */
+let wallpaperSuspended = false;
+
+/* The single gate both render loops actually check. Both conditions have to
+   allow rendering — either one being false must stop it. */
+function canRender() { return overlayVisible && !wallpaperSuspended; }
 
 /* Last progress width actually written, in tenths of a percent. -1 forces the
    next frame to write, which is what resets it on a track change. */
@@ -970,10 +984,11 @@ function updateTranslation(index) {
 
 function frame() {
   try {
-    // Hidden overlay: nothing here has a visible effect, and the DOM writes
-    // below are the expensive kind. Position is derived from a timestamp, not
-    // accumulated, so skipping frames loses nothing.
-    if (!overlayVisible) return;
+    // Hidden overlay, or wallpaper mode auto-paused (battery/lock/fullscreen):
+    // nothing here has a visible effect, and the DOM writes below are the
+    // expensive kind. Position is derived from a timestamp, not accumulated,
+    // so skipping frames loses nothing.
+    if (!canRender()) return;
 
     const positionMs = estimatePosition();
     if (cues.length > 0) {
@@ -1026,10 +1041,10 @@ function frame() {
   } catch (err) {
     console.error('[frame]', err);
   } finally {
-    // Hidden overlay: stop rescheduling entirely rather than waking up every
-    // vsync just to hit the early return above. onVisibility restarts the
-    // loop when the overlay comes back.
-    if (overlayVisible) requestAnimationFrame(frame);
+    // Hidden or auto-paused: stop rescheduling entirely rather than waking up
+    // every vsync just to hit the early return above. onVisibility/
+    // onWallpaperPower restart the loop when either condition clears.
+    if (canRender()) requestAnimationFrame(frame);
   }
 }
 
@@ -3088,11 +3103,12 @@ function drawBackdrop(now) {
   // without repeating itself.
   let startedAt = 0;
   try {
-    // Hidden overlay: draw nothing at all. This is the single largest saving
-    // available while hidden — the swirl shader, the galaxy and the sprites all
-    // hang off this function. Placed above the cadence sampler so the parked
-    // frames are not mistaken for a stalling compositor.
-    if (!overlayVisible) return;
+    // Hidden overlay, or wallpaper mode auto-paused: draw nothing at all. This
+    // is the single largest saving available while parked — the swirl shader,
+    // the galaxy and the sprites all hang off this function. Placed above the
+    // cadence sampler so the parked frames are not mistaken for a stalling
+    // compositor.
+    if (!canRender()) return;
 
     // Compact modes have no backdrop: there is no room for one, and the point
     // of them is to composite fewer pixels. Everything below this line draws.
@@ -3848,8 +3864,8 @@ function drawBackdrop(now) {
     if (startedAt) drawCostMs += (performance.now() - startedAt - drawCostMs) * 0.1;
     perfReport(now);
     // Same stop-rather-than-idle rule as frame(): don't keep waking up once
-    // hidden. onVisibility restarts the loop when the overlay comes back.
-    if (overlayVisible) requestAnimationFrame(drawBackdrop);
+    // parked. onVisibility/onWallpaperPower restart the loop when it clears.
+    if (canRender()) requestAnimationFrame(drawBackdrop);
   }
 }
 
@@ -4732,6 +4748,12 @@ let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: fa
  */
 let plainLyricsAvailable = false;
 
+/* Whether the current track's lyrics came from a user-imported .lrc file
+   rather than an auto-fetch source — drives the import chip's toggle state
+   (import when off, revert-to-automatic when on). See import_lyrics /
+   clear_manual_lyrics in lib.rs. */
+let manualLyricsActive = false;
+
 /**
  * Start recording the current song so it can be transcribed once it ends.
  * Requires live loopback capture (the ♫ chip) — without real audio there is
@@ -4795,6 +4817,7 @@ window.player.onTranscribeProgress((data) => {
     download: 'downloading speech model', transcribing: 'transcribing',
     aligning: 'aligning words', aligned: null, 'align-weak': null,
     correcting: 'checking the words', corrected: null,
+    'words-added': null,
     done: null, empty: null, error: null,
   };
   if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
@@ -4823,6 +4846,12 @@ window.player.onTranscribeProgress((data) => {
       break;
     case 'corrected':
       setStatus(`fixed ${data.changed} misheard line${data.changed === 1 ? '' : 's'}`);
+      break;
+    case 'words-added':
+      // The synced text/timing were already correct (LRCLIB etc.) — this
+      // pass only anchored real per-word timing onto some of those lines,
+      // it didn't "learn" the lyrics themselves.
+      setStatus(`added real word timing to ${data.lines}/${data.total} lines — ready next play`);
       break;
     case 'done':
       setStatus(
@@ -5090,6 +5119,14 @@ window.player.onLyrics((payload) => {
   // primary — fold any extra collaborators in so each gets a dancer.
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
 
+  manualLyricsActive = Boolean(payload.source && payload.source.name === 'manual');
+  if (els.importLyricsBtn) {
+    els.importLyricsBtn.setAttribute('aria-pressed', String(manualLyricsActive));
+    els.importLyricsBtn.title = manualLyricsActive
+      ? 'Imported .lrc active — click to go back to automatic lyrics'
+      : 'Import a .lrc file for this song';
+  }
+
   /* Applied after the enrichment above, which can add dancers: the mapping is
      from credited names to actors, so it has to see the final cast. */
   setAttribution(payload.attribution || null);
@@ -5152,6 +5189,7 @@ function showSourceBadge(origin) {
     disk: { text: '⚡ preloaded', title: 'Loaded instantly from the on-disk cache (offline)' },
     memory: { text: '⚡ cached', title: 'Reused from this session — no re-fetch' },
     network: { text: '↓ fetched', title: 'Fetched from the network just now' },
+    manual: { text: '✎ imported', title: 'Loaded from a .lrc file you picked' },
   };
   const info = map[origin];
   if (!info) { els.source.hidden = true; return; }
@@ -5193,10 +5231,64 @@ window.player.onTranslation((payload) => {
   is no longer visible.
 */
 /*
-  Fullscreen-only removed bar/strip and the old cycle-through-four menu, but
-  wallpaper mode is worth keeping as a real feature — it has no "half-finished"
-  problem a menu was meant to solve, it's just on or off. One chip toggles it.
+  Bar/strip are back (0.34.0) — a menu rather than a cycle button, since
+  cycling meant landing on a half-finished mode by accident with no way to
+  jump straight to the one you wanted. Every mode is one labelled click, and
+  the current one stays marked (aria-checked). Ctrl+Alt+D cycles the same
+  three from the keyboard, mainly for strip mode: it's deliberately
+  click-through end to end (see apply_click_through in lib.rs), so the menu
+  itself is unreachable once you're actually in it.
+
+  Wallpaper stays its own toggle chip, not a fourth menu item — it has no
+  "half-finished" problem a menu was meant to solve, it's just on or off, and
+  it's orthogonal to the bar/strip/full cycle (see cycle_display_mode).
 */
+const modeMenu = document.getElementById('mode-menu');
+
+function markModeMenu() {
+  if (!modeMenu) return;
+  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
+    item.setAttribute('aria-checked', String(item.dataset.mode === displayMode));
+  }
+}
+
+function openModeMenu() {
+  if (!modeMenu) return;
+  markModeMenu();
+  modeMenu.hidden = false;
+  document.body.classList.add('show-cursor');
+  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'true');
+}
+
+function closeModeMenu() {
+  if (!modeMenu) return;
+  modeMenu.hidden = true;
+  if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'false');
+}
+
+if (els.modeBtn) {
+  els.modeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (modeMenu && modeMenu.hidden) openModeMenu(); else closeModeMenu();
+  });
+}
+
+if (modeMenu) {
+  for (const item of modeMenu.querySelectorAll('.mode-menu__item')) {
+    item.addEventListener('click', () => {
+      window.player.setDisplayMode(item.dataset.mode);
+      closeModeMenu();
+    });
+  }
+  // Click anywhere else, or Esc, closes it.
+  document.addEventListener('click', (e) => {
+    if (!modeMenu.hidden && !modeMenu.contains(e.target) && e.target !== els.modeBtn) closeModeMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modeMenu.hidden) closeModeMenu();
+  });
+}
+
 if (els.wallpaperBtn) {
   els.wallpaperBtn.addEventListener('click', () => {
     window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
@@ -5462,10 +5554,19 @@ window.player.onDisplayMode(({ mode, insets }) => {
   root.setProperty('--shell-right', `${inset.right || 0}px`);
 
   if (els.wallpaperBtn) els.wallpaperBtn.setAttribute('aria-pressed', String(displayMode === 'wallpaper'));
+  if (els.modeBtn) els.modeBtn.setAttribute('aria-pressed', String(displayMode === 'bar' || displayMode === 'strip'));
+  markModeMenu();
   /* Wallpaper draws the full layout — it IS the desktop, so there is as much
      room as fullscreen. It is not compact, and must not take the compact path
      that tears the GPU surfaces out of the page. */
   document.body.classList.toggle('mode-wallpaper', displayMode === 'wallpaper');
+  // The generic .mode-compact rules (isCompact(), below) are shared by both;
+  // these two differentiate the floating-panel bar look from the edge-strip
+  // look — restoring them is what actually makes the menu's choice visible,
+  // since size_overlay resizing the window alone says nothing about which
+  // compact layout to use.
+  document.body.classList.toggle('mode-bar', displayMode === 'bar');
+  document.body.classList.toggle('mode-strip', displayMode === 'strip');
   document.body.classList.toggle('mode-compact', isCompact());
 
   /* Leaving wallpaper with a panel still open must not leave the window stuck
@@ -5499,22 +5600,41 @@ window.player.onDisplayMode(({ mode, insets }) => {
   }
 });
 
+/* Shared by onVisibility and onWallpaperPower below: two independent gates
+   feed canRender(), so either one clearing can be the transition that makes
+   rendering possible again — whichever it is, do the same restart. */
+function resumeRenderingIfNeeded(wasRendering) {
+  if (wasRendering || !canRender()) return;
+  // Forget the timestamps from before the pause so the first frame back does
+  // not see a multi-minute dt and jump every animation forward.
+  lastBackNow = 0;
+  lastFrameAt = 0;
+  lastDrawnAt = 0;
+  // Both loops stopped rescheduling themselves while parked (see frame() and
+  // drawBackdrop()) — kick them back off now that there's something to draw.
+  requestAnimationFrame(drawBackdrop);
+  requestAnimationFrame(frame);
+}
+
 window.player.onVisibility(({ visible }) => {
-  const wasVisible = overlayVisible;
+  const wasRendering = canRender();
   overlayVisible = visible !== false;
-  // Resuming: forget the timestamps from before the pause so the first frame
-  // back does not see a multi-minute dt and jump every animation forward.
-  if (overlayVisible) {
-    lastBackNow = 0;
-    lastFrameAt = 0;
-    lastDrawnAt = 0;
-    // Both loops stopped rescheduling themselves while hidden (see frame()
-    // and drawBackdrop()) — kick them back off now that there's something to draw.
-    if (!wasVisible) {
-      requestAnimationFrame(drawBackdrop);
-      requestAnimationFrame(frame);
-    }
+  resumeRenderingIfNeeded(wasRendering);
+});
+
+/* Wallpaper mode auto-paused/resumed by the backend's battery/lock/fullscreen
+   watcher (see start_power_watcher in lib.rs). `reason` is informational —
+   surfaced on the wallpaper chip's title so a "why did this stop" question
+   has an answer, but the render-loop gate itself doesn't care which reason. */
+window.player.onWallpaperPower(({ suspended, reason }) => {
+  const wasRendering = canRender();
+  wallpaperSuspended = Boolean(suspended);
+  if (els.wallpaperBtn) {
+    els.wallpaperBtn.title = wallpaperSuspended
+      ? `Desktop wallpaper mode — paused (${reason || 'power saving'})`
+      : 'Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)';
   }
+  resumeRenderingIfNeeded(wasRendering);
 });
 
 window.player.onIdle(() => {
@@ -6207,6 +6327,30 @@ if (els.posterAuto) {
     artworkChosenUrl = null;
     for (const el of els.posterGrid.children) el.setAttribute('aria-pressed', 'false');
     els.posterStatus.textContent = 'back to the automatic pick';
+  });
+}
+
+/* Manual .lrc import — an escape hatch for when every auto-fetch source
+   misses or mismatches. One chip, two states: import when off, revert to
+   automatic when on (mirrors posterAuto's "back to the automatic pick"). */
+if (els.importLyricsBtn) {
+  els.importLyricsBtn.addEventListener('click', async () => {
+    if (!currentTrack) { setStatus('nothing playing yet'); return; }
+    const track = {
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      durationMs: currentTrack.durationMs || durationMs,
+    };
+    if (manualLyricsActive) {
+      await window.player.clearManualLyrics(track);
+      setStatus('back to automatic lyrics');
+      return;
+    }
+    setStatus('choose a .lrc file…');
+    const result = await window.player.importLyrics(track);
+    if (result.status === 'ok') setStatus(`imported ${result.lines} line${result.lines === 1 ? '' : 's'}`);
+    else if (result.status === 'error') setStatus(`import failed: ${result.message || ''}`);
+    // 'cancelled' — backed out of the picker, no status needed.
   });
 }
 

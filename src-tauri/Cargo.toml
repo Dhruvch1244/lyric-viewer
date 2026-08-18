@@ -1,6 +1,6 @@
 [package]
 name = "lyric-overlay"
-version = "0.33.0"
+version = "0.34.0"
 description = "Beat-aware synced lyric overlay for Windows (Tauri)"
 authors = ["Dhruv Choudhary"]
 license = "MIT"
@@ -72,4 +72,6 @@ windows = { version = "0.61", features = [
     "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Power",
+    "Win32_System_StationsAndDesktops",
 ] }

@@ -25,7 +25,6 @@ const MIN_MATCH_SCORE: f64 = 0.55;
 pub struct Art {
     pub data_uri: Option<String>,
     pub artist_name: Option<String>,
-    pub track_name: Option<String>,
 }
 
 /// Download a remote image and encode it as a base64 data: URI.
@@ -66,7 +65,7 @@ fn score_candidate(
     let artist = clean_artist(&track.artist);
     let t = token_similarity(cleaned, cand_title);
     let a = if artist.is_empty() { 0.0 } else { token_similarity(&artist, cand_artist) };
-    let mut score = t * 2.0 + a;
+    let score = t * 2.0 + a;
 
     let have = version_tags(cand_title);
     let mut mismatch = 0;
@@ -112,7 +111,6 @@ fn itunes_lookup(track: &Track, cleaned: &str, term: &str, want: &std::collectio
     Some(Art {
         data_uri: download_image(&art_url),
         artist_name: best.get("artistName").and_then(|v| v.as_str()).map(String::from),
-        track_name: best.get("trackName").and_then(|v| v.as_str()).map(String::from),
     })
 }
 
@@ -143,7 +141,6 @@ fn deezer_lookup(track: &Track, cleaned: &str, term: &str, want: &std::collectio
     Some(Art {
         data_uri: download_image(art_url),
         artist_name: best.get("artist").and_then(|a| a.get("name")).and_then(|v| v.as_str()).map(String::from),
-        track_name: best.get("title").and_then(|v| v.as_str()).map(String::from),
     })
 }
 
@@ -184,7 +181,6 @@ fn musicbrainz_lookup(track: &Track, cleaned: &str) -> Option<Art> {
     Some(Art {
         data_uri: art,
         artist_name: credit.filter(|c| !c.is_empty()),
-        track_name: best.get("title").and_then(|v| v.as_str()).map(String::from),
     })
 }
 
@@ -407,7 +403,7 @@ mod tests {
         let uri = art.data_uri.expect("expected an image");
         assert!(uri.starts_with("data:image/"), "not a data image uri");
         assert!(uri.len() > 5_000, "image suspiciously small: {} bytes b64", uri.len());
-        eprintln!("credit: {:?} / {:?}", art.artist_name, art.track_name);
+        eprintln!("credit: {:?}", art.artist_name);
         eprintln!("data uri length: {} chars", uri.len());
     }
 }

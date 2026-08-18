@@ -2,6 +2,47 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.34.0 — 2026-08-18
+
+- **Floating bar and taskbar strip display modes are back.** A "Display"
+  chip opens a menu (Fullscreen / Floating bar / Taskbar strip) instead of
+  the old cycle-through-four button, so every mode is one labelled click
+  and the current one stays marked — `Ctrl+Alt+D` still cycles the same
+  three from the keyboard. Taskbar strip is a 96px edge along the bottom
+  with no interactive chrome (nothing fits at that height), so it's real
+  OS-level click-through (`set_ignore_cursor_events`) rather than a
+  CSS trick — clicks pass straight through to whatever's underneath,
+  taskbar included. Verified live: `Ctrl+Alt+D` correctly cycles and
+  persists full → bar → strip → full, window geometry matches exactly
+  (strip pinned to the last 96px of the monitor), and a click inside the
+  strip's bounds hits the taskbar underneath, not the overlay.
+- **Real per-word sync now reaches LRCLIB/NetEase/Kugou lyrics, not just
+  Whisper-only tracks.** A song with correct synced lyrics but no per-word
+  timing used to be silently skipped by the transcription pass entirely —
+  `finalize_transcription` treated "already has real synced lyrics" as a
+  reason to do nothing further, so those lines were stuck on the
+  syllable-weighted timing estimate forever, and the app kept quietly
+  listening on every play for no benefit. Now it attaches real per-word
+  timing to the *existing, trusted* line text and timing wherever a line
+  cleanly anchors to what Whisper heard — the synced text/timing a real
+  source already got right never gets touched or replaced, only enriched.
+- **Wallpaper mode now pauses itself on battery, at the lock screen, or
+  behind a fullscreen app** — the same three triggers Wallpaper Engine and
+  Lively Wallpaper use to avoid being the reason a laptop drains fast or a
+  game drops frames. A window reparented behind the desktop icons has no way
+  to notice any of this on its own, so a background watcher polls
+  `GetSystemPowerStatus`, `OpenInputDesktop`, and the foreground window's
+  monitor coverage every 2 seconds and parks the render loop the instant one
+  of them applies, resuming automatically the moment none do. Live-verified
+  against real OS state (matched the taskbar's actual AC/battery status
+  exactly) rather than just compiled.
+- **Import your own `.lrc` file for a song.** A new chip next to the cover-art
+  picker is an escape hatch for when LRCLIB/NetEase/Kugou all miss or
+  mismatch and Whisper hasn't run — pick a real `.lrc` file and it's cached
+  as if it were a genuine synced source, including being eligible for the
+  same real per-word-timing upgrade a proper synced hit gets. Click again to
+  drop it and go back to the automatic sources.
+
 ## 0.33.0 — 2026-08-18
 
 - **In-browser Whisper transcription actually works now.** It had been
