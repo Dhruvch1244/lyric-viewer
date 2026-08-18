@@ -210,6 +210,33 @@ pub fn align_lyrics(lines: &[String], cues: &[Cue], duration_ms: i64) -> (Vec<Cu
     (out, anchors as f64 / clean.len() as f64)
 }
 
+/// Attach real per-word timing to already-correct, already-synced cues
+/// (LRCLIB/NetEase/Kugou) without touching their trusted line text or
+/// timing — unlike `align_lyrics`, which derives both from `raw_cues` and is
+/// meant for the "no real sync exists at all" case. Returns `existing`
+/// unchanged (word-for-word) wherever a line wasn't cleanly anchored; only
+/// `.words` is ever added, never text or `time_ms`.
+///
+/// Returns `existing.len()` cues if `align_lyrics`'s internal blank-line
+/// filtering ever desyncs its output from `existing` (it shouldn't, since
+/// real synced cue text is never blank) — a length mismatch degrades to a
+/// no-op rather than mis-zipping timings onto the wrong lines.
+pub fn attach_word_timings(existing: Vec<Cue>, raw_cues: &[Cue], duration_ms: i64) -> Vec<Cue> {
+    let lines: Vec<String> = existing.iter().map(|c| c.text.clone()).collect();
+    let (upgraded, _coverage) = align_lyrics(&lines, raw_cues, duration_ms);
+    if upgraded.len() != existing.len() {
+        return existing;
+    }
+    existing
+        .into_iter()
+        .zip(upgraded)
+        .map(|(mut orig, up)| {
+            orig.words = up.words.or(orig.words);
+            orig
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +322,46 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out[0].words.is_some());
         assert!(out[1].words.is_none());
+    }
+
+    #[test]
+    fn attach_word_timings_keeps_trusted_text_and_time() {
+        // LRCLIB says this line starts at 1000ms. Whisper's own clock is off
+        // (5000ms) but its transcript matches word-for-word — only the words
+        // should be borrowed, never the line's trusted start time.
+        let existing = vec![cue(1000, "hello world")];
+        let mut raw = cue(5000, "hello world");
+        raw.words = Some(vec![word("hello", 5000, 5400), word("world", 5500, 6000)]);
+        let out = attach_word_timings(existing, &[raw], 10_000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].time_ms, 1000, "trusted LRCLIB timing must not move");
+        assert_eq!(out[0].text, "hello world");
+        let words = out[0].words.as_ref().expect("word timing should attach");
+        assert_eq!(words[0].start_ms, 5000);
+    }
+
+    #[test]
+    fn attach_word_timings_leaves_unanchored_lines_untouched() {
+        let existing = vec![cue(1000, "hello world"), cue(4000, "totally different line")];
+        let mut raw = cue(1000, "hello world");
+        raw.words = Some(vec![word("hello", 1000, 1400), word("world", 1500, 2000)]);
+        let out = attach_word_timings(existing, &[raw], 10_000);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].words.is_some());
+        assert_eq!(out[1].time_ms, 4000);
+        assert_eq!(out[1].text, "totally different line");
+        assert!(out[1].words.is_none(), "no raw cue anchored to this line — must stay untouched, not guessed");
+    }
+
+    #[test]
+    fn attach_word_timings_preserves_existing_words_when_new_pass_finds_nothing() {
+        // A line that already carries real words from a previous pass must not
+        // lose them just because this pass's raw transcript didn't re-anchor it.
+        let mut existing_line = cue(1000, "hello world");
+        existing_line.words = Some(vec![word("hello", 900, 1200), word("world", 1200, 1600)]);
+        let existing = vec![existing_line];
+        let out = attach_word_timings(existing, &[], 10_000);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].words.is_some());
     }
 }

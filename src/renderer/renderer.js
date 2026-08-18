@@ -4796,6 +4796,7 @@ window.player.onTranscribeProgress((data) => {
     download: 'downloading speech model', transcribing: 'transcribing',
     aligning: 'aligning words', aligned: null, 'align-weak': null,
     correcting: 'checking the words', corrected: null,
+    'words-added': null,
     done: null, empty: null, error: null,
   };
   if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
@@ -4824,6 +4825,12 @@ window.player.onTranscribeProgress((data) => {
       break;
     case 'corrected':
       setStatus(`fixed ${data.changed} misheard line${data.changed === 1 ? '' : 's'}`);
+      break;
+    case 'words-added':
+      // The synced text/timing were already correct (LRCLIB etc.) — this
+      // pass only anchored real per-word timing onto some of those lines,
+      // it didn't "learn" the lyrics themselves.
+      setStatus(`added real word timing to ${data.lines}/${data.total} lines — ready next play`);
       break;
     case 'done':
       setStatus(

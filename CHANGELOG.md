@@ -16,6 +16,16 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   persists full → bar → strip → full, window geometry matches exactly
   (strip pinned to the last 96px of the monitor), and a click inside the
   strip's bounds hits the taskbar underneath, not the overlay.
+- **Real per-word sync now reaches LRCLIB/NetEase/Kugou lyrics, not just
+  Whisper-only tracks.** A song with correct synced lyrics but no per-word
+  timing used to be silently skipped by the transcription pass entirely —
+  `finalize_transcription` treated "already has real synced lyrics" as a
+  reason to do nothing further, so those lines were stuck on the
+  syllable-weighted timing estimate forever, and the app kept quietly
+  listening on every play for no benefit. Now it attaches real per-word
+  timing to the *existing, trusted* line text and timing wherever a line
+  cleanly anchors to what Whisper heard — the synced text/timing a real
+  source already got right never gets touched or replaced, only enriched.
 
 ## 0.33.0 — 2026-08-18
 

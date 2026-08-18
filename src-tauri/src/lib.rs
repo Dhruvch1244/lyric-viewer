@@ -1400,11 +1400,45 @@ fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                 let already_synced = has_cues
                     && !source_is_whisper_derived(existing.get("source").unwrap_or(&Value::Null));
                 if already_synced {
-                    let _ = app.emit(
-                        "transcribe-progress",
-                        json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
-                    );
-                    return json!({ "status": "skipped", "reason": "already-synced" });
+                    let existing_has_words =
+                        existing.get("hasWordTimings").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if existing_has_words {
+                        let _ = app.emit(
+                            "transcribe-progress",
+                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                        );
+                        return json!({ "status": "skipped", "reason": "already-synced" });
+                    }
+                    // Real synced text (LRCLIB/NetEase/Kugou), just no per-word
+                    // timing yet — this is exactly what beginTranscriptionListen
+                    // in renderer.js is fishing for. Attach words to the trusted
+                    // line text/timing rather than falling through to the
+                    // whisper-only path below, which would replace both with a
+                    // lower-accuracy transcription (the exact bug 0.30.0 fixed).
+                    let existing_cues: Vec<lyrics::Cue> = existing
+                        .get("cues")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    let merged = align::attach_word_timings(existing_cues, &raw_cues, t.duration_ms);
+                    let upgraded_lines = merged.iter().filter(|c| c.words.is_some()).count();
+                    if upgraded_lines > 0 {
+                        let mut updated = existing.clone();
+                        updated["cues"] = serde_json::to_value(&merged).unwrap_or(Value::Null);
+                        updated["hasWordTimings"] = json!(true);
+                        let _ = std::fs::write(&path, serde_json::to_string(&updated).unwrap_or_default());
+                        let _ = app.emit(
+                            "transcribe-progress",
+                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() }),
+                        );
+                        return json!({ "status": "ok", "lines": upgraded_lines });
+                    }
+                    // Nothing anchored cleanly this pass — leave the cache
+                    // untouched (still correct, just still line-level) so the
+                    // renderer's hasWordTimings stays false and tries again on
+                    // a future play, same retry semantics as the whisper-only
+                    // path below.
+                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
+                    return json!({ "status": "skipped", "reason": "no-anchors" });
                 }
             }
         }
