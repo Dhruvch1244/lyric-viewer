@@ -363,12 +363,17 @@ fn lyrics_cache_path(app: &AppHandle, key: &str) -> Option<std::path::PathBuf> {
     Some(dir.join(format!("{key}.json")))
 }
 
-/// Plain (unsynced) lyrics from whichever source has them first — LRCLIB's
-/// plain catalogue, then Genius. Both are used the same way downstream:
-/// force-aligned to a Whisper transcription's timing by align.rs, never shown
-/// as-is. LRCLIB first since it needs one request and no HTML scrape.
+/// Plain (unsynced) lyrics from LRCLIB's plain catalogue, force-aligned to a
+/// Whisper transcription's timing by align.rs, never shown as-is.
+///
+/// Genius (genius.rs) used to be a second source here. Pulled from this hot
+/// path: its own module doc confirms genius.com's search endpoint is behind
+/// a Cloudflare JS challenge on every request, so calling it here bought
+/// nothing but a bounded-timeout network round trip on every LRCLIB-plain
+/// miss. The module and its tests stay in the tree — revive the call if
+/// Genius's posture or a legitimate access path ever changes.
 fn fetch_plain_any(track: &lyrics::Track) -> Option<String> {
-    lyrics::fetch_plain(track).or_else(|| genius::fetch_plain(track))
+    lyrics::fetch_plain(track)
 }
 
 /// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song

@@ -41,7 +41,7 @@ fn index(app: &AppHandle) -> Vec<(String, String)> {
 /// Every preset name, sorted.
 pub fn catalogue(app: &AppHandle) -> Vec<String> {
     let mut names: Vec<String> = index(app).into_iter().map(|(n, _)| n).collect();
-    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    names.sort_by_key(|a| a.to_lowercase());
     names
 }
 
