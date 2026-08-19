@@ -69,10 +69,12 @@ impl Lane {
 
 /// When this job should run relative to everything else queued.
 ///
-/// `Next` and `Idle` have no producers yet — Phase 2 (speculative precompute)
-/// is what starts submitting them. They are defined and *tested* now because
-/// the dispatcher's ordering guarantee is the hard part, and it is much easier
-/// to get right against a full priority set than to retrofit one later.
+/// `Idle` has one producer: the pre-sync bulk import, which is backfill for
+/// songs that are not playing and must never overtake the one that is.
+/// `Next` has none yet — Phase 2 (speculative precompute) is what starts
+/// submitting it. It is defined and *tested* now because the dispatcher's
+/// ordering guarantee is the hard part, and it is much easier to get right
+/// against a full priority set than to retrofit one later.
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Priority {
@@ -529,6 +531,45 @@ mod tests {
             1,
             "only the blocker should have run; cancelled jobs must never start"
         );
+    }
+
+    /// A job with no track must survive a track change. The pre-sync bulk
+    /// import depends on this: it is work for songs that are deliberately not
+    /// playing, so skipping the current track must not abandon it.
+    #[test]
+    fn untracked_jobs_survive_a_track_change() {
+        let eng = engine_with(1);
+        let ran = Arc::new(AtomicUsize::new(0));
+        let hold = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = std_mpsc::channel();
+
+        // Occupy the only worker so the rest queue behind it.
+        assert!(eng.submit(
+            Box::new(
+                TestJob::new("blocker", Arc::clone(&ran))
+                    .track("playing")
+                    .reporting(tx.clone())
+                    .holding(Arc::clone(&hold))
+            ),
+            Priority::Now
+        ));
+        rx.recv_timeout(Duration::from_secs(5)).expect("blocker never started");
+
+        // One tied to the playing track, one tied to nothing.
+        assert!(eng.submit(
+            Box::new(TestJob::new("tracked", Arc::clone(&ran)).track("playing").reporting(tx.clone())),
+            Priority::Now
+        ));
+        assert!(eng.submit(Box::new(TestJob::new("untracked", Arc::clone(&ran)).reporting(tx)), Priority::Idle));
+
+        eng.cancel_track("playing");
+        hold.store(false, Ordering::SeqCst);
+
+        let next = rx.recv_timeout(Duration::from_secs(5)).expect("the untracked job never ran");
+        assert_eq!(next, "untracked", "cancel_track took a job that was not its own");
+
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(ran.load(Ordering::SeqCst), 2, "the tracked job should have been cancelled, the untracked one kept");
     }
 
     /// `Now` submitted *after* a queue of `Idle` work must still go first.

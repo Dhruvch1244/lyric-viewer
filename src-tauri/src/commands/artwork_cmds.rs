@@ -85,17 +85,24 @@ impl Runnable for ArtworkJob {
 }
 
 /// Cover-art options for the "choose a different cover" grid (thumbnails inlined).
-#[tauri::command]
+///
+/// NOT a job on the engine, unlike every other fetch in this module: the
+/// renderer awaits this one and paints the grid from its return value, and the
+/// engine is fire-and-forget — jobs emit events, they have no reply channel.
+/// `(async)` is the whole fix it needs.
+///
+/// It previously spawned a thread and then blocked on `rx.recv()`, which reads
+/// as "off the command thread" but is not: the sync `#[tauri::command]` ran on
+/// the main thread and then sat there waiting for a three-source network
+/// fan-out plus thumbnail downloads to finish. Same defect as the file pickers
+/// (see `import_lyrics`), minus the true deadlock — the event loop stalled for
+/// the duration rather than forever. `(async)` puts the whole call on the
+/// async runtime, so the helper thread and channel have nothing left to do.
+#[tauri::command(async)]
 pub(crate) fn artwork_candidates(app: AppHandle, track: Value) -> Value {
     let t = track_from_value(&track);
-    // Off the command thread: this fans out to three sources + thumbnails.
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(crate::artwork::fetch_candidates(&t));
-    });
-    let candidates = rx.recv().unwrap_or(json!([]));
     let _ = app;
-    json!({ "candidates": candidates })
+    json!({ "candidates": crate::artwork::fetch_candidates(&t) })
 }
 
 /// Download and remember a hand-picked cover; emit it as the current artwork.

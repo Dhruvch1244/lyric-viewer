@@ -70,12 +70,55 @@ fn resolve_mood(app: &AppHandle, title: &str, artist: &str, key: &str, cue_texts
         let _ = app.emit("mood", payload);
         return;
     }
-    let app = app.clone();
-    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
-    std::thread::spawn(move || {
+    jobs::submit(
+        MoodJob {
+            app: app.clone(),
+            title: title.to_string(),
+            artist: artist.to_string(),
+            key: key.to_string(),
+            cue_texts,
+        },
+        Priority::Now,
+    );
+}
+
+/// The I/O-lane job behind `resolve_mood`. I/O and not CPU despite the name:
+/// `mood::analyze` is an LLM round trip, so this waits on a socket.
+struct MoodJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+    cue_texts: Vec<String>,
+}
+
+impl Runnable for MoodJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("mood:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let MoodJob { app, title, artist, key, cue_texts } = *self;
+        if cancel.cancelled() {
+            return;
+        }
         let Some(m) = crate::mood::analyze(&cue_texts) else { return };
         let mood_val = json!({ "mood": m.mood, "hue": m.hue, "energy": m.energy, "palette": m.palette });
         // Merge the mood into the lyrics cache so it runs once per song.
+        //
+        // Written even when cancelled, deliberately: the LLM call is already
+        // paid for and the file is keyed by track, so caching it means the
+        // song is instant next time. Only the *emit* below is withheld — a
+        // stale palette repainting the song that is actually playing now is
+        // the visible bug, and it is the emit that causes it, not the write.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
@@ -84,10 +127,13 @@ fn resolve_mood(app: &AppHandle, title: &str, artist: &str, key: &str, cue_texts
                 }
             }
         }
+        if cancel.cancelled() {
+            return;
+        }
         let mut payload = mood_val;
         payload["track"] = json!({ "title": title, "artist": artist });
         let _ = app.emit("mood", payload);
-    });
+    }
 }
 
 /// Emit per-line singer attribution. A cached answer emits immediately;
@@ -100,13 +146,56 @@ fn resolve_attribution(app: &AppHandle, title: &str, artist: &str, key: &str, cu
         let _ = app.emit("attribution", payload);
         return;
     }
-    let app = app.clone();
-    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
-    std::thread::spawn(move || {
+    jobs::submit(
+        AttributionJob {
+            app: app.clone(),
+            title: title.to_string(),
+            artist: artist.to_string(),
+            key: key.to_string(),
+            cue_texts,
+        },
+        Priority::Now,
+    );
+}
+
+/// The I/O-lane job behind `resolve_attribution` — like `MoodJob`, an LLM
+/// round trip rather than local computation.
+///
+/// A separate job from `MoodJob` even though both fire at the same moment and
+/// both merge into the same cache file: they are independent LLM calls, so one
+/// failing or being skipped must not suppress the other. Distinct dedup keys,
+/// shared track key, so a single `cancel_track` still stops both.
+struct AttributionJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+    cue_texts: Vec<String>,
+}
+
+impl Runnable for AttributionJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("attribution:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let AttributionJob { app, title, artist, key, cue_texts } = *self;
+        if cancel.cancelled() {
+            return;
+        }
         let Some((artists, singers)) = crate::attribute::attribute_lines(&cue_texts, &title, &artist) else {
             return;
         };
         let attr = json!({ "artists": artists, "singers": singers });
+        // Cached even when cancelled — same reasoning as `MoodJob::run`.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
@@ -115,10 +204,13 @@ fn resolve_attribution(app: &AppHandle, title: &str, artist: &str, key: &str, cu
                 }
             }
         }
+        if cancel.cancelled() {
+            return;
+        }
         let mut payload = attr;
         payload["track"] = json!({ "title": title, "artist": artist });
         let _ = app.emit("attribution", payload);
-    });
+    }
 }
 
 /// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song
@@ -174,6 +266,15 @@ impl Runnable for LyricsJob {
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                    // Short window, but a real one: the disk read is fast, not
+                    // instant, and this branch is what queues MoodJob and
+                    // AttributionJob. Bailing here stops them being registered
+                    // under a track the user has already skipped past — once
+                    // registered after `cancel_track` has run, nothing would
+                    // ever cancel them.
+                    if cancel.cancelled() {
+                        return;
+                    }
                     let cue_texts = cue_texts_of(&cached);
                     let cached_mood = cached.get("mood").cloned();
                     let cached_attr = cached.get("attribution").cloned();
@@ -686,6 +787,13 @@ fn presync_one(app: &AppHandle, artist: &str, title: &str) -> &'static str {
 /// list, so those songs play instantly and offline later. Runs sequentially
 /// (politely — LRCLIB gets a short gap between requests) and streams
 /// `presync-progress` events; a fresh call supersedes any run in flight.
+///
+/// Queues the run and returns immediately. It used to do the whole list
+/// inline, and — being a sync command, so running on the main thread — froze
+/// the event loop for as long as that took: one network round trip plus 150ms
+/// per track, which is minutes for a pasted album, let alone a playlist. The
+/// renderer never used the return value for anything but an error toast; it
+/// tracks progress through `presync-progress`, which is unchanged.
 #[tauri::command]
 pub(crate) fn presync_list(text: String, app: AppHandle) -> Value {
     let tracks: Vec<(String, String)> = text.lines().filter_map(parse_track_line).collect();
@@ -697,25 +805,64 @@ pub(crate) fn presync_list(text: String, app: AppHandle) -> Value {
         return json!({ "status": "empty" });
     }
 
-    let (mut done, mut synced, mut cached, mut missed) = (0usize, 0usize, 0usize, 0usize);
-    for (artist, title) in &tracks {
-        if PRESYNC_TOKEN.load(Ordering::SeqCst) != token {
-            return json!({ "status": "cancelled" });
-        }
-        let label = if artist.is_empty() { title.clone() } else { format!("{artist} - {title}") };
-        let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "running", "current": label }));
-        match presync_one(&app, artist, title) {
-            "ok" => synced += 1,
-            "cached" => cached += 1,
-            _ => missed += 1,
-        }
-        done += 1;
-        std::thread::sleep(std::time::Duration::from_millis(150)); // be polite to LRCLIB
+    jobs::submit(PresyncJob { app, tracks, token }, Priority::Idle);
+    json!({ "status": "queued", "total": total })
+}
+
+/// The I/O-lane job behind `presync_list`.
+///
+/// ONE JOB FOR THE WHOLE LIST, not one per track. Fanning out would hand the
+/// list to all six I/O workers at once and hammer LRCLIB with a couple of
+/// hundred requests as fast as the socket allows; the serial loop with its
+/// 150ms gap is the politeness this depends on to keep working at all. The
+/// cost is that a long run occupies one of the six I/O slots for its whole
+/// duration, which is why it is submitted at `Idle` — the playing song's
+/// lyric, artwork, mood and attribution jobs are all `Now` and all overtake
+/// it, and five slots remain free for them regardless.
+///
+/// `track()` is left as `None`: a pre-sync run is about songs that are *not*
+/// playing, so a track change must not cancel it.
+struct PresyncJob {
+    app: AppHandle,
+    tracks: Vec<(String, String)>,
+    token: u64,
+}
+
+impl Runnable for PresyncJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
     }
 
-    let summary = format!("{synced} synced · {cached} already cached · {missed} not found");
-    let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "done", "summary": summary }));
-    json!({ "status": "ok", "synced": synced, "cached": cached, "missed": missed })
+    /// Keyed by token, so a fresh paste is never rejected as a duplicate of
+    /// the run it is meant to supersede — the older run then sees the bumped
+    /// `PRESYNC_TOKEN` at its next iteration and stops itself.
+    fn dedup_key(&self) -> String {
+        format!("presync:{}", self.token)
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let PresyncJob { app, tracks, token } = *self;
+        let total = tracks.len();
+        let (mut done, mut synced, mut cached, mut missed) = (0usize, 0usize, 0usize, 0usize);
+
+        for (artist, title) in &tracks {
+            if cancel.cancelled() || PRESYNC_TOKEN.load(Ordering::SeqCst) != token {
+                return;
+            }
+            let label = if artist.is_empty() { title.clone() } else { format!("{artist} - {title}") };
+            let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "running", "current": label }));
+            match presync_one(&app, artist, title) {
+                "ok" => synced += 1,
+                "cached" => cached += 1,
+                _ => missed += 1,
+            }
+            done += 1;
+            std::thread::sleep(std::time::Duration::from_millis(150)); // be polite to LRCLIB
+        }
+
+        let summary = format!("{synced} synced · {cached} already cached · {missed} not found");
+        let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "done", "summary": summary }));
+    }
 }
 
 #[cfg(test)]

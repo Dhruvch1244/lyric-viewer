@@ -6338,10 +6338,14 @@ els.presyncRun.addEventListener('click', async () => {
   els.presyncRun.disabled = true;
   els.presyncStatus.textContent = 'starting…';
   try {
+    /* Resolves as soon as the run is QUEUED, not when it finishes — the
+       backend hands the list to the job engine and returns. So the button is
+       re-enabled by the 'done' progress event below, not here; awaiting this
+       call would re-enable it immediately and invite a second click over a
+       run that has barely started. */
     await window.player.presyncList(text);
   } catch (err) {
     els.presyncStatus.textContent = err.message || 'pre-sync failed';
-  } finally {
     els.presyncRun.disabled = false;
   }
 });
@@ -6354,6 +6358,7 @@ window.player.onPresyncProgress((data) => {
   if (!data) return;
   if (data.status === 'done') {
     els.presyncStatus.textContent = data.summary || 'done';
+    els.presyncRun.disabled = false; // the run owns the button until it ends
     refreshSyncedList(); // reflect the newly-cached songs
     return;
   }

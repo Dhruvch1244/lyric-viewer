@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** proposal, awaiting approval. No code changed yet.
+**Status:** Phase 1 landed except the SQLite journal (see §7.1). Phases 2–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -23,10 +23,11 @@ Three things are already established and shape every decision below:
   consequence of the asset protocol setting no COOP/COEP, so no
   `SharedArrayBuffer`, so no WASM threads. That constraint does not exist
   outside a browser.
-- **Background work is uncoordinated.** `commands/lyrics_cmds.rs:74,104,127`
-  and `commands/artwork_cmds.rs:19,56` each spawn a bare OS thread. Skipping
-  through five tracks starts five lyric fetches and five artwork fan-outs, none
-  of which can be cancelled or deduplicated.
+- **Background work was uncoordinated.** Five call sites across
+  `commands/lyrics_cmds.rs` and `commands/artwork_cmds.rs` each spawned a bare
+  OS thread. Skipping through five tracks started five lyric fetches and five
+  artwork fan-outs, none of which could be cancelled or deduplicated. *(Fixed
+  in Phase 1 — all five now go through the engine.)*
 
 ---
 
@@ -289,9 +290,9 @@ Two fixes, in value order:
 
 | Phase | Scope | Risk | User-visible? |
 |---|---|---|---|
-| **1** | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. SQLite journal. | Low — behaviour-preserving refactor, unit-testable | No |
+| **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
-| **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
+| **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** | Binary / derived audio IPC. **Profile before building.** | Low, unproven value | Marginal |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
@@ -299,6 +300,42 @@ Two fixes, in value order:
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
 a strict improvement over five uncoordinated threads.
+
+### 7.1 Phase 1 as built
+
+Done: `src-tauri/src/jobs/{mod,pool}.rs` — `Runnable`/`Priority`/`Lane`,
+per-lane mpsc intake at three priorities, keyed dedup, the cancellation
+registry, capacity-then-choice dispatch, below-normal CPU threads. All five
+`thread::spawn` sites from §1 are ported: `resolve_lyrics`, `resolve_artwork`,
+`resolve_mood`, `resolve_attribution` as `Now` jobs keyed by track, and
+`presync_list` as one serial `Idle` job.
+
+Two main-thread stalls were found and fixed while porting, both the same
+defect class as the file-picker deadlock: `presync_list` ran an entire
+playlist inline on a sync command (a network round trip plus 150 ms per
+track), and `artwork_candidates` spawned a thread only to block on
+`rx.recv()` waiting for a three-source fan-out. The latter stays a plain
+`(async)` command rather than becoming a job — the renderer awaits its return
+value, and the engine is fire-and-forget with no reply channel.
+
+**Not done: the SQLite journal.** Deferred to Phase 3 on purpose, because it
+has no correct consumer before then:
+
+- Every job that exists today emits an event that repaints the *playing*
+  song. Nothing is playing at startup, so replaying a journalled lyric,
+  artwork, mood or attribution job would push the previous session's results
+  onto an idle overlay. Restoring them is worse than losing them.
+- Pre-sync is the one long job worth resuming, and it already resumes
+  idempotently for free: `presync_one` skips anything already cached, so
+  re-running the same list continues where it stopped.
+- `Runnable` is a boxed trait object holding an `AppHandle`, which cannot be
+  serialized. A journal needs a parallel serializable job-descriptor enum plus
+  a reconstruction step — a real change to the engine's core trait, and one
+  whose shape should be decided by the requirement that actually justifies it
+  (a half-finished transcription, §2.4) rather than guessed at now.
+
+The rest of §4 — cache index, FTS5 over lyric text — is independent of the
+journal and unstarted.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
