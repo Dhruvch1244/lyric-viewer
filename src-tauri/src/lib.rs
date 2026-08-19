@@ -148,6 +148,7 @@ pub fn run() {
             commands::prefs::set_display_mode,
             commands::playback::start_audio_capture,
             commands::playback::stop_audio_capture,
+            commands::playback::set_audio_waveform,
             commands::prefs::set_autostart,
             commands::prefs::get_autostart,
             commands::prefs::get_transcribe_config,

@@ -92,6 +92,10 @@
 
     startAudioCapture: () => call('start_audio_capture', {}, false),
     stopAudioCapture: () => call('stop_audio_capture', {}),
+    // Whether native-audio frames should carry the time-domain waveform. Only
+    // MilkDrop reads it and it is three quarters of the frame — see audio.js's
+    // demand gate and docs/JOB-ENGINE.md §6.
+    setAudioWaveform: (enabled) => call('set_audio_waveform', { enabled }),
 
     getAutostart: () => call('get_autostart', {}, false),
     setAutostart: (enabled) => call('set_autostart', { enabled }, false),

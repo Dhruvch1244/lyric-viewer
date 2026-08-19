@@ -261,28 +261,77 @@ models are larger and the payoff is unproven. Late phase, or never.
 
 ---
 
-## 6. The IPC firehose
+## 6. The IPC firehose — profiled, and it is not one
 
-`audio.rs:294-298` base64-encodes 1536 bytes and emits it as JSON, 50×/second,
-onto the thread running the rAF loop.
+`audio.rs` base64-encodes 1536 bytes and emits it as JSON, 50×/second, onto
+the thread running the rAF loop.
 
-Measured reference point: `JSON.parse` on a 5 KB payload costs 0.5–2 ms, while
-`DataView` reads over the same bytes are effectively free. Scaling to this
-~2 KB payload and 50 Hz puts the cost somewhere around **15–50 ms per second of
-main-thread time — 1.5–5% of the main thread — before the base64 decode.**
+This section used to estimate that at **1.5–5% of the main thread**, scaled
+from a published `JSON.parse` benchmark, and §8 listed it as the one unverified
+number in the document. Phase 4's instruction was to profile before building.
+Profiling changed the answer.
 
-That is an extrapolation from a published benchmark, **not a measurement of
-this app.** Phase 4 starts by profiling it.
+**Two things the estimate got wrong.**
 
-Two fixes, in value order:
+First, `emit` is not a message. Reading `tauri-2.11.5/src/event/mod.rs`,
+`emit_js_script` builds a **JavaScript source string** with the payload inlined
+as a literal and evals it in the webview. So the per-frame renderer cost is a
+~2.2 KB script *compile*, not a `JSON.parse` — and each frame's source is
+unique, so V8's compilation cache cannot hit.
 
-1. **Send derived scalars, not raw bytes.** Most of `audio.js` consumes
-   level / bass / treble / kick / drop flags. Computing those in Rust turns
-   1536 bytes into ~8 floats — a ~50× payload cut.
-2. **Binary channel for MilkDrop's waveform,** which genuinely needs raw bytes.
-   Tauri 2 exposes `ipc::Response` for `Vec<u8>` and `Channel` for push
-   streaming; it deliberately provides no framing/codec layer, so a small
-   length-prefixed protocol and a `DataView` decoder are ours to write.
+Second, the real numbers are two orders of magnitude below the estimate.
+Measured on V8 (node 24, the same engine WebView2 runs), 200k iterations,
+median of 7 runs, unique source per iteration so nothing is cached:
+
+| Per-frame work | Cost | At 50 Hz |
+|---|---|---|
+| `eval` of the emitted script (2179 B) | 0.0023 ms | 0.116 ms/s |
+| `JSON.parse` + `atob` + the `charCodeAt` loop | 0.0053 ms | 0.264 ms/s |
+| **Total transport cost** | **0.0076 ms** | **0.38 ms/s — 0.038% of one core** |
+
+The estimate was **~40–130× too high**. Not measured here, and worth naming:
+WebView2 runs the browser out of process, so `webview.eval` is a cross-process
+`ExecuteScript` call whose overhead this node harness does not capture. That
+cost scales with script size, which is the one reason payload size still
+matters at all.
+
+**Both proposed fixes are now rejected, for reasons the profiling exposed.**
+
+1. ~~Send derived scalars, not raw bytes.~~ It would move the DSP into Rust,
+   but `audio.js` must keep its JS implementation regardless for the
+   getDisplayMedia fallback path, which reads a real `AnalyserNode` with no IPC
+   in it. That buys two implementations of tuned DSP that must not drift, to
+   save 0.38 ms/s. The drift risk is the real cost, and it is not worth it.
+2. ~~Binary channel for MilkDrop's waveform.~~ Tauri's `Channel` is worse than
+   `emit` here, in both of its branches. `channel.rs` sends `Raw` payloads
+   **under 1024 bytes** by evaluating `new Uint8Array([12,34,…])` — a JSON
+   array of numbers, ~4 chars per byte, which is *three times worse* than
+   base64's 1.33. Anything **over** 1024 bytes goes through a `fetch` round
+   trip instead, and Tauri's own source comments that eval beats fetch by ~2×
+   on WebView2 at these sizes. Measured: the sub-1 KB channel path costs
+   0.0030 ms/frame against `emit`'s 0.0023. A "binary channel" on this runtime
+   is a regression.
+
+**What did land: a waveform demand gate.** The one defensible finding is that
+the payload is mostly waste. The waveform is 1024 of the 1536 bytes and has
+exactly one consumer — MilkDrop, via `AudioReactive.timeDomain` — while the
+spectrum drives all the DSP. Whenever MilkDrop is not the active engine, three
+quarters of every frame is built, base64'd, inlined into a script, compiled and
+decoded for nobody.
+
+So `audio.js` gates it on demand: calling `timeDomain` marks the waveform
+wanted, 60 frames without a call releases it via `set_audio_waveform(false)`,
+and `audio.rs` then omits the `t` key entirely. Frames drop from **2179 to 804
+bytes**. The gate is counted in frames rather than milliseconds on purpose —
+`sample()` is handed the caller's clock and `timeDomain()` is handed nothing,
+so a timestamp would compare two time bases (the first version did, and the
+test caught it). Driving it from demand rather than from MilkDrop's lifecycle
+means any future waveform consumer is handled for free, and a consumer that
+stops asking cannot leave the payload inflated.
+
+Both defaults are "waveform on" — `audio.rs`'s static and the renderer's
+initial state — so an older frontend against a newer binary, or a renderer that
+never calls the command, keeps working unchanged.
 
 ---
 
@@ -293,7 +342,7 @@ Two fixes, in value order:
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
-| **4** | Binary / derived audio IPC. **Profile before building.** | Low, unproven value | Marginal |
+| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
@@ -367,7 +416,9 @@ Mood and attribution are also skipped — both are paid LLM calls, and neither
 gates the "song starts instantly" experience the way the lyric lookup does.
 
 Not done from this phase's description: automatic `Idle` backfill of a local
-music folder — see below.
+music folder. That needs a persisted library to backfill *from*, and this app
+has none — adding folders enqueues them for playback rather than indexing
+them. It belongs with §5.7, which is already scheduled as Phase 7.
 
 ### 7.3 Phase 3, stage 1: the sidecar exists and talks
 
@@ -414,9 +465,25 @@ Still to come in this phase: the Whisper pipeline itself (mel front end,
 tokenizer, encoder/decoder, and the cross-attention DTW pass that keeps
 per-word timing), Silero VAD in front of it, native song-length loopback
 recording so the SMTC path needs no PCM over IPC, the SQLite work, and only
-then deleting `whisper.js` and its ~26 MB of vendored WASM. That needs a persisted library to backfill *from*, and this app
-has none — adding folders enqueues them for playback rather than indexing
-them. It belongs with §5.7, which is already scheduled as Phase 7.
+then deleting `whisper.js` and its ~26 MB of vendored WASM.
+
+### 7.4 Phase 4 as built: profiled, mostly declined
+
+The phase's own instruction was "profile before building", and the profiling
+retired both of the fixes it proposed — the estimate that motivated them was
+~40–130× too high, and Tauri's binary channel is *slower* than the eval-based
+`emit` it would have replaced. §6 carries the numbers and the reasoning.
+
+What shipped is the finding the profiling did support: three quarters of every
+audio frame is a waveform that only MilkDrop reads, so it is now sent only
+while something is asking for it. `set_audio_waveform` (command) ·
+`audio::build_payload` (Rust, unit-tested) · the demand gate in `audio.js`
+(unit-tested through a fake backend, including the older-backend and
+absent-`t`-key cases).
+
+Recording a declined phase rather than deleting it is the point: the next
+person to notice 1536 bytes crossing the boundary 50×/second should find the
+measurement instead of repeating it.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
@@ -437,7 +504,9 @@ this app:
 | VAD roughly halves Whisper work | **Estimate** from typical vocal/instrumental ratio |
 | Silero: 2.3 MB, <1 ms per 30 ms chunk | Published, third-party |
 | chromaprint-next bit-identical, ~4% faster than C | Published, third-party |
-| Audio IPC costs 1.5–5% of the main thread | **Extrapolation** from a published `JSON.parse` benchmark. Unverified here. Profile first. |
+| ~~Audio IPC costs 1.5–5% of the main thread~~ | **Withdrawn.** Was an extrapolation from a published `JSON.parse` benchmark; measurement put it at 0.038% of one core — see §6. |
+| Audio IPC costs 0.38 ms per second of main thread | **Measured** on V8 (node 24), 200k iterations, median of 7 runs, unique script per frame. Excludes WebView2's out-of-process `ExecuteScript` overhead, which is not measurable from a node harness. |
+| Tauri `Channel` raw frames are slower than `emit` at this size | **Measured** (0.0030 vs 0.0023 ms/frame) and **read from source** (`channel.rs`: a JSON number array under 1 KB, a `fetch` round trip over it). |
 
 ---
 

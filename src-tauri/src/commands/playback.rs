@@ -118,6 +118,16 @@ pub(crate) fn stop_audio_capture() {
     crate::audio::stop_capture();
 }
 
+/// Declare whether anything is consuming the time-domain waveform.
+///
+/// Only MilkDrop reads it, and it is three quarters of the emitted frame, so
+/// the renderer switches it off whenever no consumer has asked recently. See
+/// `audio.rs`'s module doc.
+#[tauri::command]
+pub(crate) fn set_audio_waveform(enabled: bool) {
+    crate::audio::set_waveform(enabled);
+}
+
 /// The renderer is about to play a local file: announce it as the track (so
 /// lyrics + art load) and stand the SMTC watcher down.
 #[tauri::command]

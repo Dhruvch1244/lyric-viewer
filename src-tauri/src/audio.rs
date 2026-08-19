@@ -20,13 +20,64 @@
 //! mapping is exact linear PCM — so MilkDrop (which reads the waveform, not
 //! this spectrum) is not affected by the calibration question at all.
 //!
+//! The waveform half of each frame is **demand-gated**. It is three times the
+//! size of the spectrum and has exactly one consumer (MilkDrop, via
+//! `AudioReactive.timeDomain`), while the spectrum drives all the DSP. When
+//! nothing has asked for the waveform recently the renderer calls
+//! `set_audio_waveform(false)` and frames carry the spectrum alone — a 2179 →
+//! 804 byte payload. See docs/JOB-ENGINE.md §6 for the measurements behind
+//! that being the only transport change worth making.
+//!
 //! Runtime behaviour is Windows-only; other targets get no-op stubs so the
 //! crate still builds cross-platform.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::AppHandle;
+
+/// Whether emitted frames should carry the time-domain waveform.
+///
+/// Defaults to `true` so a renderer that never calls `set_audio_waveform` —
+/// an older frontend against a newer binary — keeps the behaviour it expects.
+/// Reset to `true` on every capture start for the same reason: the renderer
+/// states its demand once capture is confirmed live.
+static WAVEFORM: AtomicBool = AtomicBool::new(true);
+
+/// Ask for (or stop) the waveform half of each `native-audio` frame.
+pub fn set_waveform(enabled: bool) {
+    WAVEFORM.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether the waveform is currently wanted.
+pub fn waveform_enabled() -> bool {
+    WAVEFORM.load(Ordering::Relaxed)
+}
+
+/// Build one `native-audio` payload.
+///
+/// Split out of the capture loop so the shape the renderer parses can be
+/// asserted without a sound card. `waveform` is `None` when nothing has asked
+/// for it, and the `t` key is then absent rather than null — `audio.js` tests
+/// `if (data.t)`, so an absent key leaves the previous waveform untouched and
+/// costs nothing to skip.
+// Only the Windows capture loop calls this, but the tests below run on every
+// platform. Without the allow, CI's Linux `clippy -D warnings` fails on dead
+// code while building the lib target with `cfg(test)` off.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn build_payload(waveform: Option<&[u8]>, spectrum: &[u8]) -> serde_json::Value {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut obj = serde_json::Map::with_capacity(2);
+    obj.insert("f".into(), serde_json::Value::String(b64.encode(spectrum)));
+    if let Some(time) = waveform {
+        obj.insert("t".into(), serde_json::Value::String(b64.encode(time)));
+    }
+    serde_json::Value::Object(obj)
+}
 
 #[cfg(windows)]
 pub fn start_capture(app: AppHandle) {
+    WAVEFORM.store(true, Ordering::Relaxed);
     imp::start(app);
 }
 
@@ -36,7 +87,9 @@ pub fn stop_capture() {
 }
 
 #[cfg(not(windows))]
-pub fn start_capture(_app: AppHandle) {}
+pub fn start_capture(_app: AppHandle) {
+    WAVEFORM.store(true, Ordering::Relaxed);
+}
 
 #[cfg(not(windows))]
 pub fn stop_capture() {}
@@ -46,9 +99,7 @@ mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
-    use base64::Engine;
     use rustfft::{num_complex::Complex, FftPlanner};
-    use serde_json::json;
     use tauri::{AppHandle, Emitter};
 
     use windows::core::Result;
@@ -243,7 +294,7 @@ mod imp {
 
     /// Build the waveform + spectrum bytes and emit them. See the module doc
     /// for why the spectrum is auto-gained rather than dB-scaled to a fixed
-    /// range.
+    /// range, and why the waveform is omitted when nothing consumes it.
     fn emit_frame(
         app: &AppHandle,
         ring: &[f32; FFT],
@@ -253,14 +304,21 @@ mod imp {
         mag: &mut [f32; BINS],
         ceiling: &mut f32,
     ) {
+        // The spectrum drives every consumer; the waveform has one, and it is
+        // often not running. Skip the byte conversion (and, below, the base64)
+        // when it is not wanted — the FFT input still needs every sample.
+        let want_waveform = super::waveform_enabled();
+
         // Unwrap the circular buffer into chronological order.
         let mut time_bytes = [128u8; FFT];
         let mut buf = vec![Complex { re: 0.0f32, im: 0.0f32 }; FFT];
         for i in 0..FFT {
             let s = ring[(widx + i) % FFT];
-            // getByteTimeDomainData: 128 = zero-crossing, full-scale spans 0..255.
-            let t = (s * 128.0 + 128.0).clamp(0.0, 255.0);
-            time_bytes[i] = t as u8;
+            if want_waveform {
+                // getByteTimeDomainData: 128 = zero-crossing, full-scale spans 0..255.
+                let t = (s * 128.0 + 128.0).clamp(0.0, 255.0);
+                time_bytes[i] = t as u8;
+            }
             buf[i] = Complex { re: s * win[i], im: 0.0 };
         }
 
@@ -291,10 +349,55 @@ mod imp {
             freq_bytes[i] = (mag[i] / ceil * 255.0).clamp(0.0, 255.0) as u8;
         }
 
-        let b64 = base64::engine::general_purpose::STANDARD;
         let _ = app.emit(
             "native-audio",
-            json!({ "t": b64.encode(time_bytes), "f": b64.encode(freq_bytes) }),
+            super::build_payload(want_waveform.then_some(&time_bytes[..]), &freq_bytes),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_carries_both_halves_when_the_waveform_is_wanted() {
+        let time = [128u8; 4];
+        let spec = [0u8, 64, 128, 255];
+        let v = build_payload(Some(&time), &spec);
+        assert!(v.get("t").and_then(|t| t.as_str()).is_some());
+        assert!(v.get("f").and_then(|f| f.as_str()).is_some());
+    }
+
+    /// The renderer reads `if (data.t)`, so the key must be ABSENT rather than
+    /// null when the waveform is off — a null would be equally falsy, but an
+    /// absent key is the thing that actually shrinks the emitted script.
+    #[test]
+    fn payload_omits_the_waveform_key_entirely_when_it_is_not_wanted() {
+        let spec = [0u8, 64, 128, 255];
+        let v = build_payload(None, &spec);
+        assert!(v.get("t").is_none(), "waveform key should be absent, got {v}");
+        assert!(v.get("f").and_then(|f| f.as_str()).is_some());
+    }
+
+    /// The reason the gate exists: dropping the waveform is most of the frame.
+    #[test]
+    fn dropping_the_waveform_removes_most_of_the_payload() {
+        let time = [128u8; 1024];
+        let spec = [40u8; 512];
+        let full = build_payload(Some(&time), &spec).to_string().len();
+        let lean = build_payload(None, &spec).to_string().len();
+        assert!(
+            lean * 2 < full,
+            "expected the lean frame to be less than half of {full} bytes, got {lean}"
+        );
+    }
+
+    #[test]
+    fn the_waveform_gate_round_trips() {
+        set_waveform(false);
+        assert!(!waveform_enabled());
+        set_waveform(true);
+        assert!(waveform_enabled());
     }
 }

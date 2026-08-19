@@ -49,6 +49,41 @@
   let nativeMode = false;
   let nativeSubscribed = false;
   let nativeGotFrame = false;
+
+  /*
+    Waveform demand gate.
+
+    The spectrum drives every consumer in this file; the WAVEFORM has exactly
+    one (MilkDrop, through `timeDomain` below) and it is three quarters of the
+    bytes in each native frame. Rather than wire this to MilkDrop's lifecycle,
+    the gate is driven by demand: calling `timeDomain` marks the waveform
+    wanted, and going a second without a call releases it. Any future consumer
+    gets the same treatment for free, and a consumer that stops asking cannot
+    leave the payload inflated.
+
+    Native path only — getDisplayMedia reads a real AnalyserNode with no IPC
+    in the way, so there is nothing to gate.
+
+    Counted in FRAMES, not milliseconds, deliberately: `sample()` is handed the
+    caller's clock and `timeDomain()` is handed nothing, so a timestamp here
+    would be comparing two different time bases. Frames are the one unit both
+    sides already share. Under a throttled loop this errs toward holding the
+    waveform open longer, which is the safe direction.
+  */
+  let waveformOn = true;       // matches audio.rs's default on capture start
+  let waveformAsked = false;   // set by timeDomain, cleared each sample()
+  let waveformIdleFrames = 0;
+  const WAVEFORM_IDLE_FRAMES = 60; // ~1s at 60fps
+
+  function requestWaveform(enabled) {
+    if (waveformOn === enabled) return;
+    waveformOn = enabled;
+    if (!enabled) nativeAnalyser._time.fill(128); // never serve a stale waveform
+    try {
+      if (window.player && window.player.setAudioWaveform) window.player.setAudioWaveform(enabled);
+    } catch (e) { /* older backend — it keeps sending the waveform, which is safe */ }
+  }
+
   const nativeAnalyser = {
     fftSize: 1024,
     frequencyBinCount: 512,
@@ -102,6 +137,12 @@
     nativeMode = true;
     running = true;
     env.active = true;
+    /* Capture starts with the waveform on (audio.rs does the same) and lets
+       the idle count release it a second later if nothing asks. Starting it
+       OFF would cost MilkDrop a flat frame on every start for no real gain. */
+    waveformOn = true;
+    waveformAsked = false;
+    waveformIdleFrames = 0;
     return true;
   }
 
@@ -255,6 +296,10 @@
         if (window.player && window.player.stopAudioCapture) window.player.stopAudioCapture();
       } catch (e) { /* ignore */ }
       nativeMode = false;
+      // Match audio.rs, which re-arms the waveform on the next capture start.
+      waveformOn = true;
+      waveformAsked = false;
+      waveformIdleFrames = 0;
     }
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
     if (audioCtx) audioCtx.close().catch(() => {});
@@ -356,6 +401,13 @@
     env.drop = false;
     if (!running || !analyser) { env.active = false; return env; }
     env.active = true;
+
+    // Release the waveform once nothing has asked for it for ~a second.
+    if (nativeMode) {
+      if (waveformAsked) { waveformAsked = false; waveformIdleFrames = 0; }
+      else if (waveformIdleFrames < WAVEFORM_IDLE_FRAMES) waveformIdleFrames += 1;
+      else if (waveformOn) requestWaveform(false);
+    }
 
     analyser.getByteFrequencyData(freq);
     const n = freq.length;                    // 512 bins across ~0–24kHz (~46Hz/bin)
@@ -506,6 +558,10 @@
      */
     timeDomain: (out) => {
       if (!running || !analyser || !out) return false;
+      /* Asking IS the subscription: on the native path this is what keeps the
+         waveform in the emitted frame. See the demand gate at the top. */
+      waveformAsked = true;
+      if (nativeMode && !waveformOn) requestWaveform(true);
       analyser.getByteTimeDomainData(out);
       return true;
     },

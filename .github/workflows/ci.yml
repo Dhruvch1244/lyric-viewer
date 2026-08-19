@@ -2,7 +2,7 @@ name: ci
 
 # Runs the existing test suites and clippy on every push/PR. Nothing here
 # builds an installer — that stays release.yml's job — this just makes sure
-# the checked-in tests (152 JS, 45 Rust) and clippy actually run somewhere
+# the checked-in tests (155 JS, 115 Rust) and clippy actually run somewhere
 # other than a contributor's own machine before code ships.
 
 on:
