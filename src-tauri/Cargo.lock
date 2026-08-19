@@ -2209,12 +2209,10 @@ version = "0.36.0"
 dependencies = [
  "base64 0.22.1",
  "log",
- "rand",
  "regex",
  "rustfft",
  "serde",
  "serde_json",
- "sha2",
  "symphonia",
  "tauri",
  "tauri-build",

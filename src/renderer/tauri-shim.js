@@ -140,10 +140,6 @@
     clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
 
     presyncList: (text) => call('presync_list', { text }),
-    spotifyStatus: () => call('spotify_status', {}, { hasClientId: false, connected: false }),
-    spotifyAuthorize: () => call('spotify_authorize', {}, { status: 'error', message: 'unavailable' }),
-    spotifyPlaylists: () => call('spotify_playlists', {}, { status: 'error', message: 'unavailable' }),
-    spotifyPlaylistTracks: (playlistId) => call('spotify_playlist_tracks', { playlistId }, { status: 'error', message: 'unavailable' }),
     listSynced: () => call('list_synced', {}, []),
 
     /*

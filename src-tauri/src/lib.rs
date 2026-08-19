@@ -16,9 +16,8 @@
 //!   (pointer forwarding, battery/lock/fullscreen), each started once and
 //!   gated on/off by an atomic rather than spawned and killed.
 //! - `tray`: the tray icon/menu, global hotkeys, and overlay show/hide.
-//! - `commands`: the 59 `#[tauri::command]` handlers, grouped by domain
-//!   (`prefs`, `lyrics_cmds`, `artwork_cmds`, `playback`, `spotify_cmds`,
-//!   `updater`, `misc`).
+//! - `commands`: the `#[tauri::command]` handlers, grouped by domain
+//!   (`prefs`, `lyrics_cmds`, `artwork_cmds`, `playback`, `updater`, `misc`).
 
 mod align;
 mod analysis;
@@ -37,7 +36,6 @@ mod lyrics;
 mod mood;
 mod netease;
 mod presets;
-mod spotify;
 #[cfg(windows)]
 mod smtc;
 mod state;
@@ -53,11 +51,13 @@ use std::sync::Mutex;
 use serde_json::json;
 use tauri::Manager;
 
-// Re-exported at the crate root so the three modules that reach into what
-// used to be lib.rs's own top-level statics/types (crashlog.rs, llm.rs,
-// spotify.rs) need no changes: `crate::CRASH_REPORTING_ENABLED`,
-// `crate::maybe_offer_localcli()`, `crate::AlwaysOnTopGuard` all still resolve.
-pub(crate) use state::{maybe_offer_localcli, AlwaysOnTopGuard, CRASH_REPORTING_ENABLED};
+// Re-exported at the crate root so the modules that reach into what used to be
+// lib.rs's own top-level statics (crashlog.rs, llm.rs) need no changes:
+// `crate::CRASH_REPORTING_ENABLED` and `crate::maybe_offer_localcli()` both
+// still resolve. `AlwaysOnTopGuard` is deliberately NOT re-exported: every
+// consumer left (commands/playback.rs, commands/lyrics_cmds.rs) is inside
+// this crate's own tree and takes it from `crate::state` directly.
+pub(crate) use state::{maybe_offer_localcli, CRASH_REPORTING_ENABLED};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -107,7 +107,6 @@ pub fn run() {
             #[cfg(windows)]
             app.manage(Mutex::<Option<smtc::Session>>::new(None));
             app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "available": false }))));
-            app.manage(Mutex::<Option<spotify::SpotifyToken>>::new(None));
 
             // Apply any keys saved via the 🔑 panel, then check for an update.
             commands::prefs::load_api_keys(&handle);
@@ -168,10 +167,6 @@ pub fn run() {
             commands::lyrics_cmds::save_beatmap,
             commands::lyrics_cmds::save_heatmap,
             commands::lyrics_cmds::presync_list,
-            commands::spotify_cmds::spotify_status,
-            commands::spotify_cmds::spotify_authorize,
-            commands::spotify_cmds::spotify_playlists,
-            commands::spotify_cmds::spotify_playlist_tracks,
             commands::misc::report_jobs,
             commands::misc::report_client_error,
             commands::misc::open_crash_log,

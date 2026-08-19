@@ -149,10 +149,10 @@ pub(crate) fn save_prefs(app: &AppHandle, prefs: &Prefs) {
 /// plain "restore at the end" would miss).
 ///
 /// The overlay is `alwaysOnTop: true` by design, so ANY other top-level
-/// window this app opens — a browser tab (see spotify.rs, the original use
-/// of this pattern), a native file/folder picker (open_local_files /
-/// open_local_folder) — opens BEHIND it, invisible and unclickable, unless
-/// this runs first. Not a hang: the app is waiting on a dialog the user
+/// window this app opens — a native file/folder picker (open_local_files /
+/// open_local_folder / import_lyrics) — opens BEHIND it, invisible and
+/// unclickable, unless this runs first. Not a hang: the app is waiting on a
+/// dialog the user
 /// cannot see or click, which reads as "stopped responding" from the
 /// outside — this shape of bug is exactly what failed Microsoft Store
 /// certification's 10.1.2.10 functionality check on media import (the

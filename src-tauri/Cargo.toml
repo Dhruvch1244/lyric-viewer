@@ -53,11 +53,6 @@ tauri-plugin-opener = "2"
 ureq = { version = "2.10", features = ["json"] }
 regex = "1"
 base64 = "0.22"
-# PKCE for Spotify OAuth (spotify.rs): sha2 hashes the code verifier into the
-# code_challenge; rand generates the verifier itself (CSPRNG — a predictable
-# verifier defeats the whole point of PKCE).
-sha2 = "0.10"
-rand = "0.9"
 # FFT for the native WASAPI loopback path (see audio.rs): the capture thread
 # turns raw PCM into the same byte-spectrum a Web Audio AnalyserNode would, so
 # the renderer's tuned DSP needs no change.

@@ -189,19 +189,6 @@
         <button id="keybox-save" class="chip" type="button">Save</button>
         <span id="keybox-status" class="keybox__status" role="status"></span>
 
-        <!-- Spotify Client ID, for the 📋 panel's "Import from Spotify"
-             playlist pre-sync. A Client ID only (public, PKCE flow — no
-             secret to protect), from a Spotify Developer app you register
-             yourself at developer.spotify.com/dashboard. -->
-        <div class="keybox__local">
-          <span class="keybox__label">Spotify Client ID (for playlist import)</span>
-          <input id="keybox-spotify-input" class="keybox__input" type="text"
-                 placeholder="Client ID from your Spotify Developer app" autocomplete="off" spellcheck="false"
-                 title="Register an app at developer.spotify.com/dashboard, add all three Redirect URIs: http://127.0.0.1:43876/callback, http://127.0.0.1:43877/callback, and http://127.0.0.1:43878/callback (Spotify requires an exact port match, so the app tries each in turn — a portless loopback URI does not work), then paste the Client ID here. Also add your own Spotify account email under the app's Users and Access tab — new apps start in Development Mode, which only lets allow-listed accounts sign in." />
-          <button id="keybox-spotify-save" class="chip" type="button">Save</button>
-          <span id="keybox-spotify-status" class="keybox__status" role="status"></span>
-        </div>
-
         <!-- Local AI: pick a developer CLI to use when the cloud has no key or
              is out of quota. Available here on demand, not only when a request
              has already failed. -->
@@ -281,15 +268,6 @@
            "Artist - Title" lines (one per line) to fetch + cache their synced
            lyrics ahead of time, so they play instantly and offline later. -->
       <div id="presync" class="listbox" hidden>
-        <!-- Import from a Spotify playlist instead of pasting by hand. Needs
-             a SPOTIFY_CLIENT_ID set via the 🔑 panel first — hidden entirely
-             when none is configured, since there's nothing to click yet. -->
-        <div id="presync-spotify" class="listbox__row" hidden>
-          <button id="presync-spotify-connect" class="chip" type="button">Connect Spotify</button>
-          <select id="presync-spotify-playlists" class="chip" hidden></select>
-          <button id="presync-spotify-import" class="chip" type="button" hidden>Import</button>
-          <span id="presync-spotify-status" class="listbox__status" role="status"></span>
-        </div>
         <label class="listbox__label" for="presync-input">Paste tracks — one “Artist - Title” per line</label>
         <textarea id="presync-input" class="listbox__input" rows="6" spellcheck="false"
                   placeholder="Seedhe Maut - Nanchaku&#10;DIVINE - Mera Bhai&#10;KR$NA - Freeverse Feast"></textarea>

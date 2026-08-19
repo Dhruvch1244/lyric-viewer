@@ -206,11 +206,10 @@ pub(crate) fn load_api_keys(app: &AppHandle) {
 /// Persist an API key from the 🔑 panel and apply it immediately.
 #[tauri::command]
 pub(crate) fn set_api_key(name: String, value: String, app: AppHandle) -> Value {
-    // Found while wiring the Spotify Client ID save button: this returned
-    // unit, so the renderer's `res.status === 'ok'` check on the other side
-    // (saveApiKey in renderer.js) threw on `null.status` and always reported
-    // "save failed" — the key was being saved correctly the whole time, only
-    // the confirmation was broken.
+    // Returns a status object rather than unit, and that is load-bearing: the
+    // renderer's `res.status === 'ok'` check (saveApiKey in renderer.js) threw
+    // on `null.status` back when this returned unit, so every save reported
+    // "save failed" while actually succeeding. Keep the shape.
     if name.is_empty() {
         return json!({ "status": "error", "message": "no key name" });
     }
