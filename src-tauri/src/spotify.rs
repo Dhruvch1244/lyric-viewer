@@ -115,7 +115,7 @@ fn await_callback(listener: TcpListener, expected_state: &str) -> Result<String,
         let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
         let params = parse_query(query);
 
-        let (status_line, body) = if params.get("error").is_some() {
+        let (status_line, body) = if params.contains_key("error") {
             ("HTTP/1.1 200 OK", "<html><body>Spotify sign-in was cancelled. You can close this tab.</body></html>")
         } else if params.get("state").map(String::as_str) != Some(expected_state) {
             ("HTTP/1.1 400 Bad Request", "<html><body>Sign-in state mismatch — please try again from the app.</body></html>")
@@ -138,7 +138,7 @@ fn await_callback(listener: TcpListener, expected_state: &str) -> Result<String,
         );
         let _ = stream.write_all(resp.as_bytes());
         let _ = stream.flush();
-        if params.get("code").is_none() {
+        if !params.contains_key("code") {
             return Err("Spotify sign-in did not complete".into());
         }
     }

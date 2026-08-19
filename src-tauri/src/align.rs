@@ -132,13 +132,7 @@ pub fn align_lyrics(lines: &[String], cues: &[Cue], duration_ms: i64) -> (Vec<Cu
             continue;
         }
         let prev = times[i - 1].unwrap();
-        let mut next = None;
-        for k in (i + 1)..clean.len() {
-            if times[k].is_some() {
-                next = Some(k);
-                break;
-            }
-        }
+        let next = (i + 1..clean.len()).find(|&k| times[k].is_some());
         match next {
             None => {
                 let end = if duration_ms > prev { duration_ms } else { prev + (clean.len() - i) as i64 * DEFAULT_LINE_MS };

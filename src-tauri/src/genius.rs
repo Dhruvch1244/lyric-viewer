@@ -17,20 +17,26 @@
 //! browser-shaped header set, both blocked identically. A plain HTTP client
 //! cannot execute the JS challenge Cloudflare requires, and this project
 //! does not build tooling to defeat bot-detection/anti-scraping measures —
-//! that line doesn't move for "but it would help a feature work." Left in
-//! place because it fails CLOSED (silently returns `None`, exactly like a
-//! song this app doesn't have — see `fetch_plain_any` in lib.rs), so it
-//! costs one extra ~12s-timeout-bounded network round trip on an LRCLIB
-//! plain miss and nothing else. The parsing logic (extract_lyrics_containers
-//! / html_lyrics_to_text / best_url) is still unit-tested and still correct
-//! for whatever HTML it's given — it simply never receives any, in practice,
-//! from the current live endpoint. If Genius's Cloudflare posture ever
-//! relaxes, or a legitimate (ToS-compliant) access path turns up, this
-//! module is ready to work again without changes.
+//! that line doesn't move for "but it would help a feature work." No longer
+//! called from `fetch_plain_any` in lib.rs (previously "left in place because
+//! it fails CLOSED" — true, but that closed failure was still costing a
+//! bounded network round trip on every LRCLIB-plain miss for zero chance of
+//! success, so the call was pulled). The parsing logic
+//! (extract_lyrics_containers / html_lyrics_to_text / best_url) is still
+//! unit-tested and still correct for whatever HTML it's given. If Genius's
+//! Cloudflare posture ever relaxes, or a legitimate (ToS-compliant) access
+//! path turns up, wire `fetch_plain` back into `fetch_plain_any` — no other
+//! changes needed.
 //!
 //! No API key needed — matches every other lyric source in this app (LRCLIB,
 //! NetEase, Kugou). Used the same way LRCLIB's plain lyrics are: force-aligned
 //! to a Whisper transcription's timing by align.rs, never shown raw/unsynced.
+
+// Dormant per the note above: nothing outside `#[cfg(test)]` calls into this
+// module right now, which would otherwise make every item here a dead-code
+// warning. Kept live (not deleted) so re-enabling it is a one-line change in
+// lib.rs, not a rewrite.
+#![allow(dead_code)]
 
 use std::sync::LazyLock;
 

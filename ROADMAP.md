@@ -128,18 +128,20 @@ Honest list of what is actually weak, worst first.
 
 ### Quality gaps
 
-6. 🔶 **Lyric coverage — mostly shipped; Genius doesn't actually work.**
+6. ✅ **Lyric coverage — mostly shipped; Genius pulled from the hot path.**
    NetEase and Kugou shipped as second/third synced sources, confirmed live.
    Genius as a second plain source was ALSO shipped, but a live verification
    pass (2026-08-17) found it Cloudflare-blocked with a JS challenge
    (`Cf-Mitigated: challenge`) on every request — not a bug in the scraping
    logic, a real anti-bot wall a plain HTTP client cannot pass, and not
-   something this project will build tooling to defeat. Left in the fallback
-   chain because it fails closed (silently `None`, same as a song this app
-   doesn't have) — costs one extra bounded-timeout network round trip on an
-   LRCLIB-plain miss, nothing else. See genius.rs's module doc for the full
-   finding; revisit only if Genius's posture or a legitimate access path
-   changes.
+   something this project will build tooling to defeat. Originally left in
+   the fallback chain because it failed closed (silently `None`, same as a
+   song this app doesn't have) — but that closed failure was still costing a
+   bounded-timeout network round trip on every LRCLIB-plain miss for zero
+   chance of success, so `fetch_plain_any` (lib.rs) no longer calls it
+   (2026-08-19). The module and its tests stay in the tree — see genius.rs's
+   module doc for the full finding; wiring it back in is a one-line change if
+   Genius's posture or a legitimate access path ever changes.
 7. 🔶 **Word timing was fully interpolated — now partially real, but blocked
    on a model limitation.** Real per-word timing lands for any lyric line
    where a Whisper transcription anchors directly AND the real line's word

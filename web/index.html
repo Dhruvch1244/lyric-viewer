@@ -4,14 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lyric Overlay — beat-synced lyrics & a live visualizer for Windows</title>
-<meta name="description" content="Lyric Overlay turns whatever you're playing on Windows into a show: beat-synced lyrics and a live music visualizer that reacts to your system audio. Free.">
-<meta property="og:title" content="Lyric Overlay">
-<meta property="og:description" content="Beat-synced lyrics and a live music visualizer that react to whatever's playing on your PC.">
+<meta name="description" content="Every lyric app is scrolling text. Every visualizer has no idea what's playing. Lyric Overlay is both — beat-synced lyrics over a live MilkDrop-class visualizer that reacts to whatever's on your PC. Free.">
+<link rel="canonical" href="https://lyricoverlay.dhruvchoudhary.com/">
+<meta property="og:title" content="Lyric Overlay — a visualizer that knows the words">
+<meta property="og:description" content="Beat-synced lyrics over a live MilkDrop-class visualizer, reacting to whatever's already playing on your PC. Free for Windows, macOS & Linux.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://lyricoverlay.dhruvchoudhary.com/">
+<meta property="og:image" content="https://lyricoverlay.dhruvchoudhary.com/assets/screenshots/04-wormhole.jpg">
+<meta property="og:image:width" content="1424">
+<meta property="og:image:height" content="745">
+<meta property="og:image:alt" content="Lyric Overlay's Wormhole preset — a twisting tunnel visual with synced lyrics over it">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Lyric Overlay — a visualizer that knows the words">
+<meta name="twitter:description" content="Beat-synced lyrics over a live MilkDrop-class visualizer, reacting to whatever's already playing on your PC. Free.">
+<meta name="twitter:image" content="https://lyricoverlay.dhruvchoudhary.com/assets/screenshots/04-wormhole.jpg">
 <meta name="theme-color" content="#09070E">
 <link rel="icon" href="assets/icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="assets/icon-192.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Lyric Overlay",
+  "url": "https://lyricoverlay.dhruvchoudhary.com/",
+  "description": "Beat-synced lyrics over a live MilkDrop-class visualizer that reacts to whatever's playing on your PC.",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "Windows 10, Windows 11, macOS, Linux",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Dhruv Choudhary" },
+  "downloadUrl": "https://github.com/Dhruvch1244/lyric-viewer/releases/latest",
+  "softwareVersion": "0.35.0"
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -139,6 +164,35 @@
   .dl-tag{margin-top:8px;align-self:flex-start;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
           color:var(--cyan);background:rgba(40,224,236,.1);border:1px solid rgba(40,224,236,.3);border-radius:99px;padding:4px 11px;}
 
+  /* ---------------- positioning ---------------- */
+  .pos{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--ink-2);}
+  .pos-grid{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:0;}
+  @media(max-width:820px){.pos-grid{grid-template-columns:1fr;}}
+  .pos-col{padding:44px 34px;border-right:1px solid var(--line);}
+  .pos-col:last-child{border-right:0;}
+  @media(max-width:820px){.pos-col{border-right:0;border-bottom:1px solid var(--line);}}
+  .pos-col .not{font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);margin:0 0 10px;}
+  .pos-col h3{font-family:var(--disp);font-weight:400;font-size:30px;letter-spacing:.02em;text-transform:uppercase;margin:0 0 10px;color:var(--muted);}
+  .pos-col p{color:var(--dim);font-size:14.5px;margin:0;line-height:1.55;}
+  .pos-col.is-both{background:var(--panel);}
+  .pos-col.is-both .not{color:var(--cyan);}
+  .pos-col.is-both h3{color:var(--text);font-size:34px;}
+  .pos-col.is-both p{color:#D8D2E4;font-size:15.5px;}
+
+  /* ---------------- gallery ---------------- */
+  .gal-head{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;margin-bottom:40px;}
+  .gal-head p{color:var(--muted);max-width:36ch;font-size:16px;margin:0;}
+  .gal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+  @media(max-width:900px){.gal-grid{grid-template-columns:1fr 1fr;}}
+  @media(max-width:560px){.gal-grid{grid-template-columns:1fr;}}
+  .gal-card{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--panel);}
+  .gal-card img{display:block;width:100%;aspect-ratio:1424/745;object-fit:cover;transition:transform .5s ease;}
+  .gal-card:hover img{transform:scale(1.045);}
+  .gal-tag{position:absolute;left:14px;bottom:14px;right:14px;}
+  .gal-tag b{display:block;font-family:var(--disp);font-weight:400;font-size:20px;letter-spacing:.03em;text-transform:uppercase;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.7);}
+  .gal-tag span{display:block;font-size:12.5px;color:#E7E2EF;text-shadow:0 1px 8px rgba(0,0,0,.8);margin-top:2px;}
+  .gal-card::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,0) 46%);pointer-events:none;}
+
   /* footer */
   footer{border-top:1px solid var(--line);padding:46px 0;}
   .foot-in{display:flex;flex-wrap:wrap;gap:20px 30px;align-items:center;justify-content:space-between;}
@@ -157,6 +211,7 @@
       <b>Lyric Overlay</b>
     </a>
     <div class="nav-links">
+      <a href="#gallery">Gallery</a>
       <a href="#features">Features</a>
       <a href="#demo">Demo</a>
       <a href="privacy.html">Privacy</a>
@@ -192,6 +247,66 @@
     <span>Synced lyrics</span><span>MilkDrop visuals</span><span>Auto-transcribe</span><span>Translate</span><span>Wallpaper mode</span><span>No setup</span>
   </div>
 </div>
+
+<!-- ================= POSITIONING ================= -->
+<section class="pos">
+  <div class="pos-grid">
+    <div class="pos-col">
+      <p class="not">Not just</p>
+      <h3>A lyric app</h3>
+      <p>Every lyric app on Windows is a text renderer — a bar, a taskbar strip, a floating line. None of them react to the music.</p>
+    </div>
+    <div class="pos-col">
+      <p class="not">Not just</p>
+      <h3>A visualizer</h3>
+      <p>MilkDrop, Plane9, Wallpaper Engine — hundreds of scenes between them, and not one shows you a single word of what's playing.</p>
+    </div>
+    <div class="pos-col is-both">
+      <p class="not">Lyric Overlay is</p>
+      <h3>Both, at once</h3>
+      <p>Real MilkDrop-class visuals underneath words that land on the beat — synced, translated, transliterated. Nobody else sits in that overlap.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GALLERY ================= -->
+<section class="blk" id="gallery">
+  <div class="wrap">
+    <div class="gal-head">
+      <div>
+        <p class="sec-label">// See it</p>
+        <h2 class="sec-title">Nine looks.<br><span class="fade">One song.</span></h2>
+      </div>
+      <p>Each song picks its own preset, and you can pin one to a track. A few of them:</p>
+    </div>
+    <div class="gal-grid">
+      <div class="gal-card">
+        <img src="assets/screenshots/04-wormhole.jpg" alt="Wormhole preset — a twisting tunnel flying toward the camera, constricting before a drop" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Wormhole</b><span>Winds up in the seconds before a drop it already knows is coming</span></div>
+      </div>
+      <div class="gal-card">
+        <img src="assets/screenshots/03-vinyl.jpg" alt="Vinyl preset — the cover art spinning as a record on a deck" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Vinyl</b><span>Cover art on a deck, turning one revolution every four beats</span></div>
+      </div>
+      <div class="gal-card">
+        <img src="assets/screenshots/02-heatmap.jpg" alt="Heatmap preset — the shape of the song along the bottom edge" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Heatmap</b><span>The shape of the song, learned by listening and remembered</span></div>
+      </div>
+      <div class="gal-card">
+        <img src="assets/screenshots/05-stage.jpg" alt="Stage preset — pixel-art artist dancers on a lit floor with spotlights punching on the kick" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Stage</b><span>A lit floor, spotlights on the kick, the troupe pushed forward</span></div>
+      </div>
+      <div class="gal-card">
+        <img src="assets/screenshots/07-ghost.jpg" alt="Ghost preset — just the lyrics over the live GPU cloud, no other layers" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Ghost</b><span>Just the words and the cloud — cuts CPU rendering by ~95%</span></div>
+      </div>
+      <div class="gal-card">
+        <img src="assets/screenshots/01-liquid.jpg" alt="Liquid preset — the signature swirling GPU field behind synced lyrics" loading="lazy" width="1424" height="745">
+        <div class="gal-tag"><b>Liquid</b><span>The signature look — the only field in any of this that syncs to lyric density</span></div>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ================= FEATURES ================= -->
 <section class="blk" id="features">
@@ -301,6 +416,7 @@
         <b style="font-size:22px">Lyric Overlay</b>
       </a>
       <div class="foot-links">
+        <a href="#gallery">Gallery</a>
         <a href="#features">Features</a>
         <a href="#demo">Demo</a>
         <a href="privacy.html">Privacy</a>
@@ -407,5 +523,24 @@
 })();
 </script>
 <script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
+<script>
+/* Same-origin pageview counter — no cookies, no third-party service, no
+   per-visitor identity, just a same-origin counter bump so there's SOME
+   visibility into whether this page converts to a download. See
+   web/worker/src/worker.js's header comment for the one-time Worker setup
+   (a KV namespace + ADMIN_TOKEN, both optional). Off until
+   SITE_STATS_ENDPOINT below is filled in — no network call happens, and
+   nothing on the page changes either way. */
+(function () {
+  var SITE_STATS_ENDPOINT = ''; // e.g. 'https://lyric-overlay-proxy.<you>.workers.dev'
+  if (!SITE_STATS_ENDPOINT) return;
+  var body = JSON.stringify({ path: location.pathname });
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(SITE_STATS_ENDPOINT + '/api/pageview', new Blob([body], { type: 'application/json' }));
+  } else {
+    fetch(SITE_STATS_ENDPOINT + '/api/pageview', { method: 'POST', body: body, keepalive: true }).catch(function () {});
+  }
+})();
+</script>
 </body>
 </html>
