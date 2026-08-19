@@ -16,6 +16,14 @@ compatibility_date = "2026-01-01"
 # [[kv_namespaces]]
 # binding = "CRASH_REPORTS"
 # id = "paste-the-id-wrangler-kv-namespace-create-prints-here"
-#
-# ADMIN_TOKEN is a secret, not a var — set with:
+
+# Optional: only needed for the marketing site's same-origin pageview
+# counter (see worker.js's header comment). Counts only, no per-visitor
+# identity. Everything else works fine without this.
+# [[kv_namespaces]]
+# binding = "SITE_STATS"
+# id = "paste-the-id-wrangler-kv-namespace-create-prints-here"
+
+# ADMIN_TOKEN is a secret, not a var — shared by /api/crash-reports and
+# /api/stats above. Set with:
 #   npx wrangler secret put ADMIN_TOKEN

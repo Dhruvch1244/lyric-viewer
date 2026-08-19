@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browser Demo — Lyric Overlay</title>
 <meta name="description" content="Try Lyric Overlay in your browser: drop a track and watch the live visualizer and synced lyrics come alive.">
+<link rel="canonical" href="https://lyricoverlay.dhruvchoudhary.com/demo.html">
+<meta property="og:title" content="Lyric Overlay — browser demo">
+<meta property="og:description" content="Drop a track and watch the live visualizer and synced lyrics come alive, right in your browser.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://lyricoverlay.dhruvchoudhary.com/demo.html">
+<meta property="og:image" content="https://lyricoverlay.dhruvchoudhary.com/assets/screenshots/01-liquid.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#09070E">
 <link rel="icon" href="assets/icon.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -164,5 +171,19 @@
 <script src="assets/butterchurnPresets.min.js"></script>
 <script src="demo.js"></script>
 <script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
+<script>
+/* Same-origin pageview counter — see index.html's copy of this script for
+   the full explanation. Off until SITE_STATS_ENDPOINT is filled in. */
+(function () {
+  var SITE_STATS_ENDPOINT = ''; // e.g. 'https://lyric-overlay-proxy.<you>.workers.dev'
+  if (!SITE_STATS_ENDPOINT) return;
+  var body = JSON.stringify({ path: location.pathname });
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(SITE_STATS_ENDPOINT + '/api/pageview', new Blob([body], { type: 'application/json' }));
+  } else {
+    fetch(SITE_STATS_ENDPOINT + '/api/pageview', { method: 'POST', body: body, keepalive: true }).catch(function () {});
+  }
+})();
+</script>
 </body>
 </html>
