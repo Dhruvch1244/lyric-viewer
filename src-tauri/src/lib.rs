@@ -29,6 +29,7 @@ mod commands;
 mod correct;
 mod crashlog;
 mod genius;
+mod jobs;
 mod kugou;
 mod llm;
 mod localcli;

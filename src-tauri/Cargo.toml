@@ -37,6 +37,10 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Job engine (src/jobs). Only the sync primitives — the runtime itself is
+# Tauri's (`tauri::async_runtime`), which is this same tokio, so the versions
+# unify and nothing extra is pulled in.
+tokio = { version = "1", features = ["sync", "macros"] }
 tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
@@ -76,5 +80,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Power",
+    # SetThreadPriority: the job engine's CPU/inference lanes run below normal
+    # so the compositor and render thread always win (see jobs/pool.rs).
+    "Win32_System_Threading",
     "Win32_System_StationsAndDesktops",
 ] }

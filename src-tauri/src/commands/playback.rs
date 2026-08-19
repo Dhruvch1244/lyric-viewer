@@ -163,7 +163,14 @@ fn local_item(path: &std::path::Path) -> Value {
     json!({ "localPath": path.to_string_lossy(), "title": title, "artist": "" })
 }
 
-#[tauri::command]
+/// `(async)` is required, not stylistic — see `import_lyrics` in
+/// lyrics_cmds.rs for the full reasoning. Short version: a sync command runs
+/// on the main thread, and a blocking picker called from the main thread
+/// deadlocks against the event loop it is waiting on. This is the more likely
+/// culprit behind the "media-import check reads as the app hanging" note
+/// below than the always-on-top layering it was originally attributed to —
+/// both are real, but only this one actually freezes the process.
+#[tauri::command(async)]
 pub(crate) fn open_local_files(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     // See AlwaysOnTopGuard: without dropping always-on-top first, this picker
@@ -181,7 +188,9 @@ pub(crate) fn open_local_files(app: AppHandle) -> Value {
     }
 }
 
-#[tauri::command]
+/// `(async)` for the same main-thread/blocking-picker deadlock as
+/// `open_local_files` above.
+#[tauri::command(async)]
 pub(crate) fn open_local_folder(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     let _surfaced = AlwaysOnTopGuard::engage(&app);

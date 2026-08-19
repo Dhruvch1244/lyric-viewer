@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::lyrics_cmds::{track_from_value, track_key};
+use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 
 /// Fetch cover art for a track and emit it to the renderer, on its own thread.
 /// The renderer uses the image as the blurred backdrop and derives a palette
@@ -15,9 +16,38 @@ pub(crate) fn artwork_choice_path(app: &AppHandle, key: &str) -> Option<std::pat
     Some(dir.join(format!("{key}.json")))
 }
 
+/// Queue the cover-art lookup on the engine's I/O lane. Separate job from the
+/// lyric fetch on purpose: they share a track (so one `cancel_track` stops
+/// both) but not a dedup key, so a miss on one never suppresses the other.
 pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, duration_ms: i64) {
-    std::thread::spawn(move || {
-        let key = track_key(&artist, &title);
+    let key = track_key(&artist, &title);
+    jobs::submit(ArtworkJob { app, title, artist, duration_ms, key }, Priority::Now);
+}
+
+struct ArtworkJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    duration_ms: i64,
+    key: String,
+}
+
+impl Runnable for ArtworkJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("artwork:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let ArtworkJob { app, title, artist, duration_ms, key } = *self;
+
         // A hand-picked cover wins over the automatic sources.
         if let Some(path) = artwork_choice_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
@@ -33,7 +63,14 @@ pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, dur
             }
         }
         let track = crate::lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
-        if let Some(art) = crate::artwork::fetch_artwork(&track) {
+        let art = crate::artwork::fetch_artwork(&track);
+        // Checked after the fetch, not before the emit only: a stale cover
+        // painted over the song that is actually playing is the visible bug
+        // this prevents.
+        if cancel.cancelled() {
+            return;
+        }
+        if let Some(art) = art {
             let _ = app.emit(
                 "artwork",
                 json!({
@@ -44,7 +81,7 @@ pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, dur
                 }),
             );
         }
-    });
+    }
 }
 
 /// Cover-art options for the "choose a different cover" grid (thumbnails inlined).

@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 use crate::state::{AlwaysOnTopGuard, CurTrack};
 use crate::tray::set_tray_tooltip;
 
@@ -121,18 +122,53 @@ fn resolve_attribution(app: &AppHandle, title: &str, artist: &str, key: &str, cu
 }
 
 /// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song
-/// heard before replays instantly and offline. Runs on its own thread so the
-/// network call never stalls SMTC position ticks.
+/// heard before replays instantly and offline.
+///
+/// The fetch itself is a job on the engine's I/O lane, so a track change
+/// cancels it (`jobs::cancel_track`) instead of leaving a doomed lookup racing
+/// the new song's. What is NOT deferred is the `CurTrack`/tray update below:
+/// that is state, not I/O, and other commands (`request_translation`,
+/// `finalize_transcription`) read it immediately — it must not sit behind a
+/// queue, however short.
 pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i64) {
-    std::thread::spawn(move || {
-        let key = track_key(&artist, &title);
+    let key = track_key(&artist, &title);
+    // Abandon the previous song's outstanding lookups before starting this
+    // one's. Every track-change path reaches here, so this is the one place
+    // that needs to know.
+    jobs::set_current_track(&key);
+    if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
+        *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
+    }
+    let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
+    set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
 
-        // Remember what's playing so translation/other commands can find its cues.
-        if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
-            *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
-        }
-        let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
-        set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
+    jobs::submit(LyricsJob { app, title, artist, duration_ms, key }, Priority::Now);
+}
+
+/// The I/O-lane job behind `resolve_lyrics`.
+struct LyricsJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    duration_ms: i64,
+    key: String,
+}
+
+impl Runnable for LyricsJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("lyrics:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let LyricsJob { app, title, artist, duration_ms, key } = *self;
 
         // Disk cache hit → replay immediately, offline.
         if let Some(path) = lyrics_cache_path(&app, &key) {
@@ -159,9 +195,25 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
         let track = crate::lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
         // LRCLIB first, then NetEase, then Kugou — each only runs when the
         // previous missed, so a song LRCLIB knows costs one request.
-        let found = crate::lyrics::fetch_synced(&track)
-            .or_else(|| crate::netease::fetch_synced(&track))
-            .or_else(|| crate::kugou::fetch_synced(&track));
+        //
+        // The cancel checks between sources are the whole point of running
+        // this on the engine: skipping tracks used to leave every doomed
+        // lookup running to completion, and — worse — emitting its result over
+        // the song that was actually playing by then. A cancelled job now
+        // stops at the next source boundary and emits nothing.
+        let mut found = None;
+        if !cancel.cancelled() {
+            found = crate::lyrics::fetch_synced(&track);
+        }
+        if found.is_none() && !cancel.cancelled() {
+            found = crate::netease::fetch_synced(&track);
+        }
+        if found.is_none() && !cancel.cancelled() {
+            found = crate::kugou::fetch_synced(&track);
+        }
+        if cancel.cancelled() {
+            return;
+        }
         match found {
             Some((cues, source)) => {
                 let cue_texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
@@ -197,6 +249,9 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
                 // can say "timing needed" instead of a flat "not found" when
                 // there's actually something for a Whisper pass to align to.
                 let plain_available = fetch_plain_any(&track).is_some();
+                if cancel.cancelled() {
+                    return;
+                }
                 let _ = app.emit(
                     "lyrics",
                     json!({
@@ -207,7 +262,7 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
                 );
             }
         }
-    });
+    }
 }
 
 /// Manual escape hatch for when every auto-fetch source (LRCLIB/NetEase/
@@ -222,7 +277,15 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
 /// guard treats it exactly like a genuine LRCLIB hit: never silently
 /// overwritten by a lower-accuracy Whisper pass, but still eligible for the
 /// same real per-word-timing upgrade an LRCLIB track gets.
-#[tauri::command]
+/// `(async)` IS LOAD-BEARING, NOT DECORATION. Tauri runs a command without the
+/// `async` keyword **on the main thread** unless it is declared
+/// `#[tauri::command(async)]`, and `blocking_pick_file` is documented as
+/// "should NOT be used when running on the main thread" because it waits on
+/// the event loop that the main thread is the one pumping. Sync + blocking
+/// picker = the main thread waiting on itself: the whole app freezes with no
+/// dialog ever shown. `(async)` moves this body to a worker thread, where the
+/// blocking picker is exactly the "other contexts" its docs sanction.
+#[tauri::command(async)]
 pub(crate) fn import_lyrics(track: Value, app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     let t = track_from_value(&track);
