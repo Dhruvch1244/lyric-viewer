@@ -14,21 +14,19 @@
   downloaded from HuggingFace and cached by the webview) are only fetched the
   first time a song actually needs transcribing.
 
-  NOT YET VERIFIED END TO END. The Rust align/cache half is unit-tested; this
-  half needs one real play with network to confirm the model download and WASM
-  inference in WebView2. Single-threaded WASM is used deliberately — multi-thread
-  needs SharedArrayBuffer, which needs COOP/COEP headers the asset protocol does
-  not set.
+  Single-threaded WASM is used deliberately — multi-thread needs
+  SharedArrayBuffer, which needs COOP/COEP headers the asset protocol does not
+  set.
 
-  WORD-LEVEL TIMESTAMPS (`return_timestamps: 'word'`) are a second, separately
-  unverified surface on top of the above: transformers.js computes word-level
-  timing via a different internal pass (cross-attention/DTW alignment) than
-  the chunk-level timestamps this used before, so a live run is what actually
-  proves both the transcription AND the per-word timing work — not just the
-  transcription. See groupWordsIntoLines below for how the resulting flat word
-  list becomes line-shaped cues, and lyrics::WordTiming / align::align_lyrics
-  on the Rust side for how a line's words[] survives (or doesn't) alignment to
-  the real lyric text.
+  WORD-LEVEL TIMESTAMPS (`return_timestamps: 'word'`) are computed by
+  transformers.js from the decoder's CROSS-ATTENTION weights via DTW, which is
+  a different internal pass from the segment timestamps this used before. That
+  distinction is not academic: it decides which ONNX export the model id has to
+  point at, and pointing it at the wrong one is a silent-until-run failure.
+  See DEFAULT_MODEL below, groupWordsIntoLines for how the flat word list
+  becomes line-shaped cues, and lyrics::WordTiming / align::align_lyrics on the
+  Rust side for how a line's words[] survives (or doesn't) alignment to the
+  real lyric text.
 
   PROXY MODE. numThreads:1 alone still runs inference synchronously on the
   calling thread — a whisper-base pass over a real song is many seconds of
@@ -42,7 +40,31 @@
   new needs vendoring.
 */
 (function () {
-  const DEFAULT_MODEL = 'onnx-community/whisper-base';
+  /*
+    `_timestamped`, and it is not optional.
+
+    This used to be 'onnx-community/whisper-base'. None of the ONNX exports in
+    that repo declare cross-attention outputs — the merged decoder emits only
+    `logits` and the KV `present.*` tensors — so `return_timestamps: 'word'`
+    below could never work against it. transformers.js does not degrade to
+    segment timestamps when the attentions are missing; it throws:
+
+      "Model outputs must contain cross attentions to extract timestamps. This
+       is most likely because the model was not exported with
+       output_attentions=True."
+
+    `transcribe` has no catch around that call, so the rejection propagated and
+    took the WHOLE transcription with it, not just the per-word timing. Every
+    transcription this app attempted failed at that line.
+
+    Measured, not reasoned: both repos were run against 8 s of synthesised
+    speech through this exact pipeline configuration. `whisper-base` threw the
+    error above; `whisper-base_timestamped` returned 11 word-level chunks with
+    per-word timing, and both returned identical text at segment level. The
+    `_timestamped` repo is the same weights re-exported with
+    `output_attentions=True`, so this costs nothing but the model id.
+  */
+  const DEFAULT_MODEL = 'onnx-community/whisper-base_timestamped';
 
   /** Cached pipeline promise, so the model loads once per session. */
   let pipePromise = null;
@@ -132,6 +154,30 @@
   }
 
   /**
+   * Turn Whisper's own SEGMENT chunks into cues, for the degraded path.
+   *
+   * One cue per segment and no words[] — deliberately. A segment's text is a
+   * whole phrase, and passing it through groupWordsIntoLines would present it
+   * as a single "word" spanning several seconds. align.rs only trusts words[]
+   * when its length matches the real lyric line's word count, so that would
+   * never be believed anyway; omitting it says the same thing honestly and
+   * lets the syllable-weighted interpolation take over cleanly.
+   *
+   * @param {Array<{text:string, timestamp:[number,number]}>} chunks
+   * @returns {Array<{timeMs:number, endMs:number, text:string}>}
+   */
+  function segmentsToLines(chunks) {
+    return chunks
+      .filter((c) => c && typeof c.text === 'string' && c.text.trim() && Array.isArray(c.timestamp))
+      .map((c) => {
+        const timeMs = Math.round((c.timestamp[0] || 0) * 1000);
+        const rawEnd = c.timestamp[1];
+        const endMs = Math.round((rawEnd != null ? rawEnd : c.timestamp[0] || 0) * 1000);
+        return { timeMs, endMs: Math.max(endMs, timeMs), text: c.text.trim() };
+      });
+  }
+
+  /**
    * Transcribe mono 16 kHz PCM into timestamped cues, each carrying measured
    * per-word timing.
    * @param {Float32Array} pcm
@@ -143,16 +189,32 @@
     const transcriber = await loadPipeline(model, opts.onProgress);
     if (opts.onProgress) opts.onProgress({ stage: 'transcribing' });
 
-    const out = await transcriber(pcm, {
-      return_timestamps: 'word',   // word-level timestamps — see groupWordsIntoLines
+    const common = {
       chunk_length_s: 30,
       stride_length_s: 5,
       language: opts.language || undefined,
       task: 'transcribe',
-    });
+    };
 
-    const chunks = out && Array.isArray(out.chunks) ? out.chunks : [];
-    return groupWordsIntoLines(chunks);
+    try {
+      // Word-level timestamps — see groupWordsIntoLines and DEFAULT_MODEL.
+      const out = await transcriber(pcm, { ...common, return_timestamps: 'word' });
+      return groupWordsIntoLines(Array.isArray(out && out.chunks) ? out.chunks : []);
+    } catch (err) {
+      /*
+        Degrade to segment timestamps rather than losing the transcription.
+
+        This exists because of a real failure, not as a precaution: pointed at
+        a model exported without cross-attentions, this call throws, and there
+        was no catch here — so a per-word-timing problem silently became a
+        total transcription failure. Segment timing plus align.rs's
+        syllable-weighted interpolation is a worse result than measured word
+        timing; it is a far better one than no lyrics at all.
+      */
+      console.warn('[whisper] word timestamps unavailable, falling back to segments:', err && err.message);
+      const out = await transcriber(pcm, { ...common, return_timestamps: true });
+      return segmentsToLines(Array.isArray(out && out.chunks) ? out.chunks : []);
+    }
   }
 
   /**
@@ -170,5 +232,5 @@
   // groupWordsIntoLines exposed for unit testing (test/whisper-grouping.test.js)
   // — it's pure array processing with no webview/ONNX dependency, unlike
   // everything else in this file.
-  window.Whisper = { transcribe, preload, DEFAULT_MODEL, groupWordsIntoLines };
+  window.Whisper = { transcribe, preload, DEFAULT_MODEL, groupWordsIntoLines, segmentsToLines };
 })();

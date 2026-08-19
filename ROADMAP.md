@@ -276,13 +276,23 @@ where the specific solution changed.*
   risk desyncing the rest of the song. Existed in the old Electron app
   (`src/main/correct.js`) and was never carried over in the Tauri
   migration — this was a migration gap as much as a new feature.
-- 🔶 **Real word-level timing — partially shipped, unverified live.** Lands
+- ✅ **Real word-level timing — shipped, and now actually verified.** Lands
   for a lyric line only when a Whisper transcription anchors it directly and
   the real line's word count matches the transcribed one exactly; every other
   line keeps the syllable-weighted interpolation as the honest fallback. See
-  align.rs / whisper.js. Needs one real transcription run with network to
-  confirm the whole pipeline actually produces measured timing in practice,
-  not just in unit tests.
+  align.rs / whisper.js.
+
+  The "needs one real run to confirm it" note that sat here was right, and the
+  run found a real bug. Word timing is computed from the decoder's
+  cross-attention weights, and `onnx-community/whisper-base` — the model this
+  pointed at — has no ONNX export that emits them. transformers.js does not
+  degrade in that case, it throws, and `transcribe` had no catch. So the
+  failure was not "word timing falls back to interpolation"; it was **every
+  transcription failing outright**. Fixed two ways: the model id now names the
+  `_timestamped` export (same weights, re-exported with `output_attentions`),
+  and the call falls back to segment timestamps instead of propagating. Both
+  measured against 8 s of synthesised speech — the old id threw, the new one
+  returned 11 word-level chunks, and the text was identical at segment level.
 
 ### Phase 4 — Deepen our own signature look
 
@@ -390,7 +400,7 @@ the leak.
 | 11 | More 2D layers moved onto the GPU | Medium | Medium | ❌ Investigated — not doing it (see Phase 4) |
 | ~~12~~ | ~~WASAPI native loopback~~ — no prompt exists; measured in 0.21.0 | — | — | Dropped |
 | 13 | Vocal isolation (Demucs) | High (quality) | Very high | ✅ Shipped, as an opt-in toggle |
-| 14 | Real word-level timing | High | Medium | 🔶 Shipped, unverified live |
+| 14 | Real word-level timing | High | Medium | ✅ Shipped — and the verification run found it had never worked; fixed |
 | 15 | Crash/error reporting (local capture) | Medium | Low | ✅ Shipped, local-only |
 | 16 | Crash/error reporting (remote, opt-in) | Medium | Medium | ✅ Shipped — self-hosted Worker, opt-in |
 | 17 | Per-mood visual profile bias in preset selection | Medium | Low | ✅ Shipped |
