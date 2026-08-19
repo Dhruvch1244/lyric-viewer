@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3 in progress — stage 1, the sidecar transport, is in; the model is not (§7.3). Phases 4–7 not started.
+**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3 in progress — the sidecar transport (§7.3), the log-mel front end (§7.4) and Silero VAD (§7.5) are in; the Whisper encoder/decoder and the SQLite work are not. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.6). Phases 5–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -342,7 +342,7 @@ never calls the command, keeps working unchanged.
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
-| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.5. | Low, unproven value | No |
+| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.6. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
@@ -507,7 +507,48 @@ staged binary now runs the front end over real captured audio and logs its
 cost and coverage, so a chunking bug shows up as a wrong number in a log line
 instead of as a transcription that quietly stops early.
 
-### 7.5 Phase 4 as built: profiled, mostly declined
+### 7.5 Phase 3, stage 3: Silero VAD, and why it is not only about speed
+
+§2's case for the VAD was that it roughly halves Whisper's work. That is the
+smaller half of the reason. The larger one: given 30 s of instrumental, Whisper
+does not return nothing — it invents plausible lyrics, confidently, with
+timestamps, and no confidence score reliably catches it. Not asking it is the
+only fix that works.
+
+`sidecar/src/vad.rs` is split so that the part which can be wrong quietly is
+the part under test:
+
+- `SpeechGate` — Silero's own hysteresis state machine, driven one probability
+  per 512-sample window. Two thresholds, not one: a single threshold makes a
+  voice flicker across 0.5 and shatters a sung line into a dozen spans. Pure,
+  and tested against hand-built probability streams whose answers are known —
+  including the case that matters most, that an instrumental produces *no*
+  spans at all.
+- `plan_windows` — batches spans into ≤30 s Whisper inputs. This is where the
+  speed actually comes from, and it is easy to get backwards: Whisper's input
+  is a fixed 30 s whether it is full or not, so a 2 s span and a 30 s window
+  cost the model the same. Transcribing spans one at a time would be **slower
+  than not running the VAD at all**.
+- `SileroVad` — the ONNX wrapper, kept thin because it is the part that needs a
+  model file to exercise.
+
+Two decisions worth recording:
+
+- **A missing VAD model downgrades, it does not fail.** The detector is an
+  optimisation and a hallucination guard; without it transcription is slower
+  and noisier, not impossible. Failing a whole job over a missing 2 MB file is
+  the wrong trade, so `plan_work` logs and falls back to the whole clip in 30 s
+  windows — which is exactly what the WASM path does today.
+- **`sr`'s tensor rank is read from the graph, not assumed.** Published Silero
+  checkpoints declare it as a scalar or as a 1-element tensor depending on
+  version, and ONNX Runtime rejects the wrong rank rather than broadcasting.
+
+The sidecar now logs voiced-versus-total and audio-versus-model-input. The
+second is the one to look at before tuning any constant here: every window is
+padded to a full 30 s whatever it holds, so the gap between those two numbers
+is precisely the work the batching failed to save.
+
+### 7.6 Phase 4 as built: profiled, mostly declined
 
 The phase's own instruction was "profile before building", and the profiling
 retired both of the fixes it proposed — the estimate that motivated them was

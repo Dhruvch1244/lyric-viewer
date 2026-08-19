@@ -19,13 +19,14 @@
 mod mel;
 mod pcm;
 mod priority;
+mod vad;
 
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use inference_protocol::{read_frame, write_frame, Request, Response, Stage, PROTOCOL_VERSION};
+use inference_protocol::{read_frame, write_frame, Request, Response, Span, Stage, PROTOCOL_VERSION};
 
 /// Everything the worker needs for one transcription.
 struct Job {
@@ -188,21 +189,34 @@ fn run_job(job: Job, out: &Out) {
 
     send(out, &Response::Progress { job_id, stage: Stage::LoadingModel, pct: 0 });
 
+    // Find the windows worth transcribing. Everything the model would only
+    // hallucinate over is dropped here rather than filtered afterwards.
+    let windows = match plan_work(job_id, &samples, &model_dir, vad, &cancel, out) {
+        Ok(w) => w,
+        Err(message) => {
+            send(out, &Response::Error { job_id, message });
+            return;
+        }
+    };
+    if windows.is_empty() {
+        send(out, &Response::Error { job_id, message: "no speech found in this audio".into() });
+        return;
+    }
+
     // The front end is live even though the model behind it is not. Running it
     // here rather than only in its own tests is the point: it exercises the
     // real binary against real captured audio, and the log line below is the
     // first honest number for what preprocessing a whole song actually costs.
-    let features = compute_features(job_id, &samples, &cancel);
-    let Some(peak_feature) = features else {
+    let Some(peak_feature) = compute_features(job_id, &samples, &windows, &cancel) else {
         send(out, &Response::Error { job_id, message: "cancelled".into() });
         return;
     };
 
-    // The model half lands in the next commits of this phase — VAD, then the
-    // encoder and decoder. Until then this reports a specific failure rather
-    // than pretending, so the host's fallback path is exercised by the real
-    // binary rather than only by a test double.
-    let _ = model_dir;
+    // The model half lands in the next commit of this phase: the encoder and
+    // the decoder. Until then this reports a specific failure rather than
+    // pretending, so the host's fallback path is exercised by the real binary
+    // rather than only by a test double.
+    let _ = language;
     let _ = peak_feature;
     send(
         out,
@@ -210,7 +224,63 @@ fn run_job(job: Job, out: &Out) {
     );
 }
 
-/// Run the log-mel front end over the whole clip, 30 s at a time.
+/// Decide which stretches of the clip to transcribe.
+///
+/// With the VAD available this is its speech spans, batched into 30 s windows.
+/// Without it — the model file is missing, or the host asked for `vad: false`
+/// — it is the whole clip in 30 s windows, which is what the WASM path does
+/// today.
+///
+/// A missing VAD model **downgrades rather than fails**. The detector is an
+/// optimisation and a hallucination guard; not having it makes transcription
+/// slower and noisier, not impossible, and failing the whole job over a
+/// missing 2 MB file would be the wrong trade.
+fn plan_work(
+    job_id: u64,
+    samples: &[f32],
+    model_dir: &str,
+    vad_requested: bool,
+    cancel: &AtomicBool,
+    out: &Out,
+) -> Result<Vec<Span>, String> {
+    let whole = vec![Span { start_ms: 0, end_ms: (samples.len() as u64 * 1000 / pcm::REQUIRED_SAMPLE_RATE as u64) as u32 }];
+
+    if !vad_requested {
+        return Ok(vad::plan_windows(&whole));
+    }
+
+    let mut detector = match vad::SileroVad::load(std::path::Path::new(model_dir)) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[sidecar] job {job_id}: no VAD ({e}); transcribing the whole clip");
+            return Ok(vad::plan_windows(&whole));
+        }
+    };
+
+    send(out, &Response::Progress { job_id, stage: Stage::DetectingSpeech, pct: 0 });
+    let started = std::time::Instant::now();
+    let spans = detector.spans(
+        samples,
+        |pct| send(out, &Response::Progress { job_id, stage: Stage::DetectingSpeech, pct }),
+        &|| cancel.load(Ordering::SeqCst),
+    )?;
+
+    let windows = vad::plan_windows(&spans);
+    // The saving is the point of the pass, so it is reported as a number
+    // rather than assumed. Voiced time is summed, not measured first-to-last.
+    let clip_ms = whole[0].end_ms.max(1);
+    eprintln!(
+        "[sidecar] job {job_id}: VAD found {} span(s), {} ms voiced of {clip_ms} ms ({}%), batched into {} window(s), in {:?}",
+        spans.len(),
+        vad::total_ms(&spans),
+        vad::total_ms(&spans) * 100 / clip_ms,
+        windows.len(),
+        started.elapsed()
+    );
+    Ok(windows)
+}
+
+/// Run the log-mel front end over each window.
 ///
 /// Returns the largest feature value seen, or `None` if the job was cancelled
 /// part way. The maximum is a real diagnostic rather than a token return: a
@@ -218,18 +288,20 @@ fn run_job(job: Job, out: &Out) {
 /// distinguishes "the model produced nothing" from "the audio contained
 /// nothing" — the same question the peak-amplitude line above answers one
 /// stage earlier.
-fn compute_features(job_id: u64, samples: &[f32], cancel: &AtomicBool) -> Option<f32> {
+fn compute_features(job_id: u64, samples: &[f32], windows: &[Span], cancel: &AtomicBool) -> Option<f32> {
     let started = std::time::Instant::now();
     let mut front_end = mel::MelSpectrogram::new(mel::N_MELS);
-    let chunks = mel::chunk_count(samples.len());
     let mut peak = f32::NEG_INFINITY;
 
-    for chunk in 0..chunks {
+    for window in windows {
         if cancel.load(Ordering::SeqCst) {
             return None;
         }
-        let start = chunk * mel::CHUNK_SAMPLES;
-        let end = (start + mel::CHUNK_SAMPLES).min(samples.len());
+        let start = (window.start_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
+        let end = (window.end_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
+        if end <= start {
+            continue;
+        }
         for v in front_end.compute(&samples[start..end]) {
             if v > peak {
                 peak = v;
@@ -237,12 +309,15 @@ fn compute_features(job_id: u64, samples: &[f32], cancel: &AtomicBool) -> Option
         }
     }
 
-    // Covered seconds is printed alongside the clip's own length because they
-    // must agree: a mismatch is a chunking bug that would otherwise show up
-    // only as a transcription that stops early.
-    let covered_s = chunks as f32 * mel::N_FRAMES as f32 * mel::FRAME_MS / 1000.0;
+    // Audio in versus model input: every window is padded to a full 30 s
+    // whatever it holds, so the gap between these two numbers is exactly the
+    // work the VAD's batching failed to save. It is the number to look at
+    // before tuning any VAD constant.
+    let audio_ms: u32 = windows.iter().map(|w| w.duration_ms()).sum();
+    let model_ms = windows.len() as f32 * mel::N_FRAMES as f32 * mel::FRAME_MS;
     eprintln!(
-        "[sidecar] job {job_id}: {chunks} mel chunk(s) of {}x{} ({covered_s:.1}s covered) in {:?}, peak feature {peak:.4}",
+        "[sidecar] job {job_id}: {} mel chunk(s) of {}x{} in {:?} — {audio_ms} ms of audio in {model_ms:.0} ms of model input, peak feature {peak:.4}",
+        windows.len(),
         mel::N_MELS,
         mel::N_FRAMES,
         started.elapsed()

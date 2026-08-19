@@ -43,12 +43,6 @@ const N_BINS: usize = N_FFT / 2 + 1;
 /// Read from the model's config once the encoder lands; this is the default.
 pub const N_MELS: usize = 80;
 
-/// How many 30 s chunks `n_samples` occupies — at least one, because Whisper's
-/// input shape is fixed and a two-second clip is still one (padded) chunk.
-pub fn chunk_count(n_samples: usize) -> usize {
-    n_samples.div_ceil(CHUNK_SAMPLES).max(1)
-}
-
 /// Milliseconds of audio one mel frame covers. The DTW alignment pass converts
 /// decoder attention positions back to timestamps with this, so it is not just
 /// a comment — it is the unit of the timing this whole path exists to produce.
@@ -443,16 +437,6 @@ mod tests {
         let _ = mel.compute(&vec![0.0; CHUNK_SAMPLES]);
         let again = mel.compute(&reference_signal(CHUNK_SAMPLES));
         assert_eq!(loud, again);
-    }
-
-    #[test]
-    fn chunking_never_drops_the_tail_and_never_returns_zero_chunks() {
-        assert_eq!(chunk_count(0), 1, "an empty clip is still one padded chunk");
-        assert_eq!(chunk_count(1), 1);
-        assert_eq!(chunk_count(CHUNK_SAMPLES), 1);
-        assert_eq!(chunk_count(CHUNK_SAMPLES + 1), 2, "one sample past a chunk must not be dropped");
-        // A 4-minute song.
-        assert_eq!(chunk_count(240 * SAMPLE_RATE as usize), 8);
     }
 
     #[test]
