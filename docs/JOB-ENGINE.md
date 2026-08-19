@@ -342,7 +342,7 @@ never calls the command, keeps working unchanged.
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
-| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6. | Low, unproven value | No |
+| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.5. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
@@ -467,7 +467,47 @@ per-word timing), Silero VAD in front of it, native song-length loopback
 recording so the SMTC path needs no PCM over IPC, the SQLite work, and only
 then deleting `whisper.js` and its ~26 MB of vendored WASM.
 
-### 7.4 Phase 4 as built: profiled, mostly declined
+### 7.4 Phase 3, stage 2: the log-mel front end
+
+Whisper does not take audio. It takes an 80×3000 log-mel spectrogram computed
+in one exact way, and a front end that is subtly wrong produces a model that
+runs happily and transcribes nonsense — no error, only bad words. That makes
+this the one part of the pipeline where "it compiles and looks right" is worth
+nothing.
+
+So `sidecar/src/mel.rs` is checked against **transformers.js**, and
+specifically against the version of it that `src/renderer/whisper.js` runs
+today. Matching an independently written implementation is the strongest
+available check without a reference recording; matching *that* one means the
+native path cannot regress what the WASM path already produces.
+`scripts/gen-mel-reference.mjs` prints the Rust constants, so the numbers are
+reproducible rather than transcribed once and trusted.
+
+Agreement is to **~1e-5** on every probe, on features whose full range is 2.0 —
+including frames 0, 1 and 2999, which sit against the reflect padding where a
+sine mirrored into a corner splatters energy across every band. Those three are
+the sharpest test of the padding in the set.
+
+Two things worth recording because both first read as front-end bugs and
+neither was:
+
+- **The reference signal has to be generated in f64.** At t ≈ 30 s the argument
+  to `sin` is ~83 000 radians, where f32's seven digits leave the phase wrong,
+  the tone stops being periodic in the analysis window, and leakage lifts every
+  quiet mel band off the dynamic-range floor. The first version of the test
+  computed it in f32 and reported a 0.19 discrepancy that was entirely the
+  test's own.
+- **The f32 STFT is fine.** The obvious suspect for that discrepancy was
+  precision — Whisper clamps to eight decades below the window's loudest bin,
+  which is close to f32's noise floor. Both variants were run against the
+  reference: identical to 1e-5. The f64 STFT bought nothing and is not used.
+
+Wired into `run_job` rather than left as a tested-but-unreached module: the
+staged binary now runs the front end over real captured audio and logs its
+cost and coverage, so a chunking bug shows up as a wrong number in a log line
+instead of as a transcription that quietly stops early.
+
+### 7.5 Phase 4 as built: profiled, mostly declined
 
 The phase's own instruction was "profile before building", and the profiling
 retired both of the fixes it proposed — the estimate that motivated them was

@@ -16,6 +16,7 @@
 //! there that is not a frame corrupts the stream, so all logging goes to
 //! stderr, which the host drains separately.
 
+mod mel;
 mod pcm;
 mod priority;
 
@@ -187,13 +188,64 @@ fn run_job(job: Job, out: &Out) {
 
     send(out, &Response::Progress { job_id, stage: Stage::LoadingModel, pct: 0 });
 
-    // The model half lands in the next commits of this phase — VAD first,
-    // then the Whisper pipeline. Until then this reports a specific failure
-    // rather than pretending, so the host's fallback path is exercised by the
-    // real binary rather than only by a test double.
+    // The front end is live even though the model behind it is not. Running it
+    // here rather than only in its own tests is the point: it exercises the
+    // real binary against real captured audio, and the log line below is the
+    // first honest number for what preprocessing a whole song actually costs.
+    let features = compute_features(job_id, &samples, &cancel);
+    let Some(peak_feature) = features else {
+        send(out, &Response::Error { job_id, message: "cancelled".into() });
+        return;
+    };
+
+    // The model half lands in the next commits of this phase — VAD, then the
+    // encoder and decoder. Until then this reports a specific failure rather
+    // than pretending, so the host's fallback path is exercised by the real
+    // binary rather than only by a test double.
     let _ = model_dir;
+    let _ = peak_feature;
     send(
         out,
         &Response::Error { job_id, message: "transcription backend not built into this sidecar yet".into() },
     );
+}
+
+/// Run the log-mel front end over the whole clip, 30 s at a time.
+///
+/// Returns the largest feature value seen, or `None` if the job was cancelled
+/// part way. The maximum is a real diagnostic rather than a token return: a
+/// clip whose features are flat has no structure for the model to read, which
+/// distinguishes "the model produced nothing" from "the audio contained
+/// nothing" — the same question the peak-amplitude line above answers one
+/// stage earlier.
+fn compute_features(job_id: u64, samples: &[f32], cancel: &AtomicBool) -> Option<f32> {
+    let started = std::time::Instant::now();
+    let mut front_end = mel::MelSpectrogram::new(mel::N_MELS);
+    let chunks = mel::chunk_count(samples.len());
+    let mut peak = f32::NEG_INFINITY;
+
+    for chunk in 0..chunks {
+        if cancel.load(Ordering::SeqCst) {
+            return None;
+        }
+        let start = chunk * mel::CHUNK_SAMPLES;
+        let end = (start + mel::CHUNK_SAMPLES).min(samples.len());
+        for v in front_end.compute(&samples[start..end]) {
+            if v > peak {
+                peak = v;
+            }
+        }
+    }
+
+    // Covered seconds is printed alongside the clip's own length because they
+    // must agree: a mismatch is a chunking bug that would otherwise show up
+    // only as a transcription that stops early.
+    let covered_s = chunks as f32 * mel::N_FRAMES as f32 * mel::FRAME_MS / 1000.0;
+    eprintln!(
+        "[sidecar] job {job_id}: {chunks} mel chunk(s) of {}x{} ({covered_s:.1}s covered) in {:?}, peak feature {peak:.4}",
+        mel::N_MELS,
+        mel::N_FRAMES,
+        started.elapsed()
+    );
+    Some(peak)
 }
