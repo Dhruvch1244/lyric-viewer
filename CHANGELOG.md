@@ -2,6 +2,56 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.36.0 — 2026-08-19
+
+- **CI now actually runs the test suite.** `.github/workflows/ci.yml`: `cargo
+  test`, `cargo clippy -D warnings`, and `npm test` on every push/PR.
+  `release.yml` alone never ran the 45 Rust tests, 152 JS tests, or a linter
+  before publishing a tagged build — this closes that gap. Cleared the
+  clippy backlog first: `rust-version` was pinned to 1.77.2 but the crate
+  uses `LazyLock` (stabilized 1.80) in 21 places, so the declared MSRV was
+  simply wrong; fixed alongside three small idiom cleanups clippy flagged
+  correctly (`sort_by_key`, `contains_key` ×2).
+- **Genius dropped from the lyric fallback hot path.** Its own module doc
+  already confirmed genius.com's search endpoint is Cloudflare-blocked on
+  every request (see 0.32.0). `fetch_plain_any` was still calling it on
+  every LRCLIB-plain miss, paying a bounded-timeout network round trip for
+  zero chance of success. Module and tests stay in the tree — reviving the
+  call is a one-line change if Genius's posture ever changes.
+- **The website finally shows what the app looks like.** Added a screenshot
+  gallery (six real preset shots — Wormhole, Vinyl, Heatmap, Stage, Ghost,
+  Liquid) and a "not a lyric app, not a visualizer, both at once"
+  positioning section; neither existed before. Also added `og:image`,
+  JSON-LD structured data, `robots.txt`, and `sitemap.xml` — social shares
+  previously rendered with no preview image at all, and nothing was
+  crawlable by design intent versus accident.
+- **Optional, privacy-respecting pageview counter.** Extended the existing
+  Cloudflare Worker with `/api/pageview` + `/api/stats`, same shape and same
+  fail-open posture as the crash-report endpoints it already serves —
+  counts only, no cookies, no per-visitor identity, no third-party service.
+  Off by default on the page side until the Worker is deployed and
+  `SITE_STATS_ENDPOINT` is filled in.
+- **`lib.rs` split from 2,262 lines to 197.** All 59 `#[tauri::command]`
+  handlers, every piece of shared app state, and the three background-
+  thread launchers lived in one file. Split by domain into `state.rs`,
+  `watchers.rs`, `tray.rs`, and seven `commands/*.rs` files. The new
+  `invoke_handler!` list diffs empty against the old one — same 54
+  commands, none lost, renamed, or duplicated. 16 new unit tests added for
+  previously-untested pure logic (`track_key`, `parse_track_line`,
+  `source_is_whisper_derived`, and others); Rust test count 45 → 61.
+- **`renderer.js` split from 7,365 lines to 6,600.** Pulled the MilkDrop
+  preset browser (`milkdrop-panel.js`) and the onboarding/notification
+  cards (`onboarding-cards.js`) into their own files, following the
+  existing plain-top-level-function convention rather than introducing ES
+  modules. Caught a real bug in the process: a classic `<script>`'s promise
+  microtasks can run before the *next* `<script>` tag has even started
+  loading, which broke `showWelcomeOrWhatsNew` when it first moved out —
+  found via an actual headless-browser reproduction, not assumed away, and
+  fixed by keeping the welcome/what's-new cluster (reached from a
+  `getPrefs().then()` callback) in renderer.js while the rest of
+  onboarding-cards.js — reached only through real event registrations —
+  extracted clean.
+
 ## 0.35.0 — 2026-08-18
 
 - **"Now playing" detection is native.** The PowerShell 5.1 process that
