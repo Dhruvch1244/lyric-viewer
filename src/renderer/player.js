@@ -110,6 +110,22 @@
     await audio.play().catch(() => { /* autoplay refusal; the UI offers play */ });
 
     /*
+      Warm the lyrics cache for what is queued behind this song, so it opens
+      instantly instead of showing "searching…" for a network round trip.
+
+      A queue is the one place "what plays next" is known rather than guessed,
+      which is why this is a plain hand-off — the backend does not have to
+      predict anything here. It runs at a lower priority than the current
+      song's own lookup, and caches without emitting, so it cannot delay or
+      overwrite what is on screen. Fire-and-forget: there is nothing to show
+      when it finishes, and nothing to do if it fails.
+    */
+    if (window.player && window.player.precomputeTracks) {
+      const ahead = queue.slice(i + 1, i + 3);
+      if (ahead.length) window.player.precomputeTracks(ahead).catch(() => {});
+    }
+
+    /*
       Analyse AFTER playback starts, not before.
 
       The decode plus three envelope passes take a fraction of a second, but

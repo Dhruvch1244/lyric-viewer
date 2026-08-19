@@ -140,6 +140,7 @@
     clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
 
     presyncList: (text) => call('presync_list', { text }),
+    precomputeTracks: (tracks) => call('precompute_tracks', { tracks }, { status: 'error' }),
     listSynced: () => call('list_synced', {}, []),
 
     /*

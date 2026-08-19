@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal (see §7.1). Phases 2–7 not started.
+**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phases 3–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -291,7 +291,7 @@ Two fixes, in value order:
 | Phase | Scope | Risk | User-visible? |
 |---|---|---|---|
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
-| **2** | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
+| **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** | Binary / derived audio IPC. **Profile before building.** | Low, unproven value | Marginal |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
@@ -336,6 +336,40 @@ has no correct consumer before then:
 
 The rest of §4 — cache index, FTS5 over lyric text — is independent of the
 journal and unstarted.
+
+### 7.2 Phase 2 as built
+
+Two sources of "what plays next", because the two playback paths differ:
+
+- **Local files — known, not guessed.** `LocalPlayer` owns the queue, so
+  `player.js` hands the next two entries to a new `precompute_tracks` command
+  when a track starts. No prediction involved.
+- **SMTC — predicted from play history.** Windows' media session reports only
+  what is playing; it has no queue and no lookahead. `history.rs` keeps the
+  last 500 plays in `history.json` and, on each track change, warms the cache
+  for the song that has followed this one at least twice before. Album and
+  playlist listening is repetitive enough for that to hit often.
+
+Both converge on one `PrecomputeJob` at `Priority::Next`, keyed
+`precompute:<track>`, so the two routes dedup against each other during local
+playback where both are live.
+
+**The safety property that makes speculating acceptable: precompute never
+emits.** It writes the on-disk lyrics cache and nothing else. A wrong guess
+therefore costs one wasted request and is invisible — it cannot put another
+song's words on screen. That asymmetry is what allows a predictor this crude.
+It also writes in exactly the shape `LyricsJob`'s disk-cache branch reads, so
+a correctly-predicted song takes the instant path when it starts.
+
+Lyrics only. Artwork was left out deliberately: `artwork.rs` has no disk
+cache, so there would be nothing for a precomputed fetch to leave behind.
+Mood and attribution are also skipped — both are paid LLM calls, and neither
+gates the "song starts instantly" experience the way the lyric lookup does.
+
+Not done from this phase's description: automatic `Idle` backfill of a local
+music folder. That needs a persisted library to backfill *from*, and this app
+has none — adding folders enqueues them for playback rather than indexing
+them. It belongs with §5.7, which is already scheduled as Phase 7.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.

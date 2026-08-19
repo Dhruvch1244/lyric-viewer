@@ -234,6 +234,22 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
     let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
     set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
 
+    // Phase 2: record this play and warm the cache for whatever usually
+    // follows it. Queued behind the current song's own lookup by priority, so
+    // it can never delay the words the user is waiting for right now.
+    jobs::submit(
+        SpeculateJob {
+            app: app.clone(),
+            current: crate::history::Play {
+                key: key.clone(),
+                title: title.clone(),
+                artist: artist.clone(),
+                duration_ms,
+            },
+        },
+        Priority::Next,
+    );
+
     jobs::submit(LyricsJob { app, title, artist, duration_ms, key }, Priority::Now);
 }
 
@@ -365,6 +381,168 @@ impl Runnable for LyricsJob {
         }
     }
 }
+
+/* ------------------------------------------------- phase 2: precompute --- */
+
+/// Fetch and cache a track's synced lyrics without emitting anything.
+///
+/// The emit is what makes this different from `LyricsJob`, and the difference
+/// is the whole safety argument for speculating at all: a precomputed song is
+/// not the song playing, so pushing a `lyrics` event for it would replace the
+/// words on screen with a different song's. Writing only to the cache means a
+/// wrong guess costs one wasted request and can never be seen.
+///
+/// Returns whether anything was newly cached.
+fn warm_lyrics_cache(app: &AppHandle, title: &str, artist: &str, key: &str, cancel: &CancelToken) -> bool {
+    // Already on disk — the common case once a library has been played
+    // through, and the reason this is cheap to run on every track change.
+    if let Some(path) = lyrics_cache_path(app, key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                if cached.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+                    return false;
+                }
+            }
+        }
+    }
+    if cancel.cancelled() {
+        return false;
+    }
+
+    let track = crate::lyrics::Track { title: title.to_string(), artist: artist.to_string(), duration_ms: 0 };
+    let mut found = crate::lyrics::fetch_synced(&track);
+    if found.is_none() && !cancel.cancelled() {
+        found = crate::netease::fetch_synced(&track);
+    }
+    if found.is_none() && !cancel.cancelled() {
+        found = crate::kugou::fetch_synced(&track);
+    }
+
+    match found {
+        Some((cues, source)) if !cues.is_empty() => {
+            // Written in exactly the shape `LyricsJob`'s disk-cache branch
+            // expects, so a precomputed song takes the instant path when it
+            // does start — that path is the entire point of this.
+            let payload = json!({
+                "title": title, "artist": artist, "cues": cues,
+                "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+                "source": source, "status": "ok", "indic": false, "hasWordTimings": false,
+            });
+            if let Some(path) = lyrics_cache_path(app, key) {
+                let _ = std::fs::write(&path, serde_json::to_string(&payload).unwrap_or_default());
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Warm the cache for one specific track the caller already knows is coming.
+///
+/// Used by the local-file queue lookahead, where there is no guessing involved
+/// — `LocalPlayer` owns the queue, so the next entries are simply known.
+struct PrecomputeJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+}
+
+impl Runnable for PrecomputeJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("precompute:{}", self.key)
+    }
+
+    /// Belongs to the track it is fetching *for*, not the one playing. That
+    /// matters: `set_current_track` cancels the track being left behind, so
+    /// filing speculation under the song it is about means arriving at that
+    /// song never cancels the work done to prepare for it.
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let PrecomputeJob { app, title, artist, key } = *self;
+        warm_lyrics_cache(&app, &title, &artist, &key, cancel);
+    }
+}
+
+/// Record the current play, then warm the cache for whatever usually follows
+/// it — the SMTC half of Phase 2, where no queue is visible to read.
+struct SpeculateJob {
+    app: AppHandle,
+    current: crate::history::Play,
+}
+
+impl Runnable for SpeculateJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("speculate:{}", self.current.key)
+    }
+
+    /// Deliberately untracked. It does two things that both want to survive a
+    /// track change: recording the play, which is the data the predictor is
+    /// built from and must not be dropped when a song is skipped early; and
+    /// warming a cache, which produces no visible output, so a stale run
+    /// wastes one request and nothing else.
+    fn track(&self) -> Option<String> {
+        None
+    }
+
+    fn run(self: Box<Self>, _cancel: &CancelToken) {
+        let SpeculateJob { app, current } = *self;
+        let key = current.key.clone();
+        crate::history::record_play(&app, current);
+
+        let Some(next) = crate::history::predict_next(&app, &key) else { return };
+        // Hands off to `PrecomputeJob` rather than warming the cache inline,
+        // so both routes to speculation share one dedup key. During local
+        // playback both are live at once — the queue lookahead and this — and
+        // they often agree on the same song; going through the engine means
+        // the second one is dropped instead of duplicating the fetch.
+        jobs::submit(
+            PrecomputeJob { app, title: next.title, artist: next.artist, key: next.key },
+            Priority::Next,
+        );
+    }
+}
+
+/// Warm the lyrics cache for tracks the renderer knows are coming — the local
+/// player's queue lookahead. Fire-and-forget; nothing is emitted and the
+/// renderer is not told when it finishes, because there is nothing to show.
+///
+/// Submitted at `Next`, so the playing song's own lookup always wins the lane.
+#[tauri::command]
+pub(crate) fn precompute_tracks(app: AppHandle, tracks: Vec<Value>) -> Value {
+    let mut queued = 0;
+    for t in tracks.iter().take(PRECOMPUTE_LOOKAHEAD) {
+        let track = track_from_value(t);
+        if track.title.is_empty() {
+            continue;
+        }
+        let key = track_key(&track.artist, &track.title);
+        if jobs::submit(
+            PrecomputeJob { app: app.clone(), title: track.title, artist: track.artist, key },
+            Priority::Next,
+        ) {
+            queued += 1;
+        }
+    }
+    json!({ "status": "ok", "queued": queued })
+}
+
+/// How far down the queue to look. Two is enough to cover the gap between one
+/// song ending and the next starting even on a slow lookup, without spending
+/// requests on a queue position the user is likely to skip past or re-order
+/// before reaching.
+const PRECOMPUTE_LOOKAHEAD: usize = 2;
 
 /// Manual escape hatch for when every auto-fetch source (LRCLIB/NetEase/
 /// Kugou) misses or mismatches and Whisper hasn't run (or can't — an

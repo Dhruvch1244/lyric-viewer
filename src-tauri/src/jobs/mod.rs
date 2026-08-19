@@ -69,13 +69,9 @@ impl Lane {
 
 /// When this job should run relative to everything else queued.
 ///
-/// `Idle` has one producer: the pre-sync bulk import, which is backfill for
-/// songs that are not playing and must never overtake the one that is.
-/// `Next` has none yet — Phase 2 (speculative precompute) is what starts
-/// submitting it. It is defined and *tested* now because the dispatcher's
-/// ordering guarantee is the hard part, and it is much easier to get right
-/// against a full priority set than to retrofit one later.
-#[allow(dead_code)]
+/// All three have producers as of Phase 2: `Now` is the playing song's own
+/// lookups, `Next` is speculative precompute (the local queue lookahead and
+/// the play-history prediction), and `Idle` is the pre-sync bulk import.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Priority {
     /// The track playing right now. The user is waiting.
