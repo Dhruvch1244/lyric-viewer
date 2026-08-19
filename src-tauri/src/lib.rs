@@ -33,6 +33,7 @@ mod kugou;
 mod llm;
 mod localcli;
 mod history;
+mod inference;
 mod lyrics;
 mod mood;
 mod netease;
@@ -169,6 +170,7 @@ pub fn run() {
             commands::lyrics_cmds::save_heatmap,
             commands::lyrics_cmds::presync_list,
             commands::lyrics_cmds::precompute_tracks,
+            commands::lyrics_cmds::transcribe_local_file,
             commands::misc::report_jobs,
             commands::misc::report_client_error,
             commands::misc::open_crash_log,

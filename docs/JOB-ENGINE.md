@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phases 3–7 not started.
+**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3 in progress — stage 1, the sidecar transport, is in; the model is not (§7.3). Phases 4–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -367,7 +367,54 @@ Mood and attribution are also skipped — both are paid LLM calls, and neither
 gates the "song starts instantly" experience the way the lyric lookup does.
 
 Not done from this phase's description: automatic `Idle` backfill of a local
-music folder. That needs a persisted library to backfill *from*, and this app
+music folder — see below.
+
+### 7.3 Phase 3, stage 1: the sidecar exists and talks
+
+Phase 3 is being landed in stages so the WebView transcription path stays live
+until its replacement is actually in the tree. **Stage 1 is the transport, not
+the model.**
+
+Landed:
+
+- `src-tauri` is now a **cargo workspace**: the app, `protocol/`, and
+  `sidecar/`. The app does *not* depend on `ort` — that isolation is the point
+  (§2.2), and the dependency graph now enforces it rather than documenting it.
+- `protocol/` — the framed stdio wire format, `[u32 len][u8 kind][bincode]`,
+  shared by both sides so the shapes cannot drift. The `kind` byte lets the
+  host drop `Progress` frames without decoding them.
+- `sidecar/` — a real binary that sets `BELOW_NORMAL_PRIORITY_CLASS` +
+  `PROCESS_MODE_BACKGROUND_BEGIN` on itself, memory-maps the host's PCM temp
+  file, and serves the protocol on a reader thread with a single worker
+  thread behind it (concurrency 1 structurally, not by the host's good
+  behaviour).
+- `src/inference.rs` — the host client. **One process per job**: it is spawned
+  for a transcription and exits after, which is what buys §2.2's "OS reclaims
+  everything on exit". No supervision state machine, no restart policy.
+- `commands::lyrics_cmds::transcribe_local_file` on the **Inference lane**,
+  feeding results into the existing `finalize_transcription` so alignment,
+  LLM correction and caching are shared with the WebView path rather than
+  duplicated.
+- Bundling: `externalBin` lives in a **bundle-time config overlay**
+  (`tauri.bundle.conf.json`), not the base config — `tauri-build` fails at
+  `cargo check` time if a declared `externalBin` is missing, and the staged
+  binary is gitignored build output, so putting it in the base config would
+  break `cargo test` and CI for anyone who had not built the sidecar first.
+  `scripts/vendor-sidecar.js` builds and stages it with the target triple
+  Tauri expects. ORT links statically: the staged 20.5 MB exe runs from an
+  empty directory with no DLLs beside it (verified, not assumed).
+
+Verified here, not assumed: ORT 1.28.0 downloads, links, and initialises
+inside the spawned child (the `Ready` handshake reports its build string), and
+seven integration tests drive the real process — handshake, clean shutdown,
+shutdown by closed pipe, silent-audio diagnosis, PCM mapping, bad sample rate,
+and surviving a bad job without dying.
+
+Still to come in this phase: the Whisper pipeline itself (mel front end,
+tokenizer, encoder/decoder, and the cross-attention DTW pass that keeps
+per-word timing), Silero VAD in front of it, native song-length loopback
+recording so the SMTC path needs no PCM over IPC, the SQLite work, and only
+then deleting `whisper.js` and its ~26 MB of vendored WASM. That needs a persisted library to backfill *from*, and this app
 has none — adding folders enqueues them for playback rather than indexing
 them. It belongs with §5.7, which is already scheduled as Phase 7.
 

@@ -1,0 +1,34 @@
+[package]
+name = "lyric-inference"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+description = "Out-of-process ONNX inference (Silero VAD + Whisper) for Lyric Overlay"
+
+# Named after the file the app spawns. Tauri's externalBin appends a target
+# triple to the configured path, so the built artefact is copied to
+# `binaries/lyric-inference-x86_64-pc-windows-msvc.exe` before bundling.
+[[bin]]
+name = "lyric-inference"
+path = "src/main.rs"
+
+[dependencies]
+inference-protocol = { path = "../protocol" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# ONNX Runtime. `download-binaries` fetches a prebuilt native library at build
+# time rather than requiring a system install — verified working here against
+# ORT 1.28.0. This is the dependency the app deliberately does not link.
+ort = { version = "2.0.0-rc.13", features = ["download-binaries"] }
+ndarray = "0.17"
+# Read the PCM without copying 15MB into the process: the host writes a temp
+# file, this maps it read-only. See JOB-ENGINE section 2.4.
+memmap2 = "0.9"
+# Whisper's BPE vocabulary, loaded from the model directory's tokenizer.json.
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+# Mel spectrogram front end.
+rustfft = "6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

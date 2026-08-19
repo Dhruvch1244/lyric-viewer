@@ -382,6 +382,103 @@ impl Runnable for LyricsJob {
     }
 }
 
+/* --------------------------------------------- phase 3: native inference --- */
+
+/// Job ids for the sidecar. Only needs to be unique within a run — the sidecar
+/// is spawned per job and never sees two.
+static INFERENCE_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Transcribe a local audio file in the inference sidecar.
+///
+/// The local-file case first, because it needs no PCM over IPC: Rust already
+/// decodes these files for `analyze_local_file`, so the samples never leave
+/// the backend. Loopback-captured audio (the SMTC case) still goes through the
+/// WebView path until native song recording exists — see JOB-ENGINE section 7.3.
+///
+/// Returns immediately; the result arrives as `transcribe-progress` events and
+/// a cached lyrics file, exactly as the WebView path's does.
+#[tauri::command]
+pub(crate) fn transcribe_local_file(app: AppHandle, track: Value, path: String) -> Value {
+    if !crate::inference::available() {
+        return json!({ "status": "unavailable", "message": "inference sidecar not installed" });
+    }
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    let queued = jobs::submit(NativeTranscribeJob { app, track, path, key }, Priority::Now);
+    json!({ "status": if queued { "queued" } else { "already-running" } })
+}
+
+/// The Inference-lane job behind `transcribe_local_file`.
+struct NativeTranscribeJob {
+    app: AppHandle,
+    track: Value,
+    path: String,
+    key: String,
+}
+
+impl Runnable for NativeTranscribeJob {
+    /// The lane that exists for exactly this: concurrency 1, below-normal
+    /// threads. Two transcriptions at once thrash cache and memory for no
+    /// throughput gain.
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("transcribe:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let NativeTranscribeJob { app, track, path, key: _ } = *self;
+        let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+
+        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
+        let Some((samples, rate)) = crate::analysis::decode_to_mono(&path) else {
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": "cannot decode file" }));
+            return;
+        };
+        if cancel.cancelled() {
+            return;
+        }
+        let pcm = crate::inference::resample_to_16k(&samples, rate);
+        drop(samples); // the decoded original can be several times the resampled size
+
+        let progress_track = track.clone();
+        let progress_app = app.clone();
+        let result = crate::inference::transcribe(&app, job_id, &pcm, None, cancel, move |stage, pct| {
+            let _ = progress_app.emit(
+                "transcribe-progress",
+                json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
+            );
+        });
+
+        match result {
+            Ok(cues) => {
+                let cues = crate::inference::to_lyric_cues(cues);
+                if cues.is_empty() {
+                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+                    return;
+                }
+                // Straight into the existing finaliser: alignment to the real
+                // plain lyrics, LLM correction, caching and the done event are
+                // all identical whether the cues came from the sidecar or the
+                // WebView, and duplicating any of it would be how the two
+                // start disagreeing.
+                let payload = json!({ "track": track, "cues": cues });
+                let _ = finalize_transcription(app, payload);
+            }
+            Err(message) => {
+                log::warn!("native transcription failed: {message}");
+                let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------- phase 2: precompute --- */
 
 /// Fetch and cache a track's synced lyrics without emitting anything.

@@ -29,3 +29,8 @@ dist-store/
 # tauri icon also emits iOS/Android launcher icons; this app is Windows-only.
 src-tauri/icons/android/
 src-tauri/icons/ios/
+
+# Staged inference sidecar + its ONNX Runtime DLL, built by
+# scripts/vendor-sidecar.js for tauri.conf.json's externalBin. Build output
+# with a target triple in the name, not authored source.
+src-tauri/binaries/

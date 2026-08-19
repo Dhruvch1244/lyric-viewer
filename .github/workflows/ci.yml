@@ -52,12 +52,16 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+      # --workspace, because src-tauri became one in Phase 3: the app, the
+      # shared `protocol` crate, and the inference sidecar. Without it cargo
+      # touches only the root package and the sidecar ships unlinted and
+      # untested — including the integration test that spawns it for real.
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --lib
+        run: cargo test --workspace
       # --all-targets, not --lib: `--lib` never compiles `#[cfg(test)]`
       # blocks, so lints inside the test modules went unseen (two were
       # sitting in the tree unnoticed until a local --all-targets run).
       - name: cargo clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets --no-deps -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings

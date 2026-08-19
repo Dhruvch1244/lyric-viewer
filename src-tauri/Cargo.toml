@@ -10,6 +10,14 @@ rust-version = "1.80"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# The app is the workspace root; the inference sidecar (Phase 3) is a second
+# binary that must NOT be linked into it — that separation is the whole point
+# (JOB-ENGINE section 2.2: an ORT segfault or OOM takes the sidecar down, not
+# the app, and the OS reclaims its memory on exit). `protocol` is the message
+# definition both sides share so their wire formats cannot drift apart.
+[workspace]
+members = ["protocol", "sidecar"]
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -34,6 +42,10 @@ strip = true
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+# Message definitions shared with the inference sidecar. Note what is NOT here:
+# `ort`. The app never links ONNX Runtime — that is the isolation the sidecar
+# exists to provide (JOB-ENGINE section 2.2).
+inference-protocol = { path = "protocol" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"

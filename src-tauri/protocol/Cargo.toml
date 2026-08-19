@@ -1,0 +1,18 @@
+[package]
+name = "inference-protocol"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+description = "Framed stdio wire protocol shared by the app and the inference sidecar"
+
+[lib]
+name = "inference_protocol"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+# Compact binary framing for the control channel. The doc's choice (JOB-ENGINE
+# section 2.4): payloads here are small, but a finished transcription carries
+# every word of a song with its timing, which is a few hundred KB as JSON and
+# meaningfully less as bincode.
+bincode = { version = "2", features = ["serde"] }
