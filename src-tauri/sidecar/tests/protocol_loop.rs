@@ -138,9 +138,13 @@ fn reports_silent_audio_as_such_rather_than_as_a_model_failure() {
 
 #[test]
 fn maps_real_audio_and_reaches_the_model_step() {
-    // The backend is not built yet, so the expected outcome is a specific
-    // "not built" error. What this proves is everything before it: the file
-    // was mapped, the peak check passed, and progress was reported.
+    // No model files are staged for this test (model_dir is a bare temp
+    // directory), so the expected outcome is a specific "model file not
+    // found" error rather than a real transcription. What this proves is
+    // everything before that point: the PCM file was mapped, the peak check
+    // passed, progress was reported, and the missing VAD model downgraded
+    // silently (§7.5) instead of failing the job — leaving Whisper::load as
+    // the actual point of failure, named precisely rather than opaquely.
     let path = write_pcm("lyric-sidecar-tone.pcm", &tone(2));
     let mut s = Sidecar::start();
     s.send(&transcribe(9, &path));
@@ -154,7 +158,10 @@ fn maps_real_audio_and_reaches_the_model_step() {
             }
             Response::Error { job_id, message } => {
                 assert_eq!(job_id, 9);
-                assert!(message.contains("not built"), "unexpected failure before the model step: {message:?}");
+                assert!(
+                    message.contains("model file not found"),
+                    "unexpected failure before the model step: {message:?}"
+                );
                 break;
             }
             other => panic!("expected Progress or Error, got {other:?}"),

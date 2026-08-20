@@ -230,11 +230,29 @@ pub struct SileroVad {
     /// rather than broadcasting, so it is read from the graph instead of
     /// guessed.
     sr_shape: Vec<i64>,
+    /// The last [`CONTEXT_SAMPLES`] samples of the previous window, prepended
+    /// to the next one. See `probability` for why this exists — it is not
+    /// optional smoothing, the model is silently wrong without it.
+    context: Vec<f32>,
 }
 
 /// Silero v5's recurrent state, flattened. Its shape is `[2, batch, 128]` and
 /// batch is always 1 here, so this is `2 * 128`.
 const STATE_LEN: usize = 2 * 128;
+
+/// Samples of trailing context Silero v5 expects prepended to every window,
+/// making its real input 576 samples, not 512.
+///
+/// This is undocumented in the graph itself — the ONNX input is shaped
+/// `[-1, -1]`, so nothing rejects a bare 512-sample call, it just scores
+/// everything near zero. Measured directly: probed against real speech, a
+/// context-less 512-sample window produced a maximum probability of 0.12
+/// across an entire clip of clear speech (every window silently below the 0.5
+/// threshold); prepending 64 samples of context raised the same clip's peaks
+/// to 1.0. The number itself comes from the reference Python wrapper
+/// (`silero_vad.utils_vad.VADIterator`), which keeps exactly this much of the
+/// previous chunk.
+const CONTEXT_SAMPLES: usize = 64;
 
 impl SileroVad {
     /// The model file this expects inside the model directory.
@@ -258,24 +276,45 @@ impl SileroVad {
 
         let sr_shape = declared_shape(&session, "sr").unwrap_or_default();
 
-        Ok(Self { session, state: vec![0.0; STATE_LEN], sr_shape })
+        Ok(Self { session, state: vec![0.0; STATE_LEN], sr_shape, context: vec![0.0; CONTEXT_SAMPLES] })
     }
 
     /// Score one 512-sample window, returning the probability that it contains
     /// speech.
+    ///
+    /// Windows must be fed in order — the model's own recurrent state carries
+    /// across calls, and so does the trailing-context buffer this method
+    /// maintains internally. Calling it out of order, or skipping a window,
+    /// silently produces wrong probabilities rather than an error, because
+    /// nothing about the ONNX signature can catch that.
     pub fn probability(&mut self, window: &[f32]) -> Result<f32, String> {
-        let mut padded;
-        let input = if window.len() == WINDOW_SAMPLES {
+        // Zero-pad a short final window: the missing audio is genuinely
+        // absent, not silent-by-accident. Padding happens before the context
+        // is prepended, so the model always sees CONTEXT_SAMPLES + 512.
+        let mut padded_window;
+        let window_full = if window.len() == WINDOW_SAMPLES {
             window
         } else {
-            // The final window of a clip is short. Zero-padding it is right:
-            // the missing audio is genuinely absent, not silent-by-accident.
-            padded = vec![0.0f32; WINDOW_SAMPLES];
-            padded[..window.len()].copy_from_slice(window);
-            &padded
+            padded_window = vec![0.0f32; WINDOW_SAMPLES];
+            padded_window[..window.len()].copy_from_slice(window);
+            &padded_window
         };
 
-        let audio = ort::value::Tensor::from_array(([1usize, WINDOW_SAMPLES], input.to_vec()))
+        let mut input = Vec::with_capacity(CONTEXT_SAMPLES + WINDOW_SAMPLES);
+        input.extend_from_slice(&self.context);
+        input.extend_from_slice(window_full);
+
+        // Next call's context is this window's OWN last samples, taken before
+        // padding — real trailing audio, not zeros invented to fill a short
+        // final window.
+        let real_len = window.len().min(WINDOW_SAMPLES);
+        let take = real_len.min(CONTEXT_SAMPLES);
+        self.context[CONTEXT_SAMPLES - take..].copy_from_slice(&window[real_len - take..real_len]);
+        if take < CONTEXT_SAMPLES {
+            self.context[..CONTEXT_SAMPLES - take].fill(0.0);
+        }
+
+        let audio = ort::value::Tensor::from_array(([1usize, input.len()], input))
             .map_err(|e| format!("cannot build the VAD input tensor: {e}"))?;
         let state = ort::value::Tensor::from_array(([2usize, 1, 128], self.state.clone()))
             .map_err(|e| format!("cannot build the VAD state tensor: {e}"))?;

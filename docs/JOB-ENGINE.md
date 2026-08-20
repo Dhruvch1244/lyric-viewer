@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3 in progress — the sidecar transport (§7.3), the log-mel front end (§7.4) and Silero VAD (§7.5) are in; the Whisper encoder/decoder and the SQLite work are not. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.6). Phases 5–7 not started.
+**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5) and the Whisper encoder/decoder + DTW word alignment (§7.6) are in and produce real, verified transcriptions with per-word timing end to end; only the SQLite work remains. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.8). Phases 5–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -341,8 +341,8 @@ never calls the command, keeps working unchanged.
 |---|---|---|---|
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
-| **3** | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (segment-level). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
-| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.6. | Low, unproven value | No |
+| **3** 🔶 | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned) ✅ — real transcription with real per-word timing, verified end to end (§7.3–7.6). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming; still open. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
+| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.8. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
@@ -461,11 +461,10 @@ seven integration tests drive the real process — handshake, clean shutdown,
 shutdown by closed pipe, silent-audio diagnosis, PCM mapping, bad sample rate,
 and surviving a bad job without dying.
 
-Still to come in this phase: the Whisper pipeline itself (mel front end,
-tokenizer, encoder/decoder, and the cross-attention DTW pass that keeps
-per-word timing), Silero VAD in front of it, native song-length loopback
-recording so the SMTC path needs no PCM over IPC, the SQLite work, and only
-then deleting `whisper.js` and its ~26 MB of vendored WASM.
+Still to come in this phase (stages 2–4 below closed the rest of this list
+except the last two): native song-length loopback recording so the SMTC path
+needs no PCM over IPC, the SQLite work, and only then deleting `whisper.js`
+and its ~26 MB of vendored WASM.
 
 ### 7.4 Phase 3, stage 2: the log-mel front end
 
@@ -548,7 +547,113 @@ second is the one to look at before tuning any constant here: every window is
 padded to a full 30 s whatever it holds, so the gap between those two numbers
 is precisely the work the batching failed to save.
 
-### 7.6 Phase 4 as built: profiled, mostly declined
+**A third thing, found only once real speech was run through it, not
+recoverable from the graph's own declared shapes:** the ONNX input is
+`[-1, -1]` — nothing rejects a bare 512-sample window, it just scores
+everything near zero. Probed directly against 8 s of real speech: a
+context-less 512-sample window produced a maximum probability of **0.12**
+across the whole clip — every window silently below the 0.5 threshold, hence
+"VAD found 0 span(s)" on audio that plainly has speech in it. Silero v5's real
+input is 576 samples: 64 samples of trailing context from the previous window
+prepended to the new 512. With that context, the same clip's peaks reached
+1.0. `sidecar/src/vad.rs`'s `SileroVad` now carries a 64-sample context buffer
+between calls; the constant and the measurement live next to each other in
+`CONTEXT_SAMPLES`'s doc comment so a future reader does not have to re-derive
+it from a probe.
+
+### 7.6 Phase 3, stage 4: the decoder, DTW, and two bugs only a real decode found
+
+The encoder and the greedy decoder live in `sidecar/src/whisper.rs`; the
+attention-to-timing math is `sidecar/src/dtw.rs`, split out because it is pure
+arithmetic over numbers and therefore fully unit-testable without a model file
+— normalisation, the median filter, the warp itself and the token→frame
+collapse each have known-answer tests (§9's table on the median filter's edge
+behaviour and the warp's monotonicity is the kind of thing that is easy to get
+subtly backwards and have it still compile).
+
+Greedy decoding, not beam search — deliberately. Everything downstream is
+`align.rs`, which replaces the transcription with the *real* lyric text
+whenever one is found; spending 4× the compute on a slightly better guess at a
+word about to be discarded is not a trade worth making here.
+
+**`_timestamped` is not a preference, it is a requirement — and this cost the
+WebView path its entire feature.** Word timing comes from the decoder's
+cross-attention weights, and `onnx-community/whisper-base`, the model the
+WASM path had named, exports none. `Whisper::load` now checks for
+`cross_attentions.*` outputs up front and refuses with a message that names
+the fix, rather than failing per-window with a missing-tensor error deep in a
+decode. See the `whisper.js` fix below and the JS test that pins the model id.
+
+**Two more bugs, and both share a shape: the model's declared I/O shapes gave
+no reason to suspect either, and both were only visible once a real decode ran
+end to end.** `sidecar/tests/real_transcription.rs` — `#[ignore]`d, needs
+downloaded models and a synthesised-speech fixture from
+`scripts/make-speech-fixture.ps1` — is what caught them, and it is the reason
+that test's assertions check for evenly-spread, strictly-advancing word
+timestamps rather than merely "non-decreasing and spans >2s": the first
+version of this test passed with the second bug still present, because
+"290, 690, 690, 690, …, 690, 6990" satisfies both those weaker properties.
+
+- **Cross-attention past-key-values are not really cached across steps in
+  this export.** The natural reading of a merged decoder's KV cache is: feed
+  back whatever `present.N.{decoder,encoder}.{key,value}` came out, every
+  step, same as the self-attention cache. That is right for the decoder side
+  and wrong for the encoder (cross-attention) side. Measured directly: on the
+  no-cache priming call, `present.N.encoder.key` is real —
+  `[1, 8, 1500, 64]`, the genuine cross-attention over the whole encoded
+  window. On every call *after* that (`use_cache_branch=true`), the
+  same-named output comes back with a degenerate shape whose data buffer is
+  **empty**, and feeding that back crashed the very next step with a shape
+  mismatch impossible to misread: `shape [1, 8, 1, 64] (512 elements) is
+  different from the length of the data provided (0 elements)`. The fix
+  matches how cross-attention actually works — it depends only on the
+  encoder's output, which never changes across steps — so `decoder_step` now
+  computes it once, on the priming call, and holds it fixed for the rest of
+  the decode rather than reading it back from `present.*` again.
+- **The priming pass's own attention was leaking into the alignment.**
+  `AttentionCollector` gathers cross-attention rows per decoder call and
+  `decode` appends them into per-head buffers that `build_attention` later
+  reads as one `ENCODER_FRAMES`-sized block per *generated* token, starting
+  at offset 0. The first version of `decode` merged the 4-token prompt's
+  attention into that buffer before any real token's. Every real token's
+  alignment was therefore reading the row belonging to the token **4
+  positions earlier** — which is silent corruption, not a crash: the output
+  still had the right shape, still passed the "monotonic, nonempty" checks,
+  and simply put most of the words at the same timestamp. Fixed by never
+  merging the priming call's attention in the first place — `collect()`
+  already clears its pending buffer before every real call, so leaving the
+  priming rows unmerged is enough; nothing needs to be explicitly discarded.
+
+Confirmed together, against 8 s of speech synthesised with the Windows speech
+synthesiser (`scripts/make-speech-fixture.ps1` — chosen over a real recording
+because it needs no licence and reproduces byte-identically on the same
+machine): the transcribed text matched the reference exactly, and per-word
+timestamps came back evenly spread across the whole clip, strictly advancing,
+each word landing at a plausible position for a spoken sentence at that pace.
+This is real evidence the decoder and the alignment are both producing
+correct output, not merely that they run without crashing.
+
+### 7.7 A shipped bug this phase's own investigation uncovered
+
+Reading the decoder's ONNX graph — to know what shape of cross-attention
+output the Rust DTW pass needed — is what exposed that
+`onnx-community/whisper-base` has no such output at all. That meant the
+**WebView path currently in production has never successfully transcribed
+anything**: `return_timestamps: 'word'` throws against that model, and
+`whisper.js`'s `transcribe` had no catch around the call, so the throw
+propagated and failed the whole transcription, not just the word timing.
+
+Fixed independently of the Rust rewrite, since it is a shipped-app bug, not a
+phase-3 concern: `DEFAULT_MODEL` now names `onnx-community/whisper-base_timestamped`
+(the same weights, exported with `output_attentions=True`), and `transcribe`
+falls back to segment timestamps rather than propagating if word timing is
+ever unavailable again. Measured the same way as the Rust side: both model ids
+run against the same synthesised-speech fixture through this exact pipeline
+configuration — the old id threw the "must contain cross attentions" error,
+the new one returned 11 word-level chunks, and both agreed on the text at
+segment level.
+
+### 7.8 Phase 4 as built: profiled, mostly declined
 
 The phase's own instruction was "profile before building", and the profiling
 retired both of the fixes it proposed — the estimate that motivated them was

@@ -16,17 +16,19 @@
 //! there that is not a frame corrupts the stream, so all logging goes to
 //! stderr, which the host drains separately.
 
+mod dtw;
 mod mel;
 mod pcm;
 mod priority;
 mod vad;
+mod whisper;
 
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use inference_protocol::{read_frame, write_frame, Request, Response, Span, Stage, PROTOCOL_VERSION};
+use inference_protocol::{read_frame, write_frame, Cue, Request, Response, Span, Stage, PROTOCOL_VERSION};
 
 /// Everything the worker needs for one transcription.
 struct Job {
@@ -203,25 +205,78 @@ fn run_job(job: Job, out: &Out) {
         return;
     }
 
-    // The front end is live even though the model behind it is not. Running it
-    // here rather than only in its own tests is the point: it exercises the
-    // real binary against real captured audio, and the log line below is the
-    // first honest number for what preprocessing a whole song actually costs.
-    let Some(peak_feature) = compute_features(job_id, &samples, &windows, &cancel) else {
-        send(out, &Response::Error { job_id, message: "cancelled".into() });
-        return;
-    };
+    match transcribe(job_id, &samples, &windows, &model_dir, language.as_deref(), &cancel, out) {
+        Ok(cues) => {
+            eprintln!("[sidecar] job {job_id}: {} cue(s)", cues.len());
+            send(out, &Response::Result { job_id, cues });
+        }
+        Err(message) => send(out, &Response::Error { job_id, message }),
+    }
+}
 
-    // The model half lands in the next commit of this phase: the encoder and
-    // the decoder. Until then this reports a specific failure rather than
-    // pretending, so the host's fallback path is exercised by the real binary
-    // rather than only by a test double.
-    let _ = language;
-    let _ = peak_feature;
-    send(
-        out,
-        &Response::Error { job_id, message: "transcription backend not built into this sidecar yet".into() },
-    );
+/// Load the model and run every window through it.
+///
+/// One `Whisper` for the whole job, not one per window: loading a 77 MB pair
+/// of graphs takes longer than transcribing a window with them.
+fn transcribe(
+    job_id: u64,
+    samples: &[f32],
+    windows: &[Span],
+    model_dir: &str,
+    language: Option<&str>,
+    cancel: &AtomicBool,
+    out: &Out,
+) -> Result<Vec<Cue>, String> {
+    let started = std::time::Instant::now();
+    // All of them. The sidecar is already BELOW_NORMAL at process level, so
+    // the OS scheduler — not a thread count — is what keeps it off the UI's
+    // back, and leaving cores idle here only makes the job take longer.
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut model = whisper::Whisper::load(std::path::Path::new(model_dir), threads)?;
+    let mut front_end = mel::MelSpectrogram::new(mel::N_MELS);
+    eprintln!("[sidecar] job {job_id}: model loaded in {:?} on {threads} thread(s)", started.elapsed());
+
+    send(out, &Response::Progress { job_id, stage: Stage::Transcribing, pct: 0 });
+
+    let mut cues: Vec<Cue> = Vec::new();
+    for (i, window) in windows.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
+        let start = (window.start_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
+        let end = (window.end_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
+        if end <= start {
+            continue;
+        }
+
+        let window_started = std::time::Instant::now();
+        let produced = model.transcribe_window(
+            &mut front_end,
+            &samples[start..end],
+            window.start_ms,
+            language,
+            &|| cancel.load(Ordering::SeqCst),
+        )?;
+        eprintln!(
+            "[sidecar] job {job_id}: window {}/{} ({}..{} ms) -> {} cue(s) in {:?}",
+            i + 1,
+            windows.len(),
+            window.start_ms,
+            window.end_ms,
+            produced.len(),
+            window_started.elapsed()
+        );
+        cues.extend(produced);
+
+        send(out, &Response::Progress {
+            job_id,
+            stage: Stage::Transcribing,
+            pct: ((i + 1) * 100 / windows.len()) as u8,
+        });
+    }
+
+    eprintln!("[sidecar] job {job_id}: transcription finished in {:?}", started.elapsed());
+    Ok(cues)
 }
 
 /// Decide which stretches of the clip to transcribe.
@@ -278,49 +333,4 @@ fn plan_work(
         started.elapsed()
     );
     Ok(windows)
-}
-
-/// Run the log-mel front end over each window.
-///
-/// Returns the largest feature value seen, or `None` if the job was cancelled
-/// part way. The maximum is a real diagnostic rather than a token return: a
-/// clip whose features are flat has no structure for the model to read, which
-/// distinguishes "the model produced nothing" from "the audio contained
-/// nothing" — the same question the peak-amplitude line above answers one
-/// stage earlier.
-fn compute_features(job_id: u64, samples: &[f32], windows: &[Span], cancel: &AtomicBool) -> Option<f32> {
-    let started = std::time::Instant::now();
-    let mut front_end = mel::MelSpectrogram::new(mel::N_MELS);
-    let mut peak = f32::NEG_INFINITY;
-
-    for window in windows {
-        if cancel.load(Ordering::SeqCst) {
-            return None;
-        }
-        let start = (window.start_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
-        let end = (window.end_ms as usize * mel::SAMPLE_RATE as usize / 1000).min(samples.len());
-        if end <= start {
-            continue;
-        }
-        for v in front_end.compute(&samples[start..end]) {
-            if v > peak {
-                peak = v;
-            }
-        }
-    }
-
-    // Audio in versus model input: every window is padded to a full 30 s
-    // whatever it holds, so the gap between these two numbers is exactly the
-    // work the VAD's batching failed to save. It is the number to look at
-    // before tuning any VAD constant.
-    let audio_ms: u32 = windows.iter().map(|w| w.duration_ms()).sum();
-    let model_ms = windows.len() as f32 * mel::N_FRAMES as f32 * mel::FRAME_MS;
-    eprintln!(
-        "[sidecar] job {job_id}: {} mel chunk(s) of {}x{} in {:?} — {audio_ms} ms of audio in {model_ms:.0} ms of model input, peak feature {peak:.4}",
-        windows.len(),
-        mel::N_MELS,
-        mel::N_FRAMES,
-        started.elapsed()
-    );
-    Some(peak)
 }
