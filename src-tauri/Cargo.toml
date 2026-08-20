@@ -1,6 +1,6 @@
 [package]
 name = "lyric-overlay"
-version = "0.36.0"
+version = "0.37.0"
 description = "Beat-aware synced lyric overlay for Windows (Tauri)"
 authors = ["Dhruv Choudhary"]
 license = "MIT"
@@ -9,6 +9,14 @@ edition = "2021"
 rust-version = "1.80"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# The app is the workspace root; the inference sidecar (Phase 3) is a second
+# binary that must NOT be linked into it — that separation is the whole point
+# (JOB-ENGINE section 2.2: an ORT segfault or OOM takes the sidecar down, not
+# the app, and the OS reclaims its memory on exit). `protocol` is the message
+# definition both sides share so their wire formats cannot drift apart.
+[workspace]
+members = ["protocol", "sidecar"]
 
 [lib]
 name = "app_lib"
@@ -34,9 +42,17 @@ strip = true
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+# Message definitions shared with the inference sidecar. Note what is NOT here:
+# `ort`. The app never links ONNX Runtime — that is the isolation the sidecar
+# exists to provide (JOB-ENGINE section 2.2).
+inference-protocol = { path = "protocol" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Job engine (src/jobs). Only the sync primitives — the runtime itself is
+# Tauri's (`tauri::async_runtime`), which is this same tokio, so the versions
+# unify and nothing extra is pulled in.
+tokio = { version = "1", features = ["sync", "macros"] }
 tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
@@ -49,11 +65,6 @@ tauri-plugin-opener = "2"
 ureq = { version = "2.10", features = ["json"] }
 regex = "1"
 base64 = "0.22"
-# PKCE for Spotify OAuth (spotify.rs): sha2 hashes the code verifier into the
-# code_challenge; rand generates the verifier itself (CSPRNG — a predictable
-# verifier defeats the whole point of PKCE).
-sha2 = "0.10"
-rand = "0.9"
 # FFT for the native WASAPI loopback path (see audio.rs): the capture thread
 # turns raw PCM into the same byte-spectrum a Web Audio AnalyserNode would, so
 # the renderer's tuned DSP needs no change.
@@ -62,6 +73,25 @@ rustfft = "6"
 # top of the default open codecs (flac/wav/ogg/vorbis) so local files of any
 # common format decode without the renderer's Web Audio pass.
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+# Verifies downloaded ONNX models (models.rs) against a pinned SHA-256 —
+# pure Rust, no system OpenSSL, consistent with everything else here.
+sha2 = "0.10"
+# Chromaprint audio fingerprints for track identification (fingerprint.rs,
+# JOB-ENGINE section 5.1). A pure-Rust port, so Windows needs no C toolchain
+# and no chromaprint DLL beside the exe — the same reasoning that picked
+# `sha2` over system OpenSSL. It also carries `FingerprintCompressor`, which
+# is the part AcoustID actually needs: raw u32 fingerprints are useless to the
+# API without its compression format.
+rusty-chromaprint = "0.3"
+# EBU R128 integrated loudness (loudness.rs, JOB-ENGINE section 5.6). The
+# reference implementation rather than a re-derivation: K-weighting
+# coefficients and two-stage gating are fiddly, published, and produce a
+# plausible-looking number when subtly wrong. Pure Rust by default — the `cc`
+# feature is opt-in and not enabled.
+ebur128 = "0.1"
+# The job journal and the lyric/track index (JOB-ENGINE section 4).
+# `bundled` compiles SQLite from source, adding no system dependency.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
@@ -76,5 +106,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Power",
+    # SetThreadPriority: the job engine's CPU/inference lanes run below normal
+    # so the compositor and render thread always win (see jobs/pool.rs).
+    "Win32_System_Threading",
     "Win32_System_StationsAndDesktops",
 ] }

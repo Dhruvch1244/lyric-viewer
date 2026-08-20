@@ -64,6 +64,21 @@
   let map = null;
   let dirty = false;
 
+  /**
+   * Measured section starts (ms), from the native offline pass
+   * (`structure.rs`), or null.
+   *
+   * When present these REPLACE the energy-tier runs `sections()` would
+   * otherwise derive, but nothing else: each resulting section is still named
+   * and levelled from the heat map exactly as before. Energy tiers split a
+   * song where its loudness changes, which is wrong for a verse and a chorus
+   * at the same level (one section) and for a crescendo inside one (two).
+   * Chroma novelty splits where the harmony changes, which is what a boundary
+   * is. So structure supplies *where*, the heat map still supplies *what*.
+   * @type {number[]|null}
+   */
+  let measuredStarts = null;
+
   /* Bumped whenever a bin changes, so the derived structure can be memoised
      without comparing 96 cells: the renderer asks for it every frame and it
      only actually changes when something new is heard. */
@@ -312,6 +327,7 @@
     if (structureCache && structureCache.revision === revision) return structureCache.value;
     const raw = cells();
     const binMs = map.durationMs / BIN_COUNT;
+    if (binMs <= 0) return [];
 
     // 3-wide moving average over known cells only, so an unheard gap does not
     // read as a quiet passage.
@@ -326,33 +342,68 @@
       return n ? sum / n : 0;
     });
 
-    // Runs of equal tier.
     /** @type {Array<{from: number, to: number, tier: number, level: number}>} */
-    const runs = [];
-    for (let i = 0; i < smooth.length; i += 1) {
-      const tier = tierOf(smooth[i]);
-      const last = runs[runs.length - 1];
-      if (last && last.tier === tier) last.to = i;
-      else runs.push({ from: i, to: i, tier, level: 0 });
-    }
+    let runs;
+    const measured = Boolean(measuredStarts && measuredStarts.length > 1);
+    if (measured) {
+      // Measured boundaries. No tier-run derivation and no short-run
+      // absorption: structure.rs already enforces a minimum section length,
+      // and absorbing here would undo a boundary it was confident about.
+      // Each boundary becomes a start bin; each section then runs up to the
+      // bin before the next one. Derived that way round, not from both ends
+      // independently, because the two roundings disagree at a boundary that
+      // falls inside a bin — and a section computed as ending after the next
+      // one begins is the kind of overlap that quietly loses a whole section.
+      const starts = [];
+      for (const ms of measuredStarts) {
+        const bin = Math.max(0, Math.min(BIN_COUNT - 1, Math.floor(ms / binMs)));
+        // Two boundaries inside one bin would produce an empty section, and a
+        // section shorter than a bin cannot be drawn anyway.
+        if (!starts.length || bin > starts[starts.length - 1]) starts.push(bin);
+      }
+      runs = starts.map((from, i) => ({
+        from,
+        to: i + 1 < starts.length ? starts[i + 1] - 1 : BIN_COUNT - 1,
+        tier: 0,
+        level: 0,
+      }));
+    } else {
+      // Runs of equal tier — the fallback for anything with no measured
+      // structure (every SMTC track, and any local file too short or too
+      // uniform for structure.rs to commit to a boundary).
+      runs = [];
+      for (let i = 0; i < smooth.length; i += 1) {
+        const tier = tierOf(smooth[i]);
+        const last = runs[runs.length - 1];
+        if (last && last.tier === tier) last.to = i;
+        else runs.push({ from: i, to: i, tier, level: 0 });
+      }
 
-    // Absorb runs too short to be a section into their neighbour, longest wins.
-    for (let i = runs.length - 1; i >= 0 && runs.length > 1; i -= 1) {
-      const run = runs[i];
-      if (run.to - run.from + 1 >= MIN_SECTION_BINS) continue;
-      const prev = runs[i - 1];
-      const next = runs[i + 1];
-      const into = !prev ? next : !next ? prev
-        : (prev.to - prev.from) >= (next.to - next.from) ? prev : next;
-      into.from = Math.min(into.from, run.from);
-      into.to = Math.max(into.to, run.to);
-      runs.splice(i, 1);
+      // Absorb runs too short to be a section into their neighbour, longest wins.
+      for (let i = runs.length - 1; i >= 0 && runs.length > 1; i -= 1) {
+        const run = runs[i];
+        if (run.to - run.from + 1 >= MIN_SECTION_BINS) continue;
+        const prev = runs[i - 1];
+        const next = runs[i + 1];
+        const into = !prev ? next : !next ? prev
+          : (prev.to - prev.from) >= (next.to - next.from) ? prev : next;
+        into.from = Math.min(into.from, run.from);
+        into.to = Math.max(into.to, run.to);
+        runs.splice(i, 1);
+      }
     }
 
     for (const run of runs) {
       let sum = 0;
       for (let i = run.from; i <= run.to; i += 1) sum += smooth[i];
       run.level = sum / (run.to - run.from + 1);
+      // A measured run has no tier yet — it was cut by harmony, not level —
+      // so give it one from its own mean energy. This is what keeps `kind`
+      // ("drop", "build", "verse") meaning exactly what it always meant.
+      // Tier runs already carry theirs and must keep it: absorption merges
+      // runs of different tiers, so re-deriving from the mean there would
+      // silently rename sections the fallback path has always named one way.
+      if (measured) run.tier = tierOf(run.level);
     }
 
     const value = runs.map((run, i) => ({
@@ -394,6 +445,24 @@
     return null;
   }
 
+  /**
+   * Supply measured section starts (ms) for the current song, or null to go
+   * back to deriving them from energy tiers.
+   *
+   * Must be called with null on every track change — a previous song's
+   * boundaries drawn over this one's timeline are not merely stale, they are
+   * confidently wrong, which is worse than the tier fallback.
+   *
+   * Bumps `revision`, so the memoised structure and the renderer's
+   * pre-rendered timeline both rebuild.
+   *
+   * @param {number[]|null} startsMs ascending, starting at 0
+   */
+  function setSections(startsMs) {
+    measuredStarts = Array.isArray(startsMs) && startsMs.length > 1 ? startsMs.slice() : null;
+    revision += 1;
+  }
+
   /** Whether anything new has been learned since the last save. */
   function isDirty() {
     return dirty;
@@ -417,7 +486,7 @@
 
   window.HeatMap = {
     start, load, note, get, cells, coverage, isDirty, takeForSave,
-    lookahead, sections, sectionAt, revision: currentRevision,
+    lookahead, sections, sectionAt, setSections, revision: currentRevision,
     BIN_COUNT, MIN_SAMPLES, MIN_STRUCTURE_COVERAGE, DURATION_TOLERANCE_MS,
   };
 })();

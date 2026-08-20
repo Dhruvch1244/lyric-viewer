@@ -85,3 +85,59 @@ test('returns nothing for an empty or entirely-filtered input', () => {
   assert.deepEqual(groupWordsIntoLines([]), []);
   assert.deepEqual(groupWordsIntoLines([{ text: '', timestamp: [0, 1] }]), []);
 });
+
+/* ------------------------------------------- the segment fallback path */
+/*
+  Word timing comes from the decoder's cross-attention weights. Pointed at an
+  ONNX export that has none, transformers.js throws rather than degrading, and
+  because `transcribe` had no catch that turned a per-word-timing problem into
+  a total transcription failure -- measured, against
+  onnx-community/whisper-base, which is what this file used to name.
+
+  These cover the two halves of the fix: the model id that has the attentions,
+  and the fallback that keeps a transcription even when it does not.
+*/
+
+const { segmentsToLines, DEFAULT_MODEL } = global.window.Whisper;
+
+test('the default model is an export that carries cross attentions', () => {
+  // `return_timestamps: 'word'` cannot work without them, and the failure is
+  // invisible until a real transcription runs. Verified by running both repos
+  // against 8s of synthesised speech: the plain one threw, the _timestamped
+  // one returned 11 word-level chunks.
+  assert.match(DEFAULT_MODEL, /_timestamped$/,
+    'a model id without the cross-attention export breaks transcription entirely, not just word timing');
+});
+
+test('segments become one cue each, with no words[]', () => {
+  // A segment is a whole phrase. Presenting it as a single "word" spanning
+  // several seconds would be a lie that align.rs would reject anyway.
+  const lines = segmentsToLines([
+    chunk(' The quick brown fox jumps over the lazy dog.', 0, 4.36),
+    chunk(' Testing 12345.', 4.36, 7.16),
+  ]);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].text, 'The quick brown fox jumps over the lazy dog.');
+  assert.equal(lines[0].timeMs, 0);
+  assert.equal(lines[0].endMs, 4360);
+  assert.equal(lines[0].words, undefined, 'a segment must not claim per-word timing');
+  assert.equal(lines[1].timeMs, 4360);
+});
+
+test('segments with no end timestamp collapse to a point rather than going backwards', () => {
+  const lines = segmentsToLines([{ text: ' trailing', timestamp: [3.0, null] }]);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].timeMs, 3000);
+  assert.equal(lines[0].endMs, 3000);
+});
+
+test('empty and malformed segments are dropped, not turned into blank cues', () => {
+  const lines = segmentsToLines([
+    chunk('   ', 0, 1),
+    { text: 'no timestamp' },
+    null,
+    chunk(' real', 1, 2),
+  ]);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].text, 'real');
+});

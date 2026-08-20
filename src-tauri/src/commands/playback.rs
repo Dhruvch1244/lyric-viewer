@@ -118,6 +118,39 @@ pub(crate) fn stop_audio_capture() {
     crate::audio::stop_capture();
 }
 
+/// Begin recording the active loopback capture for later transcription — see
+/// `audio.rs`'s module doc for why this exists (no whole-song PCM over IPC
+/// for SMTC playback). Requires `start_audio_capture` to already be on, same
+/// as `native-audio` frames do; returns false if it is not, or if a
+/// recording is already running.
+///
+/// The sidecar check is here rather than only at `stop_native_song_recording`
+/// on purpose: false is what makes `listen.js` record the song in the WebView
+/// instead, and it has to be answered before the song plays. Recording a whole
+/// track and only then discovering there is nothing to transcribe it with
+/// would cost the user the one play the WebView path could have learned from.
+#[tauri::command]
+pub(crate) fn start_native_song_recording() -> bool {
+    crate::inference::available() && crate::audio::start_recording()
+}
+
+/// Abandon the active recording without transcribing it — real (correctly
+/// timed) lyrics turned up for this song, or the user skipped past it.
+#[tauri::command]
+pub(crate) fn discard_native_song_recording() {
+    crate::audio::discard_recording();
+}
+
+/// Declare whether anything is consuming the time-domain waveform.
+///
+/// Only MilkDrop reads it, and it is three quarters of the emitted frame, so
+/// the renderer switches it off whenever no consumer has asked recently. See
+/// `audio.rs`'s module doc.
+#[tauri::command]
+pub(crate) fn set_audio_waveform(enabled: bool) {
+    crate::audio::set_waveform(enabled);
+}
+
 /// The renderer is about to play a local file: announce it as the track (so
 /// lyrics + art load) and stand the SMTC watcher down.
 #[tauri::command]
@@ -141,6 +174,19 @@ pub(crate) fn end_local_playback(app: AppHandle) {
 /// per-window energy envelopes + bass onsets the renderer feeds into the heat
 /// map and tempo estimator — so a local song's shape is known on the first play
 /// with no Web Audio decode stalling the opening frames.
+///
+/// Also returns `beats`: a whole-song beat grid from `beats.rs`. That is a
+/// second pass over the same samples (an STFT the envelope analysis does not
+/// need), and it is worth it — the renderer's live estimator drifts by
+/// construction and was measured reading a 138 BPM track as 174. It is also
+/// cheap: 30 s of audio tracks in 0.02 s in a release build, so a four-minute
+/// song costs on the order of 0.15 s, against a decode that already happened.
+/// Absent when the track has no steady beat, which the renderer must treat as
+/// "no grid" rather than "zero BPM".
+///
+/// And `key`, from `key.rs`, on the same terms: absent when nothing is
+/// decisive enough to name. Both are optional by design — a tracker or a
+/// detector that always answers is worse than one that sometimes does not.
 #[tauri::command]
 pub(crate) fn analyze_local_file(path: String) -> Value {
     let (samples, sample_rate) = match crate::analysis::decode_to_mono(&path) {
@@ -151,6 +197,22 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
     let mut out = serde_json::to_value(&a).unwrap_or(json!({}));
     out["ok"] = json!(true);
     out["durationMs"] = json!((samples.len() as f64 / sample_rate as f64) * 1000.0);
+    if let Some(beats) = crate::beats::track(&samples, sample_rate) {
+        log::info!("beat grid: {:.1} BPM, {} beats, confidence {:.2}", beats.bpm, beats.beats_ms.len(), beats.confidence);
+        out["beats"] = serde_json::to_value(&beats).unwrap_or(Value::Null);
+    }
+    if let Some(key) = crate::key::detect(&samples, sample_rate) {
+        log::info!("key: {} (margin {:.2})", key.label, key.confidence);
+        out["key"] = serde_json::to_value(&key).unwrap_or(Value::Null);
+    }
+    if let Some(starts) = crate::structure::detect(&samples, sample_rate) {
+        log::info!("structure: {} section(s)", starts.len());
+        out["sectionStartsMs"] = json!(starts);
+    }
+    if let Some(l) = crate::loudness::measure(&samples, sample_rate) {
+        log::info!("loudness: {:.1} LUFS, gain {:.2}", l.lufs, l.gain);
+        out["loudness"] = serde_json::to_value(&l).unwrap_or(Value::Null);
+    }
     out
 }
 
@@ -163,7 +225,14 @@ fn local_item(path: &std::path::Path) -> Value {
     json!({ "localPath": path.to_string_lossy(), "title": title, "artist": "" })
 }
 
-#[tauri::command]
+/// `(async)` is required, not stylistic — see `import_lyrics` in
+/// lyrics_cmds.rs for the full reasoning. Short version: a sync command runs
+/// on the main thread, and a blocking picker called from the main thread
+/// deadlocks against the event loop it is waiting on. This is the more likely
+/// culprit behind the "media-import check reads as the app hanging" note
+/// below than the always-on-top layering it was originally attributed to —
+/// both are real, but only this one actually freezes the process.
+#[tauri::command(async)]
 pub(crate) fn open_local_files(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     // See AlwaysOnTopGuard: without dropping always-on-top first, this picker
@@ -181,7 +250,9 @@ pub(crate) fn open_local_files(app: AppHandle) -> Value {
     }
 }
 
-#[tauri::command]
+/// `(async)` for the same main-thread/blocking-picker deadlock as
+/// `open_local_files` above.
+#[tauri::command(async)]
 pub(crate) fn open_local_folder(app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     let _surfaced = AlwaysOnTopGuard::engage(&app);

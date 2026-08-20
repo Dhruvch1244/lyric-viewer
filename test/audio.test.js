@@ -126,3 +126,133 @@ test('flux can be restricted to a bin range', () => {
   assert.equal(Audio.spectralFlux(highs, base, 0, 16), 0);
   assert.ok(Audio.spectralFlux(highs, base) > 0);
 });
+
+/* --------------------------------------------------------- waveform gate */
+/*
+  The native path emits a spectrum (512 B) and a waveform (1024 B) 50x a
+  second. Only MilkDrop reads the waveform, so audio.js asks the backend to
+  stop sending it when nothing has called `timeDomain` for a second. These
+  drive the real module through a fake `window.player`, because the bug this
+  guards against -- the waveform being switched off while MilkDrop is still
+  drawing -- is a wiring bug, not an arithmetic one.
+
+  Kept last in the file: starting capture flips module-level state that the
+  pure-DSP tests above assume is untouched.
+*/
+
+/*
+  audio.js subscribes to `native-audio` exactly once and keeps that
+  subscription across stop/start, so the frame callback is captured here once
+  and reused by every test rather than re-registered per fake backend.
+*/
+let emitFrame = null;
+
+/** @returns {{calls: boolean[], emit: (frame: any) => void}} */
+function fakeBackend() {
+  const calls = [];
+  global.window.player = {
+    startAudioCapture: () => Promise.resolve(true),
+    stopAudioCapture: () => {},
+    setAudioWaveform: (enabled) => { calls.push(enabled); },
+    onNativeAudio: (cb) => { emitFrame = cb; },
+  };
+  return { calls, emit: (frame) => emitFrame && emitFrame(frame) };
+}
+
+/** base64 of `n` mid-scale bytes, the shape audio.rs sends. */
+function b64Bytes(n, value) {
+  return Buffer.from(Uint8Array.from({ length: n }, () => value)).toString('base64');
+}
+
+test('the waveform is released when nothing has asked for it, and restored when something does', async () => {
+  const backend = fakeBackend();
+  const started = Audio.start();
+  // startNative only resolves true once a real frame lands.
+  backend.emit({ t: b64Bytes(1024, 128), f: b64Bytes(512, 40) });
+  assert.equal(await started, true, 'native capture did not start');
+  assert.deepEqual(backend.calls, [], 'asked the backend for anything before a frame ran');
+
+  // Inside the idle window: still on, because MilkDrop may be mid-load.
+  for (let i = 0; i < 30; i += 1) Audio.sample(i * 16);
+  assert.deepEqual(backend.calls, [], 'released the waveform too early');
+
+  // Past the idle window with no consumer: released.
+  for (let i = 30; i < 70; i += 1) Audio.sample(i * 16);
+  assert.deepEqual(backend.calls, [false], 'did not release an unread waveform');
+
+  // Releasing it must not leave a stale waveform readable.
+  const out = new Uint8Array(1024);
+  out.fill(7);
+  Audio.timeDomain(out);
+  assert.ok(out.every((v) => v === 128), 'served a stale waveform after releasing it');
+
+  // ...and asking IS the subscription, so the next call turns it back on.
+  assert.deepEqual(backend.calls, [false, true], 'timeDomain did not re-request the waveform');
+
+  // A consumer that keeps reading keeps it on -- one request, not one per
+  // frame, and well past the idle window.
+  for (let i = 0; i < 200; i += 1) { Audio.timeDomain(out); Audio.sample(i * 16); }
+  assert.deepEqual(backend.calls, [false, true], 'chattered at the backend every frame');
+
+  Audio.stop();
+});
+
+test('a backend without the waveform command does not break capture', async () => {
+  // An older frontend/backend pairing: audio.rs defaults to sending the
+  // waveform, so the gate must degrade to "always on" rather than throw.
+  const backend = fakeBackend();
+  delete global.window.player.setAudioWaveform;
+  const started = Audio.start();
+  backend.emit({ t: b64Bytes(1024, 128), f: b64Bytes(512, 40) });
+  assert.equal(await started, true);
+  for (let i = 0; i < 100; i += 1) Audio.sample(i * 16); // would call setAudioWaveform if it existed
+  const out = new Uint8Array(1024);
+  assert.equal(Audio.timeDomain(out), true, 'capture stopped working');
+  Audio.stop();
+});
+
+test('a frame without the waveform key leaves the spectrum path working', () => {
+  // What audio.rs emits once the gate is closed: `{ f }` with no `t`.
+  const backend = fakeBackend();
+  backend.emit({ f: b64Bytes(512, 200) });   // no throw, no NaN
+  assert.ok(true);
+});
+
+/* --------------------------------------------- loudness normalisation --- */
+/*
+  The per-track gain (loudness.rs, JOB-ENGINE §5.6). Without it the visuals
+  react to how hard a track was mastered as much as to the music. The gate has
+  to reject nonsense — it is a bias toward a reference level, not an automatic
+  level control — and must return to 1 rather than latching, since an
+  unmeasured track inheriting the last one's correction is confidently wrong
+  rather than merely absent.
+*/
+
+test('the loudness gain defaults to no correction', () => {
+  assert.equal(Audio.loudnessGain(), 1);
+});
+
+test('a plausible gain is accepted', () => {
+  for (const g of [0.5, 0.8, 1, 1.3, 2]) {
+    Audio.setLoudnessGain(g);
+    assert.equal(Audio.loudnessGain(), g);
+  }
+  Audio.setLoudnessGain(1);
+});
+
+test('a nonsensical gain falls back to no correction rather than being clamped', () => {
+  // Clamping would silently accept a caller that had gone wrong; 1 is the
+  // honest answer to "this number cannot be a loudness correction".
+  for (const bad of [0, -1, 40, 0.01, NaN, Infinity, null, undefined, 'loud', {}]) {
+    Audio.setLoudnessGain(1.5);
+    Audio.setLoudnessGain(bad);
+    assert.equal(Audio.loudnessGain(), 1, `accepted ${String(bad)}`);
+  }
+});
+
+test('clearing the gain returns to no correction', () => {
+  Audio.setLoudnessGain(1.7);
+  assert.equal(Audio.loudnessGain(), 1.7);
+  Audio.setLoudnessGain(1);
+  assert.equal(Audio.loudnessGain(), 1);
+});

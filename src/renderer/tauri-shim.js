@@ -92,6 +92,10 @@
 
     startAudioCapture: () => call('start_audio_capture', {}, false),
     stopAudioCapture: () => call('stop_audio_capture', {}),
+    // Whether native-audio frames should carry the time-domain waveform. Only
+    // MilkDrop reads it and it is three quarters of the frame — see audio.js's
+    // demand gate and docs/JOB-ENGINE.md §6.
+    setAudioWaveform: (enabled) => call('set_audio_waveform', { enabled }),
 
     getAutostart: () => call('get_autostart', {}, false),
     setAutostart: (enabled) => call('set_autostart', { enabled }, false),
@@ -140,18 +144,36 @@
     clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
 
     presyncList: (text) => call('presync_list', { text }),
-    spotifyStatus: () => call('spotify_status', {}, { hasClientId: false, connected: false }),
-    spotifyAuthorize: () => call('spotify_authorize', {}, { status: 'error', message: 'unavailable' }),
-    spotifyPlaylists: () => call('spotify_playlists', {}, { status: 'error', message: 'unavailable' }),
-    spotifyPlaylistTracks: (playlistId) => call('spotify_playlist_tracks', { playlistId }, { status: 'error', message: 'unavailable' }),
+    precomputeTracks: (tracks) => call('precompute_tracks', { tracks }, { status: 'error' }),
     listSynced: () => call('list_synced', {}, []),
 
     /*
-      Transcription runs in the webview now (see whisper.js): Whisper turns the
-      recorded PCM into cues here, then the backend aligns them to the real plain
-      lyrics and caches the result. Progress is relayed through the backend so it
-      reaches the renderer's existing onTranscribeProgress handler. The PCM never
-      crosses IPC — only the small cue list does.
+      Native song recording (audio.rs + the inference sidecar). The backend
+      already runs the WASAPI loopback thread that feeds `native-audio`, so it
+      records the song itself and transcribes from a temp file — nothing but a
+      track object crosses IPC in either direction.
+
+      `startNativeSongRecording` returns false when there is no native capture
+      to tap (the getDisplayMedia fallback is in use, or capture is off), which
+      is how the renderer decides between this and the webview recorder — it
+      asks rather than inferring. See renderer.js's `listeningMode`.
+    */
+    startNativeSongRecording: () => call('start_native_song_recording', {}, false),
+    stopNativeSongRecording: (track, language) =>
+      call('stop_native_song_recording', { track, language }, { status: 'error', message: 'unavailable' }),
+    discardNativeSongRecording: () => call('discard_native_song_recording', {}),
+
+    /*
+      The webview transcription path, now the fallback rather than the default:
+      Whisper turns the recorded PCM into cues here, then the backend aligns
+      them to the real plain lyrics and caches the result. Progress is relayed
+      through the backend so it reaches the renderer's existing
+      onTranscribeProgress handler. The PCM never crosses IPC — only the small
+      cue list does.
+
+      Still reached for the one thing the sidecar cannot do yet: vocal
+      isolation (Demucs is not ported), and any setup where native loopback
+      capture is unavailable.
     */
     transcribeAudio: async (payload) => {
       const track = payload && payload.track;

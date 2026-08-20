@@ -101,6 +101,9 @@ const els = {
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
   keyStatus: document.getElementById('keybox-status'),
+  acoustidInput: document.getElementById('keybox-acoustid'),
+  acoustidSave: document.getElementById('keybox-acoustid-save'),
+  acoustidStatus: document.getElementById('keybox-acoustid-status'),
   canvas: document.getElementById('backdrop'),
   swirl: document.getElementById('swirl'),
   milkdrop: document.getElementById('milkdrop'),
@@ -1122,6 +1125,52 @@ let palette = ['#0d0d1a', '#4361ee', '#7209b7', '#4cc9f0'];
 let baseTint = '#0d0d1a';
 let vignette = null; // cached gradient, rebuilt on resize
 
+/* The palette exactly as delivered (artwork hash, then mood), before the key
+   tint below. Kept because the key usually arrives AFTER the palette does —
+   they come from different passes — so the tint has to be re-applied to the
+   original rather than compounded onto an already-tinted one. */
+let rawPalette = null;
+/* The current song's musical key (key.rs), or null when nothing was decisive
+   enough to name. Cleared on every track change. */
+let songKey = null;
+
+/* Hue targets for the key tint: minor pulls toward blue, major toward amber —
+   the "minor cool, major warm" of JOB-ENGINE §5.5. Applied as a partial nudge
+   TOWARD the target rather than a fixed rotation, because a fixed rotation
+   warms a blue palette and cools a red one. */
+const KEY_HUE_MINOR = 215;
+const KEY_HUE_MAJOR = 35;
+/* How far toward that target. Small on purpose: this biases the artwork's own
+   colours, it does not replace them with two fixed schemes. */
+const KEY_HUE_AMOUNT = 0.18;
+
+/**
+ * Set the palette, tinted by the song's key when one is known.
+ *
+ * The single place `palette`, `baseTint`, the glow seeds and the `--accent`
+ * CSS variable are assigned. There used to be two identical copies of this —
+ * one for the artwork palette, one for the mood palette — and a key tint
+ * applied to only one of them would recolour the app differently depending on
+ * which pass answered last.
+ *
+ * @param {string[]|null|undefined} colours four hex colours, or anything else
+ *   (ignored, so a caller need not check)
+ */
+function applyPalette(colours) {
+  if (Array.isArray(colours) && colours.length >= 4) rawPalette = colours;
+  if (!rawPalette) return;
+  const target = !songKey ? null : songKey.major ? KEY_HUE_MAJOR : KEY_HUE_MINOR;
+  palette = target === null
+    ? rawPalette.slice()
+    : rawPalette.map((c) => {
+      const to = window.SongAnalysis.hueTowards(hueOf(c), target, KEY_HUE_AMOUNT);
+      return shiftHex(c, to - hueOf(c));
+    });
+  baseTint = palette[0];
+  seedGlows([palette[1], palette[2], palette[1]]);
+  document.documentElement.style.setProperty('--accent', palette[3]);
+}
+
 /* Extra reactive background layers. Everything below scales with the energy
    envelope (intensity/pulse/buildup/drop) and a slowly drifting global hue, so
    the backdrop keeps changing instead of settling. */
@@ -1197,6 +1246,17 @@ let anticipationToPeakMs = 0;
 
 let beatPeriodMs = 500;     // current estimated beat length
 let beatClockMs = 0;        // accumulates dt, wraps every beatPeriodMs
+/*
+  The measured beat grid for the current song (ms from its start), from the
+  native offline pass (beats.rs via analyze_local_file). Null for anything not
+  played locally, and cleared on every track change — a previous song's grid
+  applied to this one is worse than none.
+
+  Held rather than reduced to a BPM because it also supplies the PHASE: the
+  live phase tracker needs ♫ capture, and without it the clock free-runs and
+  drifts against the music even when the period is exactly right.
+*/
+let songBeatsMs = null;
 let beatPhase = 0;          // 0..1 within the current beat
 let beatFlash = 0;          // decays after each beat, drives pulses/flicker
 /* Screen flicker/strobe (0..1). Rises on drops + high energy, and micro-strobes
@@ -1581,6 +1641,26 @@ function hslToHex(h, s, l) {
 }
 
 /** Rotate a hex colour's hue by `deg`, preserving saturation/lightness. */
+/**
+ * Hue of a hex colour, in degrees. The same extraction `shiftHex` does
+ * internally, exposed because the key tint needs to know where a colour
+ * currently is before deciding how far to move it.
+ * @param {string} hex
+ * @returns {number} 0..360
+ */
+function hueOf(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
+}
+
 function shiftHex(hex, deg) {
   const n = parseInt(hex.slice(1), 16);
   let r = ((n >> 16) & 255) / 255;
@@ -3305,12 +3385,26 @@ function drawBackdrop(now) {
 
       if (known) {
         const period = 60000 / known;
-        const ph = window.Tempo.phaseFor(period);
         tempoLocked = true;
         tempoBpm = known;
         beatPeriodMs = period;
-        if (ph && ph.confidence >= TEMPO_LOCK_OUT) {
-          beatClockMs = ((now - ph.phaseMs) % period + period) % period;
+        /*
+          Phase from the measured grid when there is one, and only then from
+          live capture. The grid is exact and needs no audio at all, so this is
+          the one case where the clock stays in step with ♫ turned off — which
+          is most of the time. `beatPhaseAt` returns null before the first
+          measured beat (an intro can precede it), and that falls through to
+          the live tracker rather than pinning the clock at zero.
+        */
+        const gridPhase = window.SongAnalysis
+          && window.SongAnalysis.beatPhaseAt(songBeatsMs, estimatePosition());
+        if (gridPhase !== null && gridPhase !== undefined) {
+          beatClockMs = gridPhase % period;
+        } else {
+          const ph = window.Tempo.phaseFor(period);
+          if (ph && ph.confidence >= TEMPO_LOCK_OUT) {
+            beatClockMs = ((now - ph.phaseMs) % period + period) % period;
+          }
         }
       } else {
       /*
@@ -4064,7 +4158,10 @@ function updateBpmChip() {
   if (!els.bpm) return;
   if (tempoLocked && tempoBpm > 0) {
     els.bpm.hidden = false;
-    els.bpm.textContent = `♩ ${Math.round(tempoBpm)}`;
+    // The key rides along when one was detected. It is measured from the same
+    // offline pass as the tempo, so if the tempo is shown the key is known or
+    // there wasn't one — no separate loading state to represent.
+    els.bpm.textContent = songKey ? `♩ ${Math.round(tempoBpm)} · ${songKey.label}` : `♩ ${Math.round(tempoBpm)}`;
   } else {
     els.bpm.hidden = true;
   }
@@ -4606,11 +4703,19 @@ function flushHeatmap() {
 /* ------------------------------------------- Whisper transcription (learn) */
 
 /**
- * The track whose audio PcmCapture is currently recording, or null. Held so
- * the recording is submitted under the song it actually belongs to, even
- * though the flush happens after the *next* track has already started.
+ * Owns the in-progress recording: which song it belongs to (the flush happens
+ * after the *next* track has already started, so the track has to be held),
+ * which of the two recorders is running, and the teardown for each. See
+ * listen.js — the recorder choice and its start/stop race live there because
+ * they are the part worth unit-testing.
  */
-let listeningTrack = null;
+const transcribeListener = window.TranscriptionListen.create({
+  player: window.player,
+  // Read lazily, not captured: capture.js is only needed on the webview path,
+  // and a missing PcmCapture must degrade to "native only" rather than throw.
+  getCapture: () => window.PcmCapture,
+  wantsIsolation: () => wantsVocalIsolation(),
+});
 
 /** Whether transcription is enabled + which language/model to use. */
 let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: false };
@@ -4631,13 +4736,32 @@ let plainLyricsAvailable = false;
 let manualLyricsActive = false;
 
 /**
+ * Whether transcription should isolate vocals first — which only the webview
+ * recorder can do, since Demucs is not in the sidecar (JOB-ENGINE §5.2 lists
+ * it as following Whisper, not built). Read by listen.js when it picks a
+ * recorder and again when it flushes one, so flipping the setting mid-song
+ * cannot break a recording; at worst a song already being recorded natively
+ * finishes without isolation.
+ *
+ * Lite mode means "fewer effects, save resources" — isolation is an optional
+ * accuracy enhancement with a real CPU cost (a second multi-MB model, a full
+ * chunked inference pass), so it is the one thing worth skipping outright
+ * rather than just tuning down.
+ *
+ * @returns {boolean}
+ */
+function wantsVocalIsolation() {
+  return Boolean(transcribeCfg.vocalIsolation) && !liteMode;
+}
+
+/**
  * Start recording the current song so it can be transcribed once it ends.
  * Requires live loopback capture (the ♫ chip) — without real audio there is
- * nothing to transcribe.
+ * nothing to transcribe. Which recorder runs is listen.js's decision.
  */
 function beginTranscriptionListen() {
-  if (!transcribeCfg.enabled || !window.PcmCapture || !currentTrack) return;
-  if (listeningTrack) return;                       // already recording this song
+  if (!transcribeCfg.enabled || !currentTrack) return;
+  if (transcribeListener.isListening()) return;               // already recording this song
   if (!window.AudioReactive || !window.AudioReactive.isActive()) {
     // Loopback is off; say so rather than silently doing nothing, since the
     // fix (turn on ♫) is one click away. When the real words are already known,
@@ -4647,50 +4771,33 @@ function beginTranscriptionListen() {
       : 'no synced lyrics — enable ♫ to auto-transcribe');
     return;
   }
-  if (window.PcmCapture.start()) {
-    listeningTrack = currentTrack;
+  transcribeListener.begin(currentTrack).then((mode) => {
+    // null means no recorder would start, or the song changed while one was
+    // starting — either way there is nothing to promise the user.
+    if (!mode) return;
     setStatus(plainLyricsAvailable
       ? 'lyrics found — timing them to the music…'
       : 'no synced lyrics — listening to learn this song…');
-  }
+  });
 }
 
 /** Abandon the in-progress recording (real lyrics turned up, or user skipped). */
 function stopTranscriptionListen() {
-  if (!listeningTrack || !window.PcmCapture) return;
-  window.PcmCapture.reset();
-  listeningTrack = null;
+  transcribeListener.stop();
 }
 
 /**
- * Hand whatever was recorded to the main process for transcription. Called as
- * the track changes, which is the point we know the song is over.
+ * Hand whatever was recorded to the backend for transcription. Called as the
+ * track changes, which is the point we know the song is over.
  */
 function flushTranscription() {
-  if (!listeningTrack || !window.PcmCapture) return;
-  const track = listeningTrack;
-  listeningTrack = null;
-
-  const pcm = window.PcmCapture.take();   // null when too little audio to bother
-  if (!pcm) return;
-
-  window.player
-    .transcribeAudio({
-      track,
-      pcm,
-      language: transcribeCfg.language || undefined,
-      // Lite mode means "fewer effects, save resources" — vocal isolation is
-      // an optional accuracy enhancement with a real CPU cost (a second
-      // multi-MB model, a full chunked inference pass), so it's the one thing
-      // worth skipping outright rather than just tuning down.
-      vocalIsolation: Boolean(transcribeCfg.vocalIsolation) && !liteMode,
-    })
-    .catch((err) => console.warn('[transcribe] failed:', err && err.message));
+  transcribeListener.flush({ language: transcribeCfg.language || undefined });
 }
 
 window.player.onTranscribeProgress((data) => {
   const WORK = {
     download: 'downloading speech model', transcribing: 'transcribing',
+    identifying: 'identifying the song', identified: null,
     aligning: 'aligning words', aligned: null, 'align-weak': null,
     correcting: 'checking the words', corrected: null,
     'words-added': null,
@@ -4710,6 +4817,14 @@ window.player.onTranscribeProgress((data) => {
       break;
     case 'relanguage':
       setStatus('sounds Hindi — re-transcribing properly…');
+      break;
+    case 'identifying':
+      // Only ever fires for a track whose metadata looked like a video title,
+      // so the user has probably already noticed it was wrong.
+      setStatus('working out what that song actually was…');
+      break;
+    case 'identified':
+      setStatus(`identified: ${data.artist} — ${data.title}`);
       break;
     case 'aligned':
       // Real lyric text matched onto the transcribed timings — the good case.
@@ -4780,6 +4895,13 @@ window.player.onTrack((track) => {
   currentTrack = track;
   durationMs = track.durationMs || 0;
   lastProgressPct = -1;           // force the bar to redraw for the new song
+  // The previous song's beat positions are meaningless here, and applying
+  // them would put the clock confidently out of step rather than merely
+  // free-running. The new song's grid arrives with its `analysed` event, if
+  // it gets one at all. Its key goes with it, and must be cleared BEFORE the
+  // palette below is applied or this song's colours carry the last one's tint.
+  songBeatsMs = null;
+  songKey = null;
   // The previous song's cover choice says nothing about this one, and a stale
   // selection would mark the wrong tile in the picker.
   artworkChosen = false;
@@ -4825,12 +4947,7 @@ window.player.onTrack((track) => {
   }
 
   // Instant hash palette; recolours the whole background for this song.
-  if (Array.isArray(track.palette) && track.palette.length >= 4) {
-    palette = track.palette;
-    baseTint = palette[0];
-    seedGlows([palette[1], palette[2], palette[1]]);
-    document.documentElement.style.setProperty('--accent', palette[3]);
-  }
+  applyPalette(track.palette);
 
   // New song → drop the old backdrop photo + any leftover clones, and show the
   // glowing hero until lyrics (if any) start.
@@ -4845,7 +4962,17 @@ window.player.onTrack((track) => {
   if (window.Tempo) window.Tempo.reset();   // a new song has its own tempo
   // An empty map for this track; the stored one (if any) arrives via `heatmap`
   // right after and replaces it, provided the track lengths agree.
-  if (window.HeatMap) window.HeatMap.start(track.durationMs || 0);
+  if (window.HeatMap) {
+    window.HeatMap.start(track.durationMs || 0);
+    // The previous song's measured boundaries are confidently wrong here, not
+    // merely stale — worse than the energy-tier fallback they replaced.
+    if (window.HeatMap.setSections) window.HeatMap.setSections(null);
+  }
+  // Same reasoning for the loudness correction: unmeasured is 1, not whatever
+  // the last song needed.
+  if (window.AudioReactive && window.AudioReactive.setLoudnessGain) {
+    window.AudioReactive.setLoudnessGain(1);
+  }
   anticipation = 0;                         // nothing is known about this song yet
   anticipationToPeakMs = 0;
   if (window.BeatMap) {
@@ -4946,12 +5073,7 @@ window.player.onAttribution((payload) => {
 
 window.player.onMood((data) => {
   if (!isForCurrentTrack(data.track)) return;
-  if (Array.isArray(data.palette) && data.palette.length >= 4) {
-    palette = data.palette;
-    baseTint = palette[0];
-    seedGlows([palette[1], palette[2], palette[1]]);
-    document.documentElement.style.setProperty('--accent', palette[3]);
-  }
+  applyPalette(data.palette);
   if (typeof data.energy === 'number') baseEnergy = data.energy;
   currentMood = data.mood || null;
   applyMoodProfile();
@@ -5891,28 +6013,34 @@ els.keyInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeKeybox();
 });
 
-/* Spotify Client ID — separate save button from the HF key above, since it's
-   a different key name and doesn't affect which translation/mood provider is
-   active (refreshProviderChip is HF/cloud-LLM specific, not relevant here). */
-{
-  const input = document.getElementById('keybox-spotify-input');
-  const save = document.getElementById('keybox-spotify-save');
-  const status = document.getElementById('keybox-spotify-status');
-  if (input && save && status && window.player && window.player.setApiKey) {
-    const saveSpotifyClientId = async () => {
-      const value = input.value.trim();
-      status.textContent = 'saving…';
-      try {
-        const res = await window.player.setApiKey('SPOTIFY_CLIENT_ID', value);
-        status.textContent = res && res.status === 'ok' ? 'saved' : (res && res.message) || 'save failed';
-        if (res && res.status === 'ok') syncSpotifyPanel();
-      } catch (err) {
-        status.textContent = (err && err.message) || 'save failed';
-      }
-    };
-    save.addEventListener('click', saveSpotifyClientId);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSpotifyClientId(); });
+/**
+ * Save the AcoustID key. Separate from `saveApiKey` rather than generalised,
+ * because the two report different things: an AI key changes which *provider*
+ * is active and refreshes the provider chip, while this one only enables
+ * song identification and has no provider to name.
+ */
+async function saveAcoustidKey() {
+  const value = els.acoustidInput.value.trim();
+  els.acoustidStatus.textContent = 'saving…';
+  try {
+    const res = await window.player.setApiKey('ACOUSTID_API_KEY', value);
+    if (res.status === 'ok') {
+      els.acoustidInput.value = '';
+      els.acoustidStatus.textContent = value ? 'saved — songs with video titles will be identified' : 'cleared';
+    } else {
+      els.acoustidStatus.textContent = res.message || 'save failed';
+    }
+  } catch (err) {
+    els.acoustidStatus.textContent = err.message || 'save failed';
   }
+}
+
+if (els.acoustidSave) els.acoustidSave.addEventListener('click', saveAcoustidKey);
+if (els.acoustidInput) {
+  els.acoustidInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveAcoustidKey();
+    if (e.key === 'Escape') closeKeybox();
+  });
 }
 
 /* Pre-sync panel. The 📋 chip reveals a paste area; running it fetches + caches
@@ -6320,6 +6448,14 @@ if (window.LocalPlayer) {
   window.LocalPlayer.on('analysed', (track, summary) => {
     const bpm = summary.bpm ? ` · ${summary.bpm.toFixed(0)} BPM` : '';
     setStatus(`analysed ${track.title} in ${Math.round(summary.ms)}ms${bpm}`);
+    // The measured grid, when the native pass produced one. Its BPM is also
+    // what `summary.bpm` now carries, so the prior below is the grid's tempo
+    // rather than the onset estimator's guess (beats.rs, JOB-ENGINE §7.12).
+    songBeatsMs = summary.beatsMs || null;
+    // The key arrives from the same pass, which usually lands after the
+    // palette did — so re-apply the palette to pick up its tint.
+    songKey = summary.key || null;
+    applyPalette(null);
     if (summary.bpm && window.Tempo) {
       tempoLocked = true;
       tempoBpm = summary.bpm;
@@ -6351,150 +6487,10 @@ els.presyncBtn.addEventListener('click', () => {
     document.body.classList.add('keybox-open'); // pin the HUD open while typing
     els.presyncInput.focus();
     refreshSyncedList(); // show the current library each time the panel opens
-    syncSpotifyPanel();
   } else {
     closePresync();
   }
 });
-
-/*
-  Import a Spotify playlist into the same paste box, rather than a parallel
-  sync path — one playlist's worth of "Artist - Title" lines land in
-  #presync-input and the existing Pre-sync button runs them, so this is
-  purely a faster way to fill that textarea, not a second pipeline to keep in
-  step with the first.
-
-  Hidden entirely until a Client ID is set (🔑 panel) — no Client ID means no
-  redirect URI Spotify would accept, so there is nothing this row could do.
-*/
-function syncSpotifyPanel() {
-  const row = document.getElementById('presync-spotify');
-  if (!row || !window.player || !window.player.spotifyStatus) return;
-  window.player.spotifyStatus().then((s) => {
-    row.hidden = !(s && s.hasClientId);
-  }).catch(() => { row.hidden = true; });
-}
-
-/*
-  Auto-refresh the imported playlist while connected, so tracks added to the
-  playlist later show up without the user remembering to click Import again.
-  Deliberately does NOT re-run Pre-sync itself — it only refills the textarea,
-  same as a manual Import would, so fetching/caching lyrics stays a conscious
-  click either way. Only overwrites the textarea if it still holds exactly
-  what the last (auto or manual) import put there, so it never clobbers text
-  the user pasted or edited by hand. Stops itself once the session's token
-  has expired — there is nothing to poll with once that happens, and the app
-  deliberately never persists a refresh token across restarts (see spotify.rs).
-*/
-const SPOTIFY_AUTO_REFRESH_MS = 5 * 60 * 1000;
-let spotifyAutoRefreshTimer = null;
-let lastSpotifyPlaylistId = null;
-let lastSpotifyImportText = '';
-
-function stopSpotifyAutoRefresh() {
-  if (spotifyAutoRefreshTimer) clearInterval(spotifyAutoRefreshTimer);
-  spotifyAutoRefreshTimer = null;
-}
-
-function startSpotifyAutoRefresh(playlistId, initialText, status) {
-  lastSpotifyPlaylistId = playlistId;
-  lastSpotifyImportText = initialText;
-  stopSpotifyAutoRefresh();
-  spotifyAutoRefreshTimer = setInterval(async () => {
-    try {
-      const live = await window.player.spotifyStatus();
-      if (!live || !live.connected) { stopSpotifyAutoRefresh(); return; }
-      const res = await window.player.spotifyPlaylistTracks(lastSpotifyPlaylistId);
-      if (!res || res.status !== 'ok') return; // transient network hiccup — try again next tick
-      const text = res.text || '';
-      if (text === lastSpotifyImportText) return; // unchanged
-      const unchangedInBox = els.presyncInput.value === lastSpotifyImportText;
-      lastSpotifyImportText = text;
-      if (unchangedInBox) {
-        els.presyncInput.value = text;
-        const lines = text.split('\n').filter(Boolean).length;
-        if (status) status.textContent = `playlist updated — ${lines} track${lines === 1 ? '' : 's'} loaded — press Pre-sync`;
-      }
-    } catch { /* skip this tick, try again next interval */ }
-  }, SPOTIFY_AUTO_REFRESH_MS);
-}
-
-{
-  const connectBtn = document.getElementById('presync-spotify-connect');
-  const playlistSelect = document.getElementById('presync-spotify-playlists');
-  const importBtn = document.getElementById('presync-spotify-import');
-  const status = document.getElementById('presync-spotify-status');
-
-  async function loadSpotifyPlaylists() {
-    if (!status || !playlistSelect || !importBtn) return;
-    status.textContent = 'loading playlists…';
-    try {
-      const res = await window.player.spotifyPlaylists();
-      if (!res || res.status !== 'ok') {
-        status.textContent = (res && res.message) || 'could not load playlists';
-        return;
-      }
-      playlistSelect.innerHTML = '';
-      for (const p of res.playlists || []) {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.textContent = `${p.name} (${p.trackCount})`;
-        playlistSelect.appendChild(opt);
-      }
-      const has = (res.playlists || []).length > 0;
-      playlistSelect.hidden = !has;
-      importBtn.hidden = !has;
-      status.textContent = has ? `${res.playlists.length} playlist${res.playlists.length === 1 ? '' : 's'}` : 'no playlists found';
-    } catch (err) {
-      status.textContent = (err && err.message) || 'could not load playlists';
-    }
-  }
-
-  if (connectBtn) {
-    connectBtn.addEventListener('click', async () => {
-      connectBtn.disabled = true;
-      status.textContent = 'opening Spotify in your browser…';
-      try {
-        const res = await window.player.spotifyAuthorize();
-        if (res && res.status === 'ok') {
-          status.textContent = 'connected';
-          await loadSpotifyPlaylists();
-        } else {
-          status.textContent = (res && res.message) || 'connect failed';
-        }
-      } catch (err) {
-        status.textContent = (err && err.message) || 'connect failed';
-      } finally {
-        connectBtn.disabled = false;
-      }
-    });
-  }
-
-  if (importBtn) {
-    importBtn.addEventListener('click', async () => {
-      const id = playlistSelect && playlistSelect.value;
-      if (!id) return;
-      importBtn.disabled = true;
-      status.textContent = 'importing…';
-      try {
-        const res = await window.player.spotifyPlaylistTracks(id);
-        if (res && res.status === 'ok') {
-          const text = res.text || '';
-          els.presyncInput.value = text;
-          const lines = text.split('\n').filter(Boolean).length;
-          status.textContent = `${lines} track${lines === 1 ? '' : 's'} loaded — press Pre-sync`;
-          startSpotifyAutoRefresh(id, text, status);
-        } else {
-          status.textContent = (res && res.message) || 'import failed';
-        }
-      } catch (err) {
-        status.textContent = (err && err.message) || 'import failed';
-      } finally {
-        importBtn.disabled = false;
-      }
-    });
-  }
-}
 
 els.presyncRun.addEventListener('click', async () => {
   const text = els.presyncInput.value.trim();
@@ -6502,10 +6498,14 @@ els.presyncRun.addEventListener('click', async () => {
   els.presyncRun.disabled = true;
   els.presyncStatus.textContent = 'starting…';
   try {
+    /* Resolves as soon as the run is QUEUED, not when it finishes — the
+       backend hands the list to the job engine and returns. So the button is
+       re-enabled by the 'done' progress event below, not here; awaiting this
+       call would re-enable it immediately and invite a second click over a
+       run that has barely started. */
     await window.player.presyncList(text);
   } catch (err) {
     els.presyncStatus.textContent = err.message || 'pre-sync failed';
-  } finally {
     els.presyncRun.disabled = false;
   }
 });
@@ -6518,6 +6518,7 @@ window.player.onPresyncProgress((data) => {
   if (!data) return;
   if (data.status === 'done') {
     els.presyncStatus.textContent = data.summary || 'done';
+    els.presyncRun.disabled = false; // the run owns the button until it ends
     refreshSyncedList(); // reflect the newly-cached songs
     return;
   }

@@ -49,6 +49,41 @@
   let nativeMode = false;
   let nativeSubscribed = false;
   let nativeGotFrame = false;
+
+  /*
+    Waveform demand gate.
+
+    The spectrum drives every consumer in this file; the WAVEFORM has exactly
+    one (MilkDrop, through `timeDomain` below) and it is three quarters of the
+    bytes in each native frame. Rather than wire this to MilkDrop's lifecycle,
+    the gate is driven by demand: calling `timeDomain` marks the waveform
+    wanted, and going a second without a call releases it. Any future consumer
+    gets the same treatment for free, and a consumer that stops asking cannot
+    leave the payload inflated.
+
+    Native path only — getDisplayMedia reads a real AnalyserNode with no IPC
+    in the way, so there is nothing to gate.
+
+    Counted in FRAMES, not milliseconds, deliberately: `sample()` is handed the
+    caller's clock and `timeDomain()` is handed nothing, so a timestamp here
+    would be comparing two different time bases. Frames are the one unit both
+    sides already share. Under a throttled loop this errs toward holding the
+    waveform open longer, which is the safe direction.
+  */
+  let waveformOn = true;       // matches audio.rs's default on capture start
+  let waveformAsked = false;   // set by timeDomain, cleared each sample()
+  let waveformIdleFrames = 0;
+  const WAVEFORM_IDLE_FRAMES = 60; // ~1s at 60fps
+
+  function requestWaveform(enabled) {
+    if (waveformOn === enabled) return;
+    waveformOn = enabled;
+    if (!enabled) nativeAnalyser._time.fill(128); // never serve a stale waveform
+    try {
+      if (window.player && window.player.setAudioWaveform) window.player.setAudioWaveform(enabled);
+    } catch (e) { /* older backend — it keeps sending the waveform, which is safe */ }
+  }
+
   const nativeAnalyser = {
     fftSize: 1024,
     frequencyBinCount: 512,
@@ -102,8 +137,21 @@
     nativeMode = true;
     running = true;
     env.active = true;
+    /* Capture starts with the waveform on (audio.rs does the same) and lets
+       the idle count release it a second later if nothing asks. Starting it
+       OFF would cost MilkDrop a flat frame on every start for no real gain. */
+    waveformOn = true;
+    waveformAsked = false;
+    waveformIdleFrames = 0;
     return true;
   }
+
+  /*
+    Per-track loudness gain (see `setLoudnessGain`). 1 means "no correction",
+    which is the value for every track this app has not measured — every SMTC
+    track, and any local file too short or too quiet for R128 to report on.
+  */
+  let loudnessGain = 1;
 
   /* Smoothed bands + detector state. */
   let bassEMA = 0;      // slow bass floor, for onset comparison
@@ -255,6 +303,10 @@
         if (window.player && window.player.stopAudioCapture) window.player.stopAudioCapture();
       } catch (e) { /* ignore */ }
       nativeMode = false;
+      // Match audio.rs, which re-arms the waveform on the next capture start.
+      waveformOn = true;
+      waveformAsked = false;
+      waveformIdleFrames = 0;
     }
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
     if (audioCtx) audioCtx.close().catch(() => {});
@@ -357,6 +409,13 @@
     if (!running || !analyser) { env.active = false; return env; }
     env.active = true;
 
+    // Release the waveform once nothing has asked for it for ~a second.
+    if (nativeMode) {
+      if (waveformAsked) { waveformAsked = false; waveformIdleFrames = 0; }
+      else if (waveformIdleFrames < WAVEFORM_IDLE_FRAMES) waveformIdleFrames += 1;
+      else if (waveformOn) requestWaveform(false);
+    }
+
     analyser.getByteFrequencyData(freq);
     const n = freq.length;                    // 512 bins across ~0–24kHz (~46Hz/bin)
     const bassEnd = 6;                        // ~0–280Hz (kick/sub)
@@ -374,6 +433,27 @@
     mid /= (midEnd - bassEnd);
     treble /= (n - midEnd);
     total /= n;
+
+    /*
+      Loudness normalisation (loudness.rs, JOB-ENGINE §5.6). Without it the
+      visuals react to how hard a track was MASTERED as much as to the music:
+      a modern release pinned at −6 LUFS drives everything to the ceiling and a
+      dynamic recording at −20 barely moves it.
+
+      Applied to the four band levels only, after they are averaged and before
+      anything derived from them. Not to `freq` itself: the centroid, the flux
+      and the band shape are all ratios within one frame, and scaling every bin
+      by a constant changes none of them — doing it there would cost a pass
+      over 512 bins per frame for no effect.
+
+      Clamped, because these feed 0..1 consumers throughout.
+    */
+    if (loudnessGain !== 1) {
+      bass = Math.min(1, bass * loudnessGain);
+      mid = Math.min(1, mid * loudnessGain);
+      treble = Math.min(1, treble * loudnessGain);
+      total = Math.min(1, total * loudnessGain);
+    }
 
     env.bass = bass; env.mid = mid; env.treble = treble; env.level = total;
 
@@ -484,8 +564,27 @@
     return running ? mediaStream : null;
   }
 
+  /**
+   * Set the current track's loudness gain, or clear it with anything falsy.
+   *
+   * Must be cleared on every track change: a previous song's correction
+   * applied to this one is worse than none, because it is confidently wrong in
+   * a specific direction rather than merely absent.
+   *
+   * Ignores values outside the range `loudness.rs` itself clamps to — this is
+   * a bias toward a reference level, and a caller handing it a gain of 40
+   * would be a bug, not a very quiet record.
+   *
+   * @param {number} gain linear multiplier
+   */
+  function setLoudnessGain(gain) {
+    const g = Number(gain);
+    loudnessGain = Number.isFinite(g) && g >= 0.25 && g <= 4 ? g : 1;
+  }
+
   window.AudioReactive = {
     start, startFromElement, stop, sample, isActive: () => running, getStream,
+    setLoudnessGain, loudnessGain: () => loudnessGain,
     /* The live graph, for consumers that do their own analysis rather than
        reading our envelope. Both are null when capture is off; a consumer must
        cope with that rather than assume sound is available. */
@@ -506,6 +605,10 @@
      */
     timeDomain: (out) => {
       if (!running || !analyser || !out) return false;
+      /* Asking IS the subscription: on the native path this is what keeps the
+         waveform in the emitted frame. See the demand gate at the top. */
+      waveformAsked = true;
+      if (nativeMode && !waveformOn) requestWaveform(true);
       analyser.getByteTimeDomainData(out);
       return true;
     },

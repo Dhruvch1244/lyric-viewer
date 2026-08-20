@@ -16,30 +16,40 @@
 //!   (pointer forwarding, battery/lock/fullscreen), each started once and
 //!   gated on/off by an atomic rather than spawned and killed.
 //! - `tray`: the tray icon/menu, global hotkeys, and overlay show/hide.
-//! - `commands`: the 59 `#[tauri::command]` handlers, grouped by domain
-//!   (`prefs`, `lyrics_cmds`, `artwork_cmds`, `playback`, `spotify_cmds`,
-//!   `updater`, `misc`).
+//! - `commands`: the `#[tauri::command]` handlers, grouped by domain
+//!   (`prefs`, `lyrics_cmds`, `artwork_cmds`, `playback`, `updater`, `misc`).
 
+mod acoustid;
 mod align;
 mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
+mod beats;
 mod commands;
 mod correct;
 mod crashlog;
+mod fingerprint;
 mod genius;
+mod musicbrainz;
+mod jobs;
 mod kugou;
 mod llm;
 mod localcli;
+mod history;
+mod inference;
+mod journal;
+mod key;
+mod loudness;
 mod lyrics;
+mod models;
 mod mood;
 mod netease;
 mod presets;
-mod spotify;
 #[cfg(windows)]
 mod smtc;
 mod state;
+mod structure;
 mod translate;
 mod transliterate;
 mod tray;
@@ -52,11 +62,13 @@ use std::sync::Mutex;
 use serde_json::json;
 use tauri::Manager;
 
-// Re-exported at the crate root so the three modules that reach into what
-// used to be lib.rs's own top-level statics/types (crashlog.rs, llm.rs,
-// spotify.rs) need no changes: `crate::CRASH_REPORTING_ENABLED`,
-// `crate::maybe_offer_localcli()`, `crate::AlwaysOnTopGuard` all still resolve.
-pub(crate) use state::{maybe_offer_localcli, AlwaysOnTopGuard, CRASH_REPORTING_ENABLED};
+// Re-exported at the crate root so the modules that reach into what used to be
+// lib.rs's own top-level statics (crashlog.rs, llm.rs) need no changes:
+// `crate::CRASH_REPORTING_ENABLED` and `crate::maybe_offer_localcli()` both
+// still resolve. `AlwaysOnTopGuard` is deliberately NOT re-exported: every
+// consumer left (commands/playback.rs, commands/lyrics_cmds.rs) is inside
+// this crate's own tree and takes it from `crate::state` directly.
+pub(crate) use state::{maybe_offer_localcli, CRASH_REPORTING_ENABLED};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -106,7 +118,27 @@ pub fn run() {
             #[cfg(windows)]
             app.manage(Mutex::<Option<smtc::Session>>::new(None));
             app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "available": false }))));
-            app.manage(Mutex::<Option<spotify::SpotifyToken>>::new(None));
+
+            // Recording temp files a previous session left behind (audio.rs).
+            // Unlike a transcription, a recording is not journaled — it is
+            // only worth resuming while its song is still playing — so a hard
+            // kill leaves a file with nothing pointing at it, and a capped one
+            // is over 100 MB at native rate.
+            audio::sweep_stale_recordings();
+
+            // The transcription journal (JOB-ENGINE section 4 / 7.1). Opened
+            // before anything can submit a transcription job, and swept
+            // immediately after — any row still present at this exact moment
+            // was left by a session that did not end cleanly (see journal.rs's
+            // module doc for why presence alone means that).
+            if let Some(journal) = journal::open(&handle) {
+                let stale = journal.take_stale();
+                app.manage(journal);
+                if !stale.is_empty() {
+                    log::info!("resuming {} transcription(s) left over from a previous session", stale.len());
+                    commands::lyrics_cmds::resume_stale_transcriptions(handle.clone(), stale);
+                }
+            }
 
             // Apply any keys saved via the 🔑 panel, then check for an update.
             commands::prefs::load_api_keys(&handle);
@@ -146,6 +178,9 @@ pub fn run() {
             commands::prefs::set_display_mode,
             commands::playback::start_audio_capture,
             commands::playback::stop_audio_capture,
+            commands::playback::set_audio_waveform,
+            commands::playback::start_native_song_recording,
+            commands::playback::discard_native_song_recording,
             commands::prefs::set_autostart,
             commands::prefs::get_autostart,
             commands::prefs::get_transcribe_config,
@@ -167,10 +202,9 @@ pub fn run() {
             commands::lyrics_cmds::save_beatmap,
             commands::lyrics_cmds::save_heatmap,
             commands::lyrics_cmds::presync_list,
-            commands::spotify_cmds::spotify_status,
-            commands::spotify_cmds::spotify_authorize,
-            commands::spotify_cmds::spotify_playlists,
-            commands::spotify_cmds::spotify_playlist_tracks,
+            commands::lyrics_cmds::precompute_tracks,
+            commands::lyrics_cmds::transcribe_local_file,
+            commands::lyrics_cmds::stop_native_song_recording,
             commands::misc::report_jobs,
             commands::misc::report_client_error,
             commands::misc::open_crash_log,

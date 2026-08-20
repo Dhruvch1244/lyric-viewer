@@ -219,7 +219,9 @@ mod tests {
     #[test]
     fn envelopes_are_normalised_to_peak() {
         let sr = 48_000u32;
-        let s: Vec<f32> = (0..sr).map(|i| (i as f32 / sr as f32 * 6.28 * 200.0).sin() * 0.3).collect();
+        let s: Vec<f32> = (0..sr)
+            .map(|i| (i as f32 / sr as f32 * std::f32::consts::TAU * 200.0).sin() * 0.3)
+            .collect();
         let a = analyse_samples(&s, sr);
         let peak = a.level.iter().cloned().fold(0.0_f32, f32::max);
         assert!((peak - 1.0).abs() < 0.05, "peak should be ~1.0, got {peak}");

@@ -307,6 +307,6 @@ mod tests {
         assert!(plain.is_some(), "expected fetch_plain to return lyric text");
         let text = plain.unwrap();
         assert!(text.len() > 100, "lyrics text looks too short: {} chars", text.len());
-        eprintln!("first 200 chars: {}", &text.chars().take(200).collect::<String>());
+        eprintln!("first 200 chars: {}", text.chars().take(200).collect::<String>());
     }
 }

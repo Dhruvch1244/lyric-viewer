@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::lyrics_cmds::{track_from_value, track_key};
+use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 
 /// Fetch cover art for a track and emit it to the renderer, on its own thread.
 /// The renderer uses the image as the blurred backdrop and derives a palette
@@ -15,9 +16,38 @@ pub(crate) fn artwork_choice_path(app: &AppHandle, key: &str) -> Option<std::pat
     Some(dir.join(format!("{key}.json")))
 }
 
+/// Queue the cover-art lookup on the engine's I/O lane. Separate job from the
+/// lyric fetch on purpose: they share a track (so one `cancel_track` stops
+/// both) but not a dedup key, so a miss on one never suppresses the other.
 pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, duration_ms: i64) {
-    std::thread::spawn(move || {
-        let key = track_key(&artist, &title);
+    let key = track_key(&artist, &title);
+    jobs::submit(ArtworkJob { app, title, artist, duration_ms, key }, Priority::Now);
+}
+
+struct ArtworkJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    duration_ms: i64,
+    key: String,
+}
+
+impl Runnable for ArtworkJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("artwork:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let ArtworkJob { app, title, artist, duration_ms, key } = *self;
+
         // A hand-picked cover wins over the automatic sources.
         if let Some(path) = artwork_choice_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
@@ -33,7 +63,14 @@ pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, dur
             }
         }
         let track = crate::lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
-        if let Some(art) = crate::artwork::fetch_artwork(&track) {
+        let art = crate::artwork::fetch_artwork(&track);
+        // Checked after the fetch, not before the emit only: a stale cover
+        // painted over the song that is actually playing is the visible bug
+        // this prevents.
+        if cancel.cancelled() {
+            return;
+        }
+        if let Some(art) = art {
             let _ = app.emit(
                 "artwork",
                 json!({
@@ -44,21 +81,28 @@ pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, dur
                 }),
             );
         }
-    });
+    }
 }
 
 /// Cover-art options for the "choose a different cover" grid (thumbnails inlined).
-#[tauri::command]
+///
+/// NOT a job on the engine, unlike every other fetch in this module: the
+/// renderer awaits this one and paints the grid from its return value, and the
+/// engine is fire-and-forget — jobs emit events, they have no reply channel.
+/// `(async)` is the whole fix it needs.
+///
+/// It previously spawned a thread and then blocked on `rx.recv()`, which reads
+/// as "off the command thread" but is not: the sync `#[tauri::command]` ran on
+/// the main thread and then sat there waiting for a three-source network
+/// fan-out plus thumbnail downloads to finish. Same defect as the file pickers
+/// (see `import_lyrics`), minus the true deadlock — the event loop stalled for
+/// the duration rather than forever. `(async)` puts the whole call on the
+/// async runtime, so the helper thread and channel have nothing left to do.
+#[tauri::command(async)]
 pub(crate) fn artwork_candidates(app: AppHandle, track: Value) -> Value {
     let t = track_from_value(&track);
-    // Off the command thread: this fans out to three sources + thumbnails.
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(crate::artwork::fetch_candidates(&t));
-    });
-    let candidates = rx.recv().unwrap_or(json!([]));
     let _ = app;
-    json!({ "candidates": candidates })
+    json!({ "candidates": crate::artwork::fetch_candidates(&t) })
 }
 
 /// Download and remember a hand-picked cover; emit it as the current artwork.

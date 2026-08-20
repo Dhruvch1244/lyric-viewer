@@ -8,5 +8,4 @@ pub(crate) mod lyrics_cmds;
 pub(crate) mod misc;
 pub(crate) mod playback;
 pub(crate) mod prefs;
-pub(crate) mod spotify_cmds;
 pub(crate) mod updater;

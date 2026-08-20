@@ -37,6 +37,7 @@ $repo     = Split-Path -Parent $PSScriptRoot
 $srcTauri = Join-Path $repo 'src-tauri'
 $icons    = Join-Path $srcTauri 'icons'
 $exe      = Join-Path $srcTauri 'target\release\lyric-overlay.exe'
+$sidecar  = Join-Path $srcTauri 'target\release\lyric-inference.exe'
 $manifest = Join-Path $srcTauri 'msix\AppxManifest.xml'
 $stage    = Join-Path $srcTauri 'target\msix'
 $distDir  = Join-Path $repo 'dist-store'
@@ -69,6 +70,15 @@ Write-Host "==> MSIX version $msixVersion" -ForegroundColor Cyan
 if (-not $SkipBuild) {
     Push-Location $repo
     try {
+        # The inference sidecar, built directly rather than through Tauri's
+        # `externalBin`: this build passes --no-bundle, and externalBin is
+        # copied during BUNDLING, so the overlay config would do nothing here.
+        # The MSIX layout below places it beside the app exe by hand, which is
+        # exactly where inference.rs::sidecar_path looks for it at runtime.
+        Write-Host "==> cargo build --release -p lyric-inference" -ForegroundColor Cyan
+        & cargo build --release --manifest-path (Join-Path $srcTauri 'Cargo.toml') -p lyric-inference
+        if ($LASTEXITCODE -ne 0) { throw "sidecar build failed (exit $LASTEXITCODE)" }
+
         Write-Host "==> tauri build --no-bundle --features store" -ForegroundColor Cyan
         & npx tauri build --no-bundle --features store
         if ($LASTEXITCODE -ne 0) { throw "tauri build failed (exit $LASTEXITCODE)" }
@@ -77,6 +87,11 @@ if (-not $SkipBuild) {
     }
 }
 if (-not (Test-Path $exe)) { throw "Release exe not found: $exe (run without -SkipBuild)" }
+# Hard failure, not a warning. A package missing this one file installs and
+# runs perfectly while silently having no native transcription, no word-level
+# timing and no song identification — the failure mode is a quieter app, not
+# an error anyone would report.
+if (-not (Test-Path $sidecar)) { throw "Inference sidecar not found: $sidecar (run without -SkipBuild)" }
 
 # ---- stage the package layout -------------------------------------------
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
@@ -84,6 +99,10 @@ $assetsDir = Join-Path $stage 'Assets'
 New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
 
 Copy-Item $exe (Join-Path $stage 'lyric-overlay.exe') -Force
+# Beside the app exe, named without a target triple — that is where
+# inference.rs::sidecar_path looks first, and it matches where Tauri's own
+# externalBin bundling puts it in the NSIS build.
+Copy-Item $sidecar (Join-Path $stage 'lyric-inference.exe') -Force
 
 # Stamp the real version into a staged copy of the manifest. Replace ONLY the
 # Identity placeholder Version="0.0.0.0" — case-sensitively (-creplace) so it

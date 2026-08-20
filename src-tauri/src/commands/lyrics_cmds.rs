@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 use crate::state::{AlwaysOnTopGuard, CurTrack};
 use crate::tray::set_tray_tooltip;
 
@@ -69,12 +70,55 @@ fn resolve_mood(app: &AppHandle, title: &str, artist: &str, key: &str, cue_texts
         let _ = app.emit("mood", payload);
         return;
     }
-    let app = app.clone();
-    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
-    std::thread::spawn(move || {
+    jobs::submit(
+        MoodJob {
+            app: app.clone(),
+            title: title.to_string(),
+            artist: artist.to_string(),
+            key: key.to_string(),
+            cue_texts,
+        },
+        Priority::Now,
+    );
+}
+
+/// The I/O-lane job behind `resolve_mood`. I/O and not CPU despite the name:
+/// `mood::analyze` is an LLM round trip, so this waits on a socket.
+struct MoodJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+    cue_texts: Vec<String>,
+}
+
+impl Runnable for MoodJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("mood:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let MoodJob { app, title, artist, key, cue_texts } = *self;
+        if cancel.cancelled() {
+            return;
+        }
         let Some(m) = crate::mood::analyze(&cue_texts) else { return };
         let mood_val = json!({ "mood": m.mood, "hue": m.hue, "energy": m.energy, "palette": m.palette });
         // Merge the mood into the lyrics cache so it runs once per song.
+        //
+        // Written even when cancelled, deliberately: the LLM call is already
+        // paid for and the file is keyed by track, so caching it means the
+        // song is instant next time. Only the *emit* below is withheld — a
+        // stale palette repainting the song that is actually playing now is
+        // the visible bug, and it is the emit that causes it, not the write.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
@@ -83,10 +127,13 @@ fn resolve_mood(app: &AppHandle, title: &str, artist: &str, key: &str, cue_texts
                 }
             }
         }
+        if cancel.cancelled() {
+            return;
+        }
         let mut payload = mood_val;
         payload["track"] = json!({ "title": title, "artist": artist });
         let _ = app.emit("mood", payload);
-    });
+    }
 }
 
 /// Emit per-line singer attribution. A cached answer emits immediately;
@@ -99,13 +146,56 @@ fn resolve_attribution(app: &AppHandle, title: &str, artist: &str, key: &str, cu
         let _ = app.emit("attribution", payload);
         return;
     }
-    let app = app.clone();
-    let (title, artist, key) = (title.to_string(), artist.to_string(), key.to_string());
-    std::thread::spawn(move || {
+    jobs::submit(
+        AttributionJob {
+            app: app.clone(),
+            title: title.to_string(),
+            artist: artist.to_string(),
+            key: key.to_string(),
+            cue_texts,
+        },
+        Priority::Now,
+    );
+}
+
+/// The I/O-lane job behind `resolve_attribution` — like `MoodJob`, an LLM
+/// round trip rather than local computation.
+///
+/// A separate job from `MoodJob` even though both fire at the same moment and
+/// both merge into the same cache file: they are independent LLM calls, so one
+/// failing or being skipped must not suppress the other. Distinct dedup keys,
+/// shared track key, so a single `cancel_track` still stops both.
+struct AttributionJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+    cue_texts: Vec<String>,
+}
+
+impl Runnable for AttributionJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("attribution:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let AttributionJob { app, title, artist, key, cue_texts } = *self;
+        if cancel.cancelled() {
+            return;
+        }
         let Some((artists, singers)) = crate::attribute::attribute_lines(&cue_texts, &title, &artist) else {
             return;
         };
         let attr = json!({ "artists": artists, "singers": singers });
+        // Cached even when cancelled — same reasoning as `MoodJob::run`.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
@@ -114,30 +204,93 @@ fn resolve_attribution(app: &AppHandle, title: &str, artist: &str, key: &str, cu
                 }
             }
         }
+        if cancel.cancelled() {
+            return;
+        }
         let mut payload = attr;
         payload["track"] = json!({ "title": title, "artist": artist });
         let _ = app.emit("attribution", payload);
-    });
+    }
 }
 
 /// Resolve lyrics for a track and emit `lyrics` events. Cache-first: a song
-/// heard before replays instantly and offline. Runs on its own thread so the
-/// network call never stalls SMTC position ticks.
+/// heard before replays instantly and offline.
+///
+/// The fetch itself is a job on the engine's I/O lane, so a track change
+/// cancels it (`jobs::cancel_track`) instead of leaving a doomed lookup racing
+/// the new song's. What is NOT deferred is the `CurTrack`/tray update below:
+/// that is state, not I/O, and other commands (`request_translation`,
+/// `finalize_transcription`) read it immediately — it must not sit behind a
+/// queue, however short.
 pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i64) {
-    std::thread::spawn(move || {
-        let key = track_key(&artist, &title);
+    let key = track_key(&artist, &title);
+    // Abandon the previous song's outstanding lookups before starting this
+    // one's. Every track-change path reaches here, so this is the one place
+    // that needs to know.
+    jobs::set_current_track(&key);
+    if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
+        *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
+    }
+    let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
+    set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
 
-        // Remember what's playing so translation/other commands can find its cues.
-        if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
-            *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
-        }
-        let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
-        set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
+    // Phase 2: record this play and warm the cache for whatever usually
+    // follows it. Queued behind the current song's own lookup by priority, so
+    // it can never delay the words the user is waiting for right now.
+    jobs::submit(
+        SpeculateJob {
+            app: app.clone(),
+            current: crate::history::Play {
+                key: key.clone(),
+                title: title.clone(),
+                artist: artist.clone(),
+                duration_ms,
+            },
+        },
+        Priority::Next,
+    );
+
+    jobs::submit(LyricsJob { app, title, artist, duration_ms, key }, Priority::Now);
+}
+
+/// The I/O-lane job behind `resolve_lyrics`.
+struct LyricsJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    duration_ms: i64,
+    key: String,
+}
+
+impl Runnable for LyricsJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("lyrics:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let LyricsJob { app, title, artist, duration_ms, key } = *self;
 
         // Disk cache hit → replay immediately, offline.
         if let Some(path) = lyrics_cache_path(&app, &key) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                    // Short window, but a real one: the disk read is fast, not
+                    // instant, and this branch is what queues MoodJob and
+                    // AttributionJob. Bailing here stops them being registered
+                    // under a track the user has already skipped past — once
+                    // registered after `cancel_track` has run, nothing would
+                    // ever cancel them.
+                    if cancel.cancelled() {
+                        return;
+                    }
                     let cue_texts = cue_texts_of(&cached);
                     let cached_mood = cached.get("mood").cloned();
                     let cached_attr = cached.get("attribution").cloned();
@@ -159,9 +312,25 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
         let track = crate::lyrics::Track { title: title.clone(), artist: artist.clone(), duration_ms };
         // LRCLIB first, then NetEase, then Kugou — each only runs when the
         // previous missed, so a song LRCLIB knows costs one request.
-        let found = crate::lyrics::fetch_synced(&track)
-            .or_else(|| crate::netease::fetch_synced(&track))
-            .or_else(|| crate::kugou::fetch_synced(&track));
+        //
+        // The cancel checks between sources are the whole point of running
+        // this on the engine: skipping tracks used to leave every doomed
+        // lookup running to completion, and — worse — emitting its result over
+        // the song that was actually playing by then. A cancelled job now
+        // stops at the next source boundary and emits nothing.
+        let mut found = None;
+        if !cancel.cancelled() {
+            found = crate::lyrics::fetch_synced(&track);
+        }
+        if found.is_none() && !cancel.cancelled() {
+            found = crate::netease::fetch_synced(&track);
+        }
+        if found.is_none() && !cancel.cancelled() {
+            found = crate::kugou::fetch_synced(&track);
+        }
+        if cancel.cancelled() {
+            return;
+        }
         match found {
             Some((cues, source)) => {
                 let cue_texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
@@ -197,6 +366,9 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
                 // can say "timing needed" instead of a flat "not found" when
                 // there's actually something for a Whisper pass to align to.
                 let plain_available = fetch_plain_any(&track).is_some();
+                if cancel.cancelled() {
+                    return;
+                }
                 let _ = app.emit(
                     "lyrics",
                     json!({
@@ -207,8 +379,562 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
                 );
             }
         }
-    });
+    }
 }
+
+/* --------------------------------------------- phase 3: native inference --- */
+
+/// Job ids for the sidecar. Only needs to be unique within a run — the sidecar
+/// is spawned per job and never sees two.
+static INFERENCE_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Transcribe a local audio file in the inference sidecar.
+///
+/// The local-file case needs no PCM over IPC: Rust already decodes these
+/// files for `analyze_local_file`, so the samples never leave the backend.
+/// The SMTC case reaches the same pipeline through
+/// `stop_native_song_recording` below, which taps the WASAPI loopback thread
+/// instead of decoding a file — see JOB-ENGINE section 7.10.
+///
+/// Returns immediately; the result arrives as `transcribe-progress` events and
+/// a cached lyrics file, exactly as the WebView path's does.
+#[tauri::command]
+pub(crate) fn transcribe_local_file(app: AppHandle, track: Value, path: String) -> Value {
+    if !crate::inference::available() {
+        return json!({ "status": "unavailable", "message": "inference sidecar not installed" });
+    }
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    let queued = jobs::submit(NativeTranscribeJob { app, track, path, key }, Priority::Now);
+    json!({ "status": if queued { "queued" } else { "already-running" } })
+}
+
+/// The Inference-lane job behind `transcribe_local_file`.
+struct NativeTranscribeJob {
+    app: AppHandle,
+    track: Value,
+    path: String,
+    key: String,
+}
+
+impl Runnable for NativeTranscribeJob {
+    /// The lane that exists for exactly this: concurrency 1, below-normal
+    /// threads. Two transcriptions at once thrash cache and memory for no
+    /// throughput gain.
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("transcribe:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let NativeTranscribeJob { app, track, path, key } = *self;
+
+        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
+        let Some((samples, rate)) = crate::analysis::decode_to_mono(&path) else {
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": "cannot decode file" }));
+            return;
+        };
+        if cancel.cancelled() {
+            return;
+        }
+        run_native_transcription(app, track, key, samples, rate, None, cancel);
+    }
+}
+
+/// Shared by every native transcription entry point once each has produced
+/// its own `(samples, rate)` — a local file decodes them, a native song
+/// recording (see `NativeSongRecordingJob`) reads them straight back from
+/// disk with no decode step at all. From here on the pipeline cannot tell
+/// which one it was fed: download models if needed, journal the attempt so a
+/// crash does not lose it, run the sidecar, and finalize.
+fn run_native_transcription(
+    app: AppHandle,
+    track: Value,
+    key: String,
+    samples: Vec<f32>,
+    rate: u32,
+    language: Option<String>,
+    cancel: &CancelToken,
+) {
+    let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+    let pcm = crate::inference::resample_to_16k(&samples, rate);
+    drop(samples); // the pre-resample original can be several times the resampled size
+
+    // Find out what this actually is, while the audio is in hand (JOB-ENGINE
+    // §5.1). Only fires on metadata that looks browser-shaped and only when a
+    // key is configured, so on a normal library it costs nothing.
+    let identified = identify_from_audio(&app, &track, &pcm);
+
+    // First transcription on a fresh install: the models directory is empty,
+    // and nothing else in the app ever populates it. This is a one-time
+    // ~79 MB fetch, cached on disk after — the same shape whisper.js already
+    // has for the WASM path, not new behaviour.
+    if let Some(models_dir) = crate::inference::model_dir(&app) {
+        let progress_app = app.clone();
+        let progress_track = track.clone();
+        let ensured = crate::models::ensure(
+            &models_dir,
+            |file, pct| {
+                let _ = progress_app.emit(
+                    "transcribe-progress",
+                    json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
+                );
+            },
+            &|| cancel.cancelled(),
+        );
+        if let Err(message) = ensured {
+            if message != "cancelled" {
+                log::warn!("model download failed: {message}");
+                let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+            }
+            return;
+        }
+    }
+
+    // Journal the attempt before the sidecar can write anything, so a crash
+    // between here and the matching `finish` below leaves a row pointing at a
+    // real, resumable PCM file — see journal.rs.
+    let t = track_from_value(&track);
+    let predicted_pcm_path = crate::inference::pcm_temp_path(job_id);
+    let journal_id = app
+        .try_state::<crate::journal::Journal>()
+        .and_then(|j| j.start(&key, &t.artist, &t.title, t.duration_ms, &predicted_pcm_path.to_string_lossy(), language.as_deref()));
+
+    let progress_track = track.clone();
+    let progress_app = app.clone();
+    let result = crate::inference::transcribe(&app, job_id, &pcm, language, cancel, move |stage, pct| {
+        let _ = progress_app.emit(
+            "transcribe-progress",
+            json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
+        );
+    });
+
+    if let Some(id) = journal_id {
+        if let Some(j) = app.try_state::<crate::journal::Journal>() {
+            j.finish(id);
+        }
+    }
+
+    match result {
+        Ok(cues) => {
+            let cues = crate::inference::to_lyric_cues(cues);
+            if cues.is_empty() {
+                let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+                return;
+            }
+            // Straight into the existing finaliser: alignment to the real
+            // plain lyrics, LLM correction, caching and the done event are
+            // all identical whether the cues came from a local file, a
+            // native recording, or the WebView — duplicating any of it would
+            // be how those start disagreeing.
+            let mut payload = json!({ "track": track, "cues": cues });
+            if let Some(id) = identified {
+                payload["identified"] = json!({ "artist": id.artist, "title": id.title, "mbid": id.mbid });
+            }
+            let _ = finalize_transcription(app, payload);
+        }
+        Err(message) => {
+            log::warn!("native transcription failed: {message}");
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+        }
+    }
+}
+
+/// Identify what is really playing, from the audio rather than the metadata
+/// (JOB-ENGINE §5.1).
+///
+/// Placed on the transcription path on purpose, and not as a job of its own:
+/// this is the one moment the app already has a song's worth of decoded PCM in
+/// memory, so identification is a fingerprint pass and one request rather than
+/// a second recording. It is also the moment it is worth the most — a
+/// transcription with a garbage title finds no real lyrics to align to, so
+/// Whisper's mishearings get cached as *the* lyrics for that song.
+///
+/// Returns `None` far more often than not, and every one of those is normal:
+/// no key configured, metadata that already looks fine, too little audio, or
+/// nothing confident enough in the index. A failure here never fails the
+/// transcription — the worst case is the behaviour that exists today.
+fn identify_from_audio(app: &AppHandle, track: &Value, pcm: &[f32]) -> Option<crate::acoustid::Identified> {
+    if !crate::acoustid::available() {
+        return None;
+    }
+    let t = track_from_value(track);
+    if !crate::acoustid::worth_identifying(&t) {
+        return None;
+    }
+
+    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "identifying" }));
+    let fp = match crate::fingerprint::compute(pcm, crate::inference::SAMPLE_RATE) {
+        Ok(fp) => fp,
+        Err(e) => {
+            log::info!("not fingerprinting: {e}");
+            return None;
+        }
+    };
+    // AcoustID scores on duration too, and it wants the WHOLE track's, not the
+    // excerpt the fingerprint covers. Zero when SMTC did not report one, which
+    // the lookup tolerates.
+    let duration_secs = (t.duration_ms.max(0) / 1000) as u32;
+    match crate::acoustid::identify(&fp, duration_secs) {
+        Ok(Some(id)) => {
+            log::info!("identified '{}' as '{} - {}' (score {:.2})", t.title, id.artist, id.title, id.score);
+            let _ = app.emit(
+                "transcribe-progress",
+                json!({ "track": track, "stage": "identified", "artist": id.artist, "title": id.title }),
+            );
+            Some(id)
+        }
+        Ok(None) => {
+            log::info!("acoustid had nothing confident for '{}'", t.title);
+            None
+        }
+        Err(e) => {
+            log::warn!("acoustid lookup failed: {e}");
+            None
+        }
+    }
+}
+
+/* --------------------------------------- native SMTC song recording --- */
+
+/// Stop the native song recording (`start_native_song_recording`) and
+/// transcribe what was captured.
+///
+/// This is the SMTC-playback counterpart to `transcribe_local_file` — same
+/// pipeline from here on, different source for the samples. It replaces
+/// `src/renderer/capture.js` + `transcribeAudio`'s WebView Whisper pass: that
+/// path recorded PCM in a `ScriptProcessorNode` and pushed the whole
+/// multi-megabyte `Float32Array` across Tauri's IPC to get it into Rust at
+/// all. This has nothing to push — the backend captured the audio itself, so
+/// only a file path crosses the boundary (JOB-ENGINE §7.7's opening line).
+///
+/// `track` is the song that was JUST playing (the renderer's `listeningTrack`,
+/// captured before the track actually changed — this command fires on the
+/// change itself, the same "flush on the way out" shape `flushTranscription`
+/// already had).
+#[tauri::command]
+pub(crate) fn stop_native_song_recording(app: AppHandle, track: Value, language: Option<String>) -> Value {
+    let Some((path, rate)) = crate::audio::stop_recording() else {
+        return json!({ "status": "too-short" });
+    };
+    if !crate::inference::available() {
+        let _ = std::fs::remove_file(&path);
+        return json!({ "status": "unavailable", "message": "inference sidecar not installed" });
+    }
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    let queued = jobs::submit(NativeSongRecordingJob { app, track, path, rate, language, key }, Priority::Now);
+    json!({ "status": if queued { "queued" } else { "already-running" } })
+}
+
+/// The Inference-lane job behind `stop_native_song_recording`.
+struct NativeSongRecordingJob {
+    app: AppHandle,
+    track: Value,
+    path: std::path::PathBuf,
+    rate: u32,
+    language: Option<String>,
+    key: String,
+}
+
+impl Runnable for NativeSongRecordingJob {
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        // Same prefix `NativeTranscribeJob` uses for the same track: a local
+        // file and a native recording of the same song are the same job as
+        // far as dedup is concerned, and only one should ever run.
+        format!("transcribe:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let NativeSongRecordingJob { app, track, path, rate, language, key } = *self;
+        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                let _ =
+                    app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": format!("cannot read recording: {e}") }));
+                return;
+            }
+        };
+        // The raw native-rate file was only ever meant to survive this one
+        // read — the resample below produces the copy that actually
+        // proceeds, and nothing else references this path.
+        let _ = std::fs::remove_file(&path);
+
+        let samples: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        if cancel.cancelled() {
+            return;
+        }
+        run_native_transcription(app, track, key, samples, rate, language, cancel);
+    }
+}
+
+/* ------------------------------------------------ journal: resume path --- */
+
+/// Submit one `Idle`-priority job per row the journal swept at startup.
+///
+/// Called once, from `lib.rs`'s `setup`, with exactly the rows
+/// `journal::Journal::take_stale` returned — each already removed from the
+/// table, so a resume that itself fails will not be retried at the next
+/// startup too. `Idle` because nothing here is what the user is waiting on;
+/// there may not even be anything playing yet.
+pub(crate) fn resume_stale_transcriptions(app: AppHandle, stale: Vec<crate::journal::StaleJob>) {
+    for job in stale {
+        if !std::path::Path::new(&job.pcm_path).is_file() {
+            // The crash happened before write_pcm finished, or something else
+            // already cleaned the temp file up. Nothing to resume.
+            log::info!("skipping stale transcription for {} — its PCM file is gone", job.track_key);
+            continue;
+        }
+        jobs::submit(ResumeTranscribeJob { app: app.clone(), job }, Priority::Idle);
+    }
+}
+
+/// The Inference-lane job behind `resume_stale_transcriptions`.
+struct ResumeTranscribeJob {
+    app: AppHandle,
+    job: crate::journal::StaleJob,
+}
+
+impl Runnable for ResumeTranscribeJob {
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("transcribe:{}", self.job.track_key)
+    }
+
+    fn track(&self) -> Option<String> {
+        // Deliberately NOT `Some(self.job.track_key.clone())`. A track()
+        // dedup key is also what `cancel_track` uses to stop everything
+        // queued for the song a user just skipped past — but this job is for
+        // a song that (almost certainly) is not what's playing now, and
+        // tying it to that track identity would let an ordinary skip cancel a
+        // resume that has nothing to do with the skip. `dedup_key` above
+        // still stops it racing a FRESH transcription of the same track,
+        // which is the dedup guarantee that actually matters here.
+        None
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let ResumeTranscribeJob { app, job } = *self;
+        let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+
+        if let Some(models_dir) = crate::inference::model_dir(&app) {
+            let ensured = crate::models::ensure(&models_dir, |_, _| {}, &|| cancel.cancelled());
+            if let Err(message) = ensured {
+                if message != "cancelled" {
+                    log::warn!("resumed transcription for {} could not fetch models: {message}", job.track_key);
+                }
+                let _ = std::fs::remove_file(&job.pcm_path);
+                return;
+            }
+        }
+
+        let pcm_path = std::path::PathBuf::from(&job.pcm_path);
+        let result = crate::inference::transcribe_existing_pcm(&app, job_id, pcm_path, job.language.clone(), cancel, |_, _| {});
+
+        match result {
+            Ok(cues) => {
+                let cues = crate::inference::to_lyric_cues(cues);
+                if cues.is_empty() {
+                    log::info!("resumed transcription for {} produced no cues", job.track_key);
+                    return;
+                }
+                let track = json!({ "title": job.title, "artist": job.artist, "durationMs": job.duration_ms });
+                let payload = json!({ "track": track, "cues": cues });
+                // Quiet: see finalize_transcription_inner's doc for why a
+                // resumed job must not emit transcribe-progress.
+                let _ = finalize_transcription_inner(&app, payload, true);
+                log::info!("resumed transcription for {} finished and was cached silently", job.track_key);
+            }
+            Err(message) => {
+                if message != "cancelled" {
+                    log::warn!("resumed transcription for {} failed: {message}", job.track_key);
+                }
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------- phase 2: precompute --- */
+
+/// Fetch and cache a track's synced lyrics without emitting anything.
+///
+/// The emit is what makes this different from `LyricsJob`, and the difference
+/// is the whole safety argument for speculating at all: a precomputed song is
+/// not the song playing, so pushing a `lyrics` event for it would replace the
+/// words on screen with a different song's. Writing only to the cache means a
+/// wrong guess costs one wasted request and can never be seen.
+///
+/// Returns whether anything was newly cached.
+fn warm_lyrics_cache(app: &AppHandle, title: &str, artist: &str, key: &str, cancel: &CancelToken) -> bool {
+    // Already on disk — the common case once a library has been played
+    // through, and the reason this is cheap to run on every track change.
+    if let Some(path) = lyrics_cache_path(app, key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                if cached.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+                    return false;
+                }
+            }
+        }
+    }
+    if cancel.cancelled() {
+        return false;
+    }
+
+    let track = crate::lyrics::Track { title: title.to_string(), artist: artist.to_string(), duration_ms: 0 };
+    let mut found = crate::lyrics::fetch_synced(&track);
+    if found.is_none() && !cancel.cancelled() {
+        found = crate::netease::fetch_synced(&track);
+    }
+    if found.is_none() && !cancel.cancelled() {
+        found = crate::kugou::fetch_synced(&track);
+    }
+
+    match found {
+        Some((cues, source)) if !cues.is_empty() => {
+            // Written in exactly the shape `LyricsJob`'s disk-cache branch
+            // expects, so a precomputed song takes the instant path when it
+            // does start — that path is the entire point of this.
+            let payload = json!({
+                "title": title, "artist": artist, "cues": cues,
+                "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+                "source": source, "status": "ok", "indic": false, "hasWordTimings": false,
+            });
+            if let Some(path) = lyrics_cache_path(app, key) {
+                let _ = std::fs::write(&path, serde_json::to_string(&payload).unwrap_or_default());
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Warm the cache for one specific track the caller already knows is coming.
+///
+/// Used by the local-file queue lookahead, where there is no guessing involved
+/// — `LocalPlayer` owns the queue, so the next entries are simply known.
+struct PrecomputeJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+}
+
+impl Runnable for PrecomputeJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("precompute:{}", self.key)
+    }
+
+    /// Belongs to the track it is fetching *for*, not the one playing. That
+    /// matters: `set_current_track` cancels the track being left behind, so
+    /// filing speculation under the song it is about means arriving at that
+    /// song never cancels the work done to prepare for it.
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let PrecomputeJob { app, title, artist, key } = *self;
+        warm_lyrics_cache(&app, &title, &artist, &key, cancel);
+    }
+}
+
+/// Record the current play, then warm the cache for whatever usually follows
+/// it — the SMTC half of Phase 2, where no queue is visible to read.
+struct SpeculateJob {
+    app: AppHandle,
+    current: crate::history::Play,
+}
+
+impl Runnable for SpeculateJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("speculate:{}", self.current.key)
+    }
+
+    /// Deliberately untracked. It does two things that both want to survive a
+    /// track change: recording the play, which is the data the predictor is
+    /// built from and must not be dropped when a song is skipped early; and
+    /// warming a cache, which produces no visible output, so a stale run
+    /// wastes one request and nothing else.
+    fn track(&self) -> Option<String> {
+        None
+    }
+
+    fn run(self: Box<Self>, _cancel: &CancelToken) {
+        let SpeculateJob { app, current } = *self;
+        let key = current.key.clone();
+        crate::history::record_play(&app, current);
+
+        let Some(next) = crate::history::predict_next(&app, &key) else { return };
+        // Hands off to `PrecomputeJob` rather than warming the cache inline,
+        // so both routes to speculation share one dedup key. During local
+        // playback both are live at once — the queue lookahead and this — and
+        // they often agree on the same song; going through the engine means
+        // the second one is dropped instead of duplicating the fetch.
+        jobs::submit(
+            PrecomputeJob { app, title: next.title, artist: next.artist, key: next.key },
+            Priority::Next,
+        );
+    }
+}
+
+/// Warm the lyrics cache for tracks the renderer knows are coming — the local
+/// player's queue lookahead. Fire-and-forget; nothing is emitted and the
+/// renderer is not told when it finishes, because there is nothing to show.
+///
+/// Submitted at `Next`, so the playing song's own lookup always wins the lane.
+#[tauri::command]
+pub(crate) fn precompute_tracks(app: AppHandle, tracks: Vec<Value>) -> Value {
+    let mut queued = 0;
+    for t in tracks.iter().take(PRECOMPUTE_LOOKAHEAD) {
+        let track = track_from_value(t);
+        if track.title.is_empty() {
+            continue;
+        }
+        let key = track_key(&track.artist, &track.title);
+        if jobs::submit(
+            PrecomputeJob { app: app.clone(), title: track.title, artist: track.artist, key },
+            Priority::Next,
+        ) {
+            queued += 1;
+        }
+    }
+    json!({ "status": "ok", "queued": queued })
+}
+
+/// How far down the queue to look. Two is enough to cover the gap between one
+/// song ending and the next starting even on a slow lookup, without spending
+/// requests on a queue position the user is likely to skip past or re-order
+/// before reaching.
+const PRECOMPUTE_LOOKAHEAD: usize = 2;
 
 /// Manual escape hatch for when every auto-fetch source (LRCLIB/NetEase/
 /// Kugou) misses or mismatches and Whisper hasn't run (or can't — an
@@ -222,7 +948,15 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
 /// guard treats it exactly like a genuine LRCLIB hit: never silently
 /// overwritten by a lower-accuracy Whisper pass, but still eligible for the
 /// same real per-word-timing upgrade an LRCLIB track gets.
-#[tauri::command]
+/// `(async)` IS LOAD-BEARING, NOT DECORATION. Tauri runs a command without the
+/// `async` keyword **on the main thread** unless it is declared
+/// `#[tauri::command(async)]`, and `blocking_pick_file` is documented as
+/// "should NOT be used when running on the main thread" because it waits on
+/// the event loop that the main thread is the one pumping. Sync + blocking
+/// picker = the main thread waiting on itself: the whole app freezes with no
+/// dialog ever shown. `(async)` moves this body to a worker thread, where the
+/// blocking picker is exactly the "other contexts" its docs sanction.
+#[tauri::command(async)]
 pub(crate) fn import_lyrics(track: Value, app: AppHandle) -> Value {
     use tauri_plugin_dialog::DialogExt;
     let t = track_from_value(&track);
@@ -461,16 +1195,58 @@ fn source_is_whisper_derived(source: &Value) -> bool {
 /// lyrics with a Whisper-accuracy version on every single play.
 #[tauri::command]
 pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
+    finalize_transcription_inner(&app, payload, false)
+}
+
+/// The shared implementation behind `finalize_transcription`.
+///
+/// `quiet` suppresses every `transcribe-progress` emit while keeping every
+/// cache write. This exists for exactly one caller: `resume_stale_jobs`,
+/// finishing a transcription left over from a crash at the NEXT startup, for
+/// a track that is almost certainly not the one now playing. `setStatus` in
+/// the renderer is not track-scoped — it is a global one-line status
+/// indicator — so an unsuppressed "matched real lyrics" or "fixed 3 misheard
+/// lines" from a resumed background job would read as being about whatever
+/// IS playing. Same asymmetry as Phase 2's precompute (§7.2): a cache write
+/// nobody sees is safe, a status message about the wrong song is a visible
+/// glitch.
+fn finalize_transcription_inner(app: &AppHandle, payload: Value, quiet: bool) -> Value {
+    macro_rules! emit {
+        ($name:expr, $payload:expr) => {
+            if !quiet {
+                let _ = app.emit($name, $payload);
+            }
+        };
+    }
+
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
-    let t = track_from_value(&track);
+    let mut t = track_from_value(&track);
     let raw_cues: Vec<crate::lyrics::Cue> = payload.get("cues").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     if raw_cues.is_empty() {
-        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+        emit!("transcribe-progress", json!({ "track": track, "stage": "empty" }));
         return json!({ "status": "empty" });
     }
     let key = track_key(&t.artist, &t.title);
 
-    if let Some(path) = lyrics_cache_path(&app, &key) {
+    // `identified` is what the AUDIO says this is (acoustid.rs), present only
+    // when the player's own metadata looked browser-shaped and a lookup came
+    // back confident. Applied strictly AFTER `key` is derived, which is the
+    // whole subtlety: the cache key has to stay the one the *player's*
+    // metadata produces, because that is what the next play of this song will
+    // look up — the browser will report the same video title again. Everything
+    // below wants the true names instead: the plain-lyric fetch, the LLM's
+    // context for correction, and the title/artist written into the cached
+    // payload and shown on screen.
+    if let Some(id) = payload.get("identified") {
+        let artist = id.get("artist").and_then(|a| a.as_str()).unwrap_or("").trim();
+        let title = id.get("title").and_then(|t| t.as_str()).unwrap_or("").trim();
+        if !artist.is_empty() && !title.is_empty() {
+            t.artist = artist.to_string();
+            t.title = title.to_string();
+        }
+    }
+
+    if let Some(path) = lyrics_cache_path(app, &key) {
         if let Ok(text) = std::fs::read_to_string(&path) {
             if let Ok(existing) = serde_json::from_str::<Value>(&text) {
                 let has_cues = existing.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
@@ -478,9 +1254,9 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                 if already_synced {
                     let existing_has_words = existing.get("hasWordTimings").and_then(|v| v.as_bool()).unwrap_or(false);
                     if existing_has_words {
-                        let _ = app.emit(
+                        emit!(
                             "transcribe-progress",
-                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" })
                         );
                         return json!({ "status": "skipped", "reason": "already-synced" });
                     }
@@ -499,9 +1275,9 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                         updated["cues"] = serde_json::to_value(&merged).unwrap_or(Value::Null);
                         updated["hasWordTimings"] = json!(true);
                         let _ = std::fs::write(&path, serde_json::to_string(&updated).unwrap_or_default());
-                        let _ = app.emit(
+                        emit!(
                             "transcribe-progress",
-                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() }),
+                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() })
                         );
                         return json!({ "status": "ok", "lines": upgraded_lines });
                     }
@@ -510,7 +1286,7 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                     // renderer's hasWordTimings stays false and tries again on
                     // a future play, same retry semantics as the whisper-only
                     // path below.
-                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
+                    emit!("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
                     return json!({ "status": "skipped", "reason": "no-anchors" });
                 }
             }
@@ -527,8 +1303,7 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         if coverage >= 0.35 && !aligned.is_empty() {
             final_cues = aligned;
             source = "lrclib-plain+whisper";
-            let _ =
-                app.emit("transcribe-progress", json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }));
         }
     }
 
@@ -540,12 +1315,12 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     // also when it is worth the most.
     if source == "whisper" {
         let (corrected, changed) = crate::correct::correct_transcript(&final_cues, &t.title, &t.artist, |batch, batches| {
-            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "correcting", "batch": batch, "batches": batches }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "correcting", "batch": batch, "batches": batches }));
         });
         if changed > 0 {
             final_cues = corrected;
             source = "whisper+llm";
-            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "corrected", "changed": changed }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "corrected", "changed": changed }));
         }
     }
 
@@ -558,10 +1333,10 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         "source": { "name": source },
         "status": "ok", "indic": false, "hasWordTimings": has_word_timings,
     });
-    if let Some(path) = lyrics_cache_path(&app, &key) {
+    if let Some(path) = lyrics_cache_path(app, &key) {
         let _ = std::fs::write(&path, serde_json::to_string(&payload_out).unwrap_or_default());
     }
-    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "done", "lines": lines }));
+    emit!("transcribe-progress", json!({ "track": track, "stage": "done", "lines": lines }));
     json!({ "status": "ok", "lines": lines })
 }
 
@@ -623,6 +1398,13 @@ fn presync_one(app: &AppHandle, artist: &str, title: &str) -> &'static str {
 /// list, so those songs play instantly and offline later. Runs sequentially
 /// (politely — LRCLIB gets a short gap between requests) and streams
 /// `presync-progress` events; a fresh call supersedes any run in flight.
+///
+/// Queues the run and returns immediately. It used to do the whole list
+/// inline, and — being a sync command, so running on the main thread — froze
+/// the event loop for as long as that took: one network round trip plus 150ms
+/// per track, which is minutes for a pasted album, let alone a playlist. The
+/// renderer never used the return value for anything but an error toast; it
+/// tracks progress through `presync-progress`, which is unchanged.
 #[tauri::command]
 pub(crate) fn presync_list(text: String, app: AppHandle) -> Value {
     let tracks: Vec<(String, String)> = text.lines().filter_map(parse_track_line).collect();
@@ -634,25 +1416,64 @@ pub(crate) fn presync_list(text: String, app: AppHandle) -> Value {
         return json!({ "status": "empty" });
     }
 
-    let (mut done, mut synced, mut cached, mut missed) = (0usize, 0usize, 0usize, 0usize);
-    for (artist, title) in &tracks {
-        if PRESYNC_TOKEN.load(Ordering::SeqCst) != token {
-            return json!({ "status": "cancelled" });
-        }
-        let label = if artist.is_empty() { title.clone() } else { format!("{artist} - {title}") };
-        let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "running", "current": label }));
-        match presync_one(&app, artist, title) {
-            "ok" => synced += 1,
-            "cached" => cached += 1,
-            _ => missed += 1,
-        }
-        done += 1;
-        std::thread::sleep(std::time::Duration::from_millis(150)); // be polite to LRCLIB
+    jobs::submit(PresyncJob { app, tracks, token }, Priority::Idle);
+    json!({ "status": "queued", "total": total })
+}
+
+/// The I/O-lane job behind `presync_list`.
+///
+/// ONE JOB FOR THE WHOLE LIST, not one per track. Fanning out would hand the
+/// list to all six I/O workers at once and hammer LRCLIB with a couple of
+/// hundred requests as fast as the socket allows; the serial loop with its
+/// 150ms gap is the politeness this depends on to keep working at all. The
+/// cost is that a long run occupies one of the six I/O slots for its whole
+/// duration, which is why it is submitted at `Idle` — the playing song's
+/// lyric, artwork, mood and attribution jobs are all `Now` and all overtake
+/// it, and five slots remain free for them regardless.
+///
+/// `track()` is left as `None`: a pre-sync run is about songs that are *not*
+/// playing, so a track change must not cancel it.
+struct PresyncJob {
+    app: AppHandle,
+    tracks: Vec<(String, String)>,
+    token: u64,
+}
+
+impl Runnable for PresyncJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
     }
 
-    let summary = format!("{synced} synced · {cached} already cached · {missed} not found");
-    let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "done", "summary": summary }));
-    json!({ "status": "ok", "synced": synced, "cached": cached, "missed": missed })
+    /// Keyed by token, so a fresh paste is never rejected as a duplicate of
+    /// the run it is meant to supersede — the older run then sees the bumped
+    /// `PRESYNC_TOKEN` at its next iteration and stops itself.
+    fn dedup_key(&self) -> String {
+        format!("presync:{}", self.token)
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let PresyncJob { app, tracks, token } = *self;
+        let total = tracks.len();
+        let (mut done, mut synced, mut cached, mut missed) = (0usize, 0usize, 0usize, 0usize);
+
+        for (artist, title) in &tracks {
+            if cancel.cancelled() || PRESYNC_TOKEN.load(Ordering::SeqCst) != token {
+                return;
+            }
+            let label = if artist.is_empty() { title.clone() } else { format!("{artist} - {title}") };
+            let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "running", "current": label }));
+            match presync_one(&app, artist, title) {
+                "ok" => synced += 1,
+                "cached" => cached += 1,
+                _ => missed += 1,
+            }
+            done += 1;
+            std::thread::sleep(std::time::Duration::from_millis(150)); // be polite to LRCLIB
+        }
+
+        let summary = format!("{synced} synced · {cached} already cached · {missed} not found");
+        let _ = app.emit("presync-progress", json!({ "done": done, "total": total, "status": "done", "summary": summary }));
+    }
 }
 
 #[cfg(test)]
