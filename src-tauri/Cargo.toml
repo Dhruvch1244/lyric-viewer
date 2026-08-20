@@ -73,6 +73,12 @@ rustfft = "6"
 # top of the default open codecs (flac/wav/ogg/vorbis) so local files of any
 # common format decode without the renderer's Web Audio pass.
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+# Verifies downloaded ONNX models (models.rs) against a pinned SHA-256 —
+# pure Rust, no system OpenSSL, consistent with everything else here.
+sha2 = "0.10"
+# The job journal and the lyric/track index (JOB-ENGINE section 4).
+# `bundled` compiles SQLite from source, adding no system dependency.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

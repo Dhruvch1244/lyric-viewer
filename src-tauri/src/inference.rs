@@ -74,7 +74,7 @@ fn sidecar_path() -> Result<PathBuf, String> {
 /// pushing that through stdio would copy it at least twice for no reason. The
 /// host owns the file and deletes it in `Session::drop`.
 fn write_pcm(job_id: u64, samples: &[f32]) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("lyric-overlay-{job_id}.pcm"));
+    let path = pcm_temp_path(job_id);
     let file = std::fs::File::create(&path).map_err(|e| format!("cannot create PCM temp file: {e}"))?;
     let mut w = BufWriter::new(file);
     for s in samples {
@@ -103,8 +103,21 @@ impl Drop for Session {
     }
 }
 
-/// Run one transcription. Blocking — it belongs on the job engine's Inference
-/// lane, which is concurrency 1.
+/// Predicted path of the temp PCM file a given job id will write (or, for the
+/// journal's resume path, already wrote in a previous session).
+///
+/// Split into its own function so there is exactly one place that knows this
+/// format — `write_pcm` uses it to create the file, `journal::start` is given
+/// the same path to record before the sidecar spawns, and `resume_stale_transcriptions`
+/// reads it back after a crash. Two independently-written copies of this
+/// format string is exactly the kind of drift that would make a resumed job
+/// silently look for a file at the wrong path.
+pub(crate) fn pcm_temp_path(job_id: u64) -> PathBuf {
+    std::env::temp_dir().join(format!("lyric-overlay-{job_id}.pcm"))
+}
+
+/// Run one transcription over freshly-decoded samples. Blocking — it belongs
+/// on the job engine's Inference lane, which is concurrency 1.
 ///
 /// `progress` is called on this thread as the sidecar reports; it must not
 /// block for long.
@@ -114,11 +127,48 @@ pub(crate) fn transcribe(
     samples: &[f32],
     language: Option<String>,
     cancel: &CancelToken,
+    progress: impl FnMut(Stage, u8),
+) -> Result<Vec<Cue>, String> {
+    let pcm_path = write_pcm(job_id, samples)?;
+    run_sidecar(app, job_id, pcm_path, language, cancel, progress)
+}
+
+/// Run one transcription against a PCM file that already exists on disk —
+/// the journal's resume path (`journal.rs`, `resume_stale_transcriptions`).
+///
+/// The file named in a stale journal row IS the output of a previous
+/// session's `write_pcm`, at the exact path `pcm_temp_path` predicts, so
+/// there is nothing to decode or resample here — only to hand that same file
+/// to a fresh sidecar and pick up where the crash interrupted it. The one
+/// thing this cannot avoid re-doing is the transcription itself: the sidecar
+/// that was running it is gone, and there is no partial-decode state to save.
+pub(crate) fn transcribe_existing_pcm(
+    app: &AppHandle,
+    job_id: u64,
+    pcm_path: PathBuf,
+    language: Option<String>,
+    cancel: &CancelToken,
+    progress: impl FnMut(Stage, u8),
+) -> Result<Vec<Cue>, String> {
+    if !pcm_path.is_file() {
+        return Err(format!("journalled PCM file is gone: {}", pcm_path.display()));
+    }
+    run_sidecar(app, job_id, pcm_path, language, cancel, progress)
+}
+
+/// The shared sidecar dance: spawn, handshake, request, drain responses,
+/// clean shutdown. `pcm_path` must already exist and be readable by the
+/// sidecar — both callers above guarantee that before reaching here.
+fn run_sidecar(
+    app: &AppHandle,
+    job_id: u64,
+    pcm_path: PathBuf,
+    language: Option<String>,
+    cancel: &CancelToken,
     mut progress: impl FnMut(Stage, u8),
 ) -> Result<Vec<Cue>, String> {
     let exe = sidecar_path()?;
     let models = model_dir(app).ok_or("no config directory for models")?;
-    let pcm_path = write_pcm(job_id, samples)?;
 
     let mut cmd = Command::new(&exe);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -268,6 +318,19 @@ pub(crate) fn to_lyric_cues(cues: Vec<Cue>) -> Vec<crate::lyrics::Cue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_pcm_writes_to_exactly_the_path_pcm_temp_path_predicts() {
+        // journal::start records pcm_temp_path(job_id) BEFORE write_pcm ever
+        // runs, banking on the two agreeing. If they drifted, every resumed
+        // transcription would look for its PCM at the wrong path and fail
+        // with "journalled PCM file is gone" on a file that is right there.
+        let job_id = 424_242u64;
+        let predicted = pcm_temp_path(job_id);
+        let actual = write_pcm(job_id, &[0.0, 0.25, -0.5]).expect("write_pcm failed");
+        assert_eq!(predicted, actual);
+        let _ = std::fs::remove_file(actual);
+    }
 
     #[test]
     fn resampling_is_a_no_op_at_the_target_rate() {

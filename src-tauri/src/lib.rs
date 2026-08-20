@@ -34,7 +34,9 @@ mod llm;
 mod localcli;
 mod history;
 mod inference;
+mod journal;
 mod lyrics;
+mod models;
 mod mood;
 mod netease;
 mod presets;
@@ -109,6 +111,20 @@ pub fn run() {
             #[cfg(windows)]
             app.manage(Mutex::<Option<smtc::Session>>::new(None));
             app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "available": false }))));
+
+            // The transcription journal (JOB-ENGINE section 4 / 7.1). Opened
+            // before anything can submit a transcription job, and swept
+            // immediately after — any row still present at this exact moment
+            // was left by a session that did not end cleanly (see journal.rs's
+            // module doc for why presence alone means that).
+            if let Some(journal) = journal::open(&handle) {
+                let stale = journal.take_stale();
+                app.manage(journal);
+                if !stale.is_empty() {
+                    log::info!("resuming {} transcription(s) left over from a previous session", stale.len());
+                    commands::lyrics_cmds::resume_stale_transcriptions(handle.clone(), stale);
+                }
+            }
 
             // Apply any keys saved via the 🔑 panel, then check for an update.
             commands::prefs::load_api_keys(&handle);

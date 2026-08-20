@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal (§7.1). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5) and the Whisper encoder/decoder + DTW word alignment (§7.6) are in and produce real, verified transcriptions with per-word timing end to end; only the SQLite work remains. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.8). Phases 5–7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), and model downloading + crash-safe transcription (§7.7) are all in — a fresh install can transcribe a song end to end and survive a crash mid-transcription without losing the work. Still open: native SMTC loopback recording and deleting `whisper.js`. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). Phases 5–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -341,8 +341,8 @@ never calls the command, keeps working unchanged.
 |---|---|---|---|
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
-| **3** 🔶 | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned) ✅ — real transcription with real per-word timing, verified end to end (§7.3–7.6). Demucs follows. SQLite journal lands here — a half-finished transcription is the first job worth resuming; still open. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
-| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.8. | Low, unproven value | No |
+| **3** 🔶 | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned) ✅, models download and verify themselves ✅, SQLite journal ✅ — real transcription, real per-word timing, and a crash mid-transcription no longer loses the work, all verified end to end (§7.3–7.7). Demucs follows. Still open: native SMTC loopback recording, deleting `whisper.js`. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
+| **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
@@ -367,24 +367,20 @@ track), and `artwork_candidates` spawned a thread only to block on
 `(async)` command rather than becoming a job — the renderer awaits its return
 value, and the engine is fire-and-forget with no reply channel.
 
-**Not done: the SQLite journal.** Deferred to Phase 3 on purpose, because it
-has no correct consumer before then:
+**The SQLite journal — deferred here, landed in Phase 3 (§7.7).** It was
+deferred out of Phase 1 for reasons that turned out to still be right once it
+was actually built: every job that existed then repaints the *playing* song,
+and nothing is playing at startup, so replaying one onto an idle overlay would
+be worse than losing it — and `Runnable` is a boxed trait object holding an
+`AppHandle`, which cannot be serialized, so a journal could not simply persist
+the job type directly. §7.7 explains the shape that resolved both: the
+journal is scoped to exactly the one job worth resuming (transcription), and a
+resumed job writes to the cache silently instead of going through `Runnable`
+at all.
 
-- Every job that exists today emits an event that repaints the *playing*
-  song. Nothing is playing at startup, so replaying a journalled lyric,
-  artwork, mood or attribution job would push the previous session's results
-  onto an idle overlay. Restoring them is worse than losing them.
-- Pre-sync is the one long job worth resuming, and it already resumes
-  idempotently for free: `presync_one` skips anything already cached, so
-  re-running the same list continues where it stopped.
-- `Runnable` is a boxed trait object holding an `AppHandle`, which cannot be
-  serialized. A journal needs a parallel serializable job-descriptor enum plus
-  a reconstruction step — a real change to the engine's core trait, and one
-  whose shape should be decided by the requirement that actually justifies it
-  (a half-finished transcription, §2.4) rather than guessed at now.
-
-The rest of §4 — cache index, FTS5 over lyric text — is independent of the
-journal and unstarted.
+The rest of §4 — a general cache index and FTS5 over lyric text — is
+independent of the journal and stays unstarted; see §7.7 for why it was
+deliberately not bundled in alongside the journal.
 
 ### 7.2 Phase 2 as built
 
@@ -633,7 +629,75 @@ each word landing at a plausible position for a spoken sentence at that pace.
 This is real evidence the decoder and the alignment are both producing
 correct output, not merely that they run without crashing.
 
-### 7.7 A shipped bug this phase's own investigation uncovered
+### 7.7 Phase 3, stage 5: models that actually download, and a crash that no longer loses the work
+
+Two gaps closed together, because the second needed the first to be testable
+end to end.
+
+**`models.rs`: the download `inference.rs::model_dir`'s own doc comment
+always claimed happened, and never did.** Before this landed, nothing in the
+app ever wrote a file into that directory — every real transcription attempt
+on a fresh install failed inside the sidecar with "model file not found",
+which is a correct message pointing at the wrong fix (the fix was never
+"reinstall", it was "nothing ever fetches the model"). `models::ensure` now
+downloads and SHA-256-verifies the six files the sidecar needs (five Whisper
+`_timestamped` artifacts, one Silero VAD), each pinned to an exact source
+**commit**, not a branch — the same reasoning as `mel.rs`'s pinned reference
+numbers: "the file at this URL" is not a stable identity, and a silently
+different file would make transcription silently wrong rather than fail
+loudly. Verification only runs once, right after a download; an
+already-present file is trusted on size alone, which is what keeps `ensure`
+cheap enough to call before every single transcription rather than only at
+install time. `models::tests::every_file_downloads_and_verifies_against_the_real_sources`
+(`#[ignore]`d) is the proof this actually works against the real hosts, not
+just against the table of hashes — run it after touching any URL or hash here.
+
+Mirrors the shape `whisper.js` already had for the WASM path (model fetched
+lazily on first use, cached after), so this is not new user-facing behaviour,
+only a real implementation of behaviour the app already claimed to have.
+
+**`journal.rs`: the SQLite journal §7.1 deferred, scoped down to what §2.4
+actually asked for.** §7.1's reasons for deferring still applied once this was
+built — every OTHER job type repaints the *playing* song, so replaying one at
+startup (when nothing is playing) is a regression, not a feature — so the
+journal is deliberately narrow: one table, one job type (transcription),
+**presence means incomplete**. A row is inserted right before a transcription
+starts and deleted the moment it ends, success or failure or cancellation
+alike — so a row still present at the next startup can only mean the process
+ended without running that code, i.e. a crash, and the PCM temp file it
+names (normally deleted by `Session::drop`, which a hard kill never runs) is
+still on disk, decoded and resampled, waiting for a decoder that never got to
+run against it.
+
+`inference.rs::pcm_temp_path` is the one place that knows the temp-file naming
+format; `write_pcm` uses it to create the file, `journal::start` is given the
+same path to record before the sidecar spawns, and `resume_stale_transcriptions`
+reads it back — a deliberate single source of truth, because two independently
+written copies of that format string is exactly the kind of thing that drifts.
+
+A resumed transcription cannot go through the same path a live one does,
+because it must never repeat what §7.1 first ruled out: `finalize_transcription`
+now takes a `quiet` flag (`finalize_transcription_inner`) that keeps every
+cache write and drops every `transcribe-progress` emit. This is not only about
+the `lyrics` overlay — `setStatus` in the renderer is a global one-line status
+indicator, not track-scoped, so an unsuppressed "matched real lyrics" from a
+resumed background job at startup would read as being about whatever song the
+user starts next. Same asymmetry Phase 2's precompute already relies on: a
+cache write nobody sees is safe, a status message about the wrong song is a
+visible glitch.
+
+**Deliberately not bundled in:** §4's other two SQLite jobs — a general cache
+index queryable by artist/album/"has beatmap", and FTS5 over lyric text for
+"find the song with this line". Both are real, both are independent of the
+journal, and neither is required for Phase 3 to be complete or for
+transcription to work — §4 itself calls them "niche capabilities," not
+infrastructure. Building them now would mean touching the JSON-file lyric
+cache that Phase 2's "songs start instantly" win depends on, for a feature
+nothing yet asks for. Left for a phase whose actual purpose is search/browse,
+same as 5.3–5.6 waited for a DSP phase rather than riding along with the VAD
+that happened to need `rustfft` too.
+
+### 7.8 A shipped bug this phase's own investigation uncovered
 
 Reading the decoder's ONNX graph — to know what shape of cross-attention
 output the Rust DTW pass needed — is what exposed that
@@ -653,7 +717,7 @@ configuration — the old id threw the "must contain cross attentions" error,
 the new one returned 11 word-level chunks, and both agreed on the text at
 segment level.
 
-### 7.8 Phase 4 as built: profiled, mostly declined
+### 7.9 Phase 4 as built: profiled, mostly declined
 
 The phase's own instruction was "profile before building", and the profiling
 retired both of the fixes it proposed — the estimate that motivated them was

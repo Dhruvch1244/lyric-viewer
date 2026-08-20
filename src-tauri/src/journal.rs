@@ -1,0 +1,244 @@
+//! The job journal (JOB-ENGINE §4, and the "not done" note in §7.1).
+//!
+//! §7.1 deferred this out of Phase 1 for two concrete reasons: every job that
+//! existed then repaints the *playing* song, and nothing is playing at
+//! startup, so replaying a journalled lyric/artwork/mood/attribution job
+//! would push a previous session's result onto an idle overlay — worse than
+//! losing it. And `Runnable` is a boxed trait object holding an `AppHandle`,
+//! which cannot be serialized, so a real journal needs its own descriptor
+//! shape rather than trying to persist the job type directly.
+//!
+//! Both are still true, and both are why this journal is scoped to exactly
+//! one thing: **a transcription in flight when the app quits or crashes.**
+//! It is the one job type worth resuming (§2.4) — a Whisper pass is minutes
+//! of work, not a network round trip — and it is the one job type whose
+//! result can be restored *safely*: a resumed transcription is written
+//! straight into the track's cache file (`merge_track_cache`'s shape) with no
+//! `lyrics` event, the same asymmetry Phase 2's precompute already relies on.
+//! A wrong or late cache write is invisible; an emit to a UI showing nothing
+//! is a visible glitch. See `resume` in `commands/lyrics_cmds.rs`.
+//!
+//! SCHEMA: one table, and **presence means incomplete**. A row is inserted
+//! when a transcription starts and deleted the moment it finishes — success,
+//! failure, or cancellation all delete it. So a row still present at the next
+//! startup can only mean one thing: the process ended without running that
+//! code, i.e. a crash or a kill, and its temp PCM file (deleted otherwise) is
+//! still on disk, decoded and resampled, waiting for a decoder that never
+//! got to run against it.
+//!
+//! WAL mode: concurrent readers with a single writer, which this workload
+//! already is — the journal is written from the Inference lane and swept once
+//! at startup, never both at once.
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use rusqlite::Connection;
+use tauri::{AppHandle, Manager};
+
+pub(crate) struct Journal(Mutex<Connection>);
+
+/// One row left over from a session that did not end cleanly.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StaleJob {
+    pub(crate) track_key: String,
+    pub(crate) artist: String,
+    pub(crate) title: String,
+    pub(crate) duration_ms: i64,
+    pub(crate) pcm_path: String,
+    pub(crate) language: Option<String>,
+}
+
+fn db_path(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("lyric-overlay.db"))
+}
+
+/// Open (creating if absent) the journal database for this app.
+pub(crate) fn open(app: &AppHandle) -> Option<Journal> {
+    let path = db_path(app)?;
+    let conn = Connection::open(&path)
+        .map_err(|e| log::warn!("cannot open journal database at {}: {e}", path.display()))
+        .ok()?;
+    Journal::new(conn)
+        .map_err(|e| log::warn!("cannot initialise journal schema: {e}"))
+        .ok()
+}
+
+impl Journal {
+    /// Build over an existing connection, and set up the schema. Split from
+    /// `open` so tests can construct one over `Connection::open_in_memory()`
+    /// without an `AppHandle` or a real file.
+    fn new(conn: Connection) -> rusqlite::Result<Self> {
+        conn.pragma_update(None, "journal_mode", "WAL").ok(); // in-memory connections reject WAL; harmless to ignore
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS transcription_journal (
+                id          INTEGER PRIMARY KEY,
+                track_key   TEXT NOT NULL,
+                artist      TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                pcm_path    TEXT NOT NULL,
+                language    TEXT,
+                started_at  INTEGER NOT NULL
+            );",
+        )?;
+        Ok(Self(Mutex::new(conn)))
+    }
+
+    /// Record that a transcription is about to run. Returns the row id, which
+    /// `finish` needs to remove exactly this row and no other — two
+    /// transcriptions of the same track queued back to back (a rapid skip and
+    /// return) must not let the second's `finish` delete the first's still-open
+    /// row.
+    pub(crate) fn start(
+        &self,
+        track_key: &str,
+        artist: &str,
+        title: &str,
+        duration_ms: i64,
+        pcm_path: &str,
+        language: Option<&str>,
+    ) -> Option<i64> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO transcription_journal (track_key, artist, title, duration_ms, pcm_path, language, started_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![track_key, artist, title, duration_ms, pcm_path, language, now_unix()],
+        )
+        .map_err(|e| log::warn!("cannot journal transcription start: {e}"))
+        .ok()?;
+        Some(conn.last_insert_rowid())
+    }
+
+    /// Remove a row — the job it describes reached a real end, one way or
+    /// another. Called on success, failure, AND cancellation: all three mean
+    /// there is no longer anything to resume.
+    pub(crate) fn finish(&self, id: i64) {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute("DELETE FROM transcription_journal WHERE id = ?1", [id]);
+    }
+
+    /// Take every row left over from a previous, uncleanly-ended session.
+    ///
+    /// Each row is deleted as it is claimed, before the caller has attempted
+    /// to resume it — a resume that itself crashes must not retry the same
+    /// row forever. This is meant to be called exactly once, at startup,
+    /// before any new row can exist to be confused with a stale one.
+    pub(crate) fn take_stale(&self) -> Vec<StaleJob> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare("SELECT id, track_key, artist, title, duration_ms, pcm_path, language FROM transcription_journal") {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("cannot read the journal: {e}");
+                return Vec::new();
+            }
+        };
+        let rows: Vec<(i64, StaleJob)> = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                StaleJob {
+                    track_key: row.get(1)?,
+                    artist: row.get(2)?,
+                    title: row.get(3)?,
+                    duration_ms: row.get(4)?,
+                    pcm_path: row.get(5)?,
+                    language: row.get(6)?,
+                },
+            ))
+        }) {
+            Ok(mapped) => mapped.filter_map(Result::ok).collect(),
+            Err(e) => {
+                log::warn!("cannot read the journal: {e}");
+                return Vec::new();
+            }
+        };
+        drop(stmt);
+
+        for (id, _) in &rows {
+            let _ = conn.execute("DELETE FROM transcription_journal WHERE id = ?1", [id]);
+        }
+        rows.into_iter().map(|(_, job)| job).collect()
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_journal() -> Journal {
+        Journal::new(Connection::open_in_memory().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_finished_job_leaves_no_stale_row() {
+        let j = memory_journal();
+        let id = j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\a.pcm", Some("en")).unwrap();
+        j.finish(id);
+        assert!(j.take_stale().is_empty());
+    }
+
+    #[test]
+    fn an_unfinished_job_is_stale_at_the_next_sweep() {
+        let j = memory_journal();
+        j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\a.pcm", Some("en")).unwrap();
+        let stale = j.take_stale();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].track_key, "k1");
+        assert_eq!(stale[0].artist, "Artist");
+        assert_eq!(stale[0].pcm_path, "C:\\tmp\\a.pcm");
+        assert_eq!(stale[0].language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn a_language_of_none_round_trips_as_none_not_a_string() {
+        let j = memory_journal();
+        j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\a.pcm", None).unwrap();
+        let stale = j.take_stale();
+        assert_eq!(stale[0].language, None);
+    }
+
+    #[test]
+    fn take_stale_clears_the_journal_so_a_second_sweep_finds_nothing() {
+        let j = memory_journal();
+        j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\a.pcm", None).unwrap();
+        assert_eq!(j.take_stale().len(), 1);
+        assert!(j.take_stale().is_empty(), "a claimed row was not removed, so it would be resumed twice");
+    }
+
+    #[test]
+    fn finishing_one_job_does_not_remove_a_different_jobs_row() {
+        // Two transcriptions of the same track queued back to back (skip,
+        // then return) — the second's `finish` must not delete the first's
+        // still-open row.
+        let j = memory_journal();
+        let first = j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\a.pcm", None).unwrap();
+        let _second = j.start("k1", "Artist", "Title", 180_000, "C:\\tmp\\b.pcm", None).unwrap();
+        j.finish(first);
+        let stale = j.take_stale();
+        assert_eq!(stale.len(), 1, "finishing the first job affected the second's row");
+        assert_eq!(stale[0].pcm_path, "C:\\tmp\\b.pcm");
+    }
+
+    #[test]
+    fn an_empty_journal_sweeps_to_nothing_without_erroring() {
+        let j = memory_journal();
+        assert!(j.take_stale().is_empty());
+    }
+
+    #[test]
+    fn multiple_stale_jobs_from_different_tracks_all_come_back() {
+        let j = memory_journal();
+        j.start("k1", "A1", "T1", 100_000, "C:\\tmp\\1.pcm", None).unwrap();
+        j.start("k2", "A2", "T2", 200_000, "C:\\tmp\\2.pcm", Some("es")).unwrap();
+        let stale = j.take_stale();
+        assert_eq!(stale.len(), 2);
+        assert!(stale.iter().any(|s| s.track_key == "k1"));
+        assert!(stale.iter().any(|s| s.track_key == "k2" && s.language.as_deref() == Some("es")));
+    }
+}

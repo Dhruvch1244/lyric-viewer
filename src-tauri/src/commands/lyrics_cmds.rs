@@ -433,7 +433,7 @@ impl Runnable for NativeTranscribeJob {
     }
 
     fn run(self: Box<Self>, cancel: &CancelToken) {
-        let NativeTranscribeJob { app, track, path, key: _ } = *self;
+        let NativeTranscribeJob { app, track, path, key } = *self;
         let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
 
         let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
@@ -447,6 +447,44 @@ impl Runnable for NativeTranscribeJob {
         let pcm = crate::inference::resample_to_16k(&samples, rate);
         drop(samples); // the decoded original can be several times the resampled size
 
+        // First transcription on a fresh install: the models directory is
+        // empty, and nothing else in the app ever populates it. This is a
+        // one-time ~79 MB fetch, cached on disk after — the same shape
+        // whisper.js already has for the WASM path, not new behaviour.
+        if let Some(models_dir) = crate::inference::model_dir(&app) {
+            let progress_app = app.clone();
+            let progress_track = track.clone();
+            let ensured = crate::models::ensure(
+                &models_dir,
+                |file, pct| {
+                    let _ = progress_app.emit(
+                        "transcribe-progress",
+                        json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
+                    );
+                },
+                &|| cancel.cancelled(),
+            );
+            if let Err(message) = ensured {
+                if message != "cancelled" {
+                    log::warn!("model download failed: {message}");
+                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+                }
+                return;
+            }
+        }
+
+        // Journal the attempt before the sidecar can write anything, so a
+        // crash between here and the matching `finish` below leaves a row
+        // pointing at a real, resumable PCM file — see journal.rs. `t` is
+        // reconstructed from the same `track` value already used for the
+        // cache key, so a resumed row and a live job describe the track
+        // identically.
+        let t = track_from_value(&track);
+        let predicted_pcm_path = crate::inference::pcm_temp_path(job_id);
+        let journal_id = app
+            .try_state::<crate::journal::Journal>()
+            .and_then(|j| j.start(&key, &t.artist, &t.title, t.duration_ms, &predicted_pcm_path.to_string_lossy(), None));
+
         let progress_track = track.clone();
         let progress_app = app.clone();
         let result = crate::inference::transcribe(&app, job_id, &pcm, None, cancel, move |stage, pct| {
@@ -455,6 +493,12 @@ impl Runnable for NativeTranscribeJob {
                 json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
             );
         });
+
+        if let Some(id) = journal_id {
+            if let Some(j) = app.try_state::<crate::journal::Journal>() {
+                j.finish(id);
+            }
+        }
 
         match result {
             Ok(cues) => {
@@ -474,6 +518,95 @@ impl Runnable for NativeTranscribeJob {
             Err(message) => {
                 log::warn!("native transcription failed: {message}");
                 let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------ journal: resume path --- */
+
+/// Submit one `Idle`-priority job per row the journal swept at startup.
+///
+/// Called once, from `lib.rs`'s `setup`, with exactly the rows
+/// `journal::Journal::take_stale` returned — each already removed from the
+/// table, so a resume that itself fails will not be retried at the next
+/// startup too. `Idle` because nothing here is what the user is waiting on;
+/// there may not even be anything playing yet.
+pub(crate) fn resume_stale_transcriptions(app: AppHandle, stale: Vec<crate::journal::StaleJob>) {
+    for job in stale {
+        if !std::path::Path::new(&job.pcm_path).is_file() {
+            // The crash happened before write_pcm finished, or something else
+            // already cleaned the temp file up. Nothing to resume.
+            log::info!("skipping stale transcription for {} — its PCM file is gone", job.track_key);
+            continue;
+        }
+        jobs::submit(ResumeTranscribeJob { app: app.clone(), job }, Priority::Idle);
+    }
+}
+
+/// The Inference-lane job behind `resume_stale_transcriptions`.
+struct ResumeTranscribeJob {
+    app: AppHandle,
+    job: crate::journal::StaleJob,
+}
+
+impl Runnable for ResumeTranscribeJob {
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("transcribe:{}", self.job.track_key)
+    }
+
+    fn track(&self) -> Option<String> {
+        // Deliberately NOT `Some(self.job.track_key.clone())`. A track()
+        // dedup key is also what `cancel_track` uses to stop everything
+        // queued for the song a user just skipped past — but this job is for
+        // a song that (almost certainly) is not what's playing now, and
+        // tying it to that track identity would let an ordinary skip cancel a
+        // resume that has nothing to do with the skip. `dedup_key` above
+        // still stops it racing a FRESH transcription of the same track,
+        // which is the dedup guarantee that actually matters here.
+        None
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let ResumeTranscribeJob { app, job } = *self;
+        let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+
+        if let Some(models_dir) = crate::inference::model_dir(&app) {
+            let ensured = crate::models::ensure(&models_dir, |_, _| {}, &|| cancel.cancelled());
+            if let Err(message) = ensured {
+                if message != "cancelled" {
+                    log::warn!("resumed transcription for {} could not fetch models: {message}", job.track_key);
+                }
+                let _ = std::fs::remove_file(&job.pcm_path);
+                return;
+            }
+        }
+
+        let pcm_path = std::path::PathBuf::from(&job.pcm_path);
+        let result = crate::inference::transcribe_existing_pcm(&app, job_id, pcm_path, job.language.clone(), cancel, |_, _| {});
+
+        match result {
+            Ok(cues) => {
+                let cues = crate::inference::to_lyric_cues(cues);
+                if cues.is_empty() {
+                    log::info!("resumed transcription for {} produced no cues", job.track_key);
+                    return;
+                }
+                let track = json!({ "title": job.title, "artist": job.artist, "durationMs": job.duration_ms });
+                let payload = json!({ "track": track, "cues": cues });
+                // Quiet: see finalize_transcription_inner's doc for why a
+                // resumed job must not emit transcribe-progress.
+                let _ = finalize_transcription_inner(&app, payload, true);
+                log::info!("resumed transcription for {} finished and was cached silently", job.track_key);
+            }
+            Err(message) => {
+                if message != "cancelled" {
+                    log::warn!("resumed transcription for {} failed: {message}", job.track_key);
+                }
             }
         }
     }
@@ -900,16 +1033,40 @@ fn source_is_whisper_derived(source: &Value) -> bool {
 /// lyrics with a Whisper-accuracy version on every single play.
 #[tauri::command]
 pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
+    finalize_transcription_inner(&app, payload, false)
+}
+
+/// The shared implementation behind `finalize_transcription`.
+///
+/// `quiet` suppresses every `transcribe-progress` emit while keeping every
+/// cache write. This exists for exactly one caller: `resume_stale_jobs`,
+/// finishing a transcription left over from a crash at the NEXT startup, for
+/// a track that is almost certainly not the one now playing. `setStatus` in
+/// the renderer is not track-scoped — it is a global one-line status
+/// indicator — so an unsuppressed "matched real lyrics" or "fixed 3 misheard
+/// lines" from a resumed background job would read as being about whatever
+/// IS playing. Same asymmetry as Phase 2's precompute (§7.2): a cache write
+/// nobody sees is safe, a status message about the wrong song is a visible
+/// glitch.
+fn finalize_transcription_inner(app: &AppHandle, payload: Value, quiet: bool) -> Value {
+    macro_rules! emit {
+        ($name:expr, $payload:expr) => {
+            if !quiet {
+                let _ = app.emit($name, $payload);
+            }
+        };
+    }
+
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
     let t = track_from_value(&track);
     let raw_cues: Vec<crate::lyrics::Cue> = payload.get("cues").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     if raw_cues.is_empty() {
-        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+        emit!("transcribe-progress", json!({ "track": track, "stage": "empty" }));
         return json!({ "status": "empty" });
     }
     let key = track_key(&t.artist, &t.title);
 
-    if let Some(path) = lyrics_cache_path(&app, &key) {
+    if let Some(path) = lyrics_cache_path(app, &key) {
         if let Ok(text) = std::fs::read_to_string(&path) {
             if let Ok(existing) = serde_json::from_str::<Value>(&text) {
                 let has_cues = existing.get("cues").and_then(|c| c.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
@@ -917,9 +1074,9 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                 if already_synced {
                     let existing_has_words = existing.get("hasWordTimings").and_then(|v| v.as_bool()).unwrap_or(false);
                     if existing_has_words {
-                        let _ = app.emit(
+                        emit!(
                             "transcribe-progress",
-                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" }),
+                            json!({ "track": track, "stage": "done", "lines": 0, "skipped": "already-synced" })
                         );
                         return json!({ "status": "skipped", "reason": "already-synced" });
                     }
@@ -938,9 +1095,9 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                         updated["cues"] = serde_json::to_value(&merged).unwrap_or(Value::Null);
                         updated["hasWordTimings"] = json!(true);
                         let _ = std::fs::write(&path, serde_json::to_string(&updated).unwrap_or_default());
-                        let _ = app.emit(
+                        emit!(
                             "transcribe-progress",
-                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() }),
+                            json!({ "track": track, "stage": "words-added", "lines": upgraded_lines, "total": merged.len() })
                         );
                         return json!({ "status": "ok", "lines": upgraded_lines });
                     }
@@ -949,7 +1106,7 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
                     // renderer's hasWordTimings stays false and tries again on
                     // a future play, same retry semantics as the whisper-only
                     // path below.
-                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
+                    emit!("transcribe-progress", json!({ "track": track, "stage": "align-weak" }));
                     return json!({ "status": "skipped", "reason": "no-anchors" });
                 }
             }
@@ -966,8 +1123,7 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         if coverage >= 0.35 && !aligned.is_empty() {
             final_cues = aligned;
             source = "lrclib-plain+whisper";
-            let _ =
-                app.emit("transcribe-progress", json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "aligned", "coverage": (coverage * 100.0).round() }));
         }
     }
 
@@ -979,12 +1135,12 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
     // also when it is worth the most.
     if source == "whisper" {
         let (corrected, changed) = crate::correct::correct_transcript(&final_cues, &t.title, &t.artist, |batch, batches| {
-            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "correcting", "batch": batch, "batches": batches }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "correcting", "batch": batch, "batches": batches }));
         });
         if changed > 0 {
             final_cues = corrected;
             source = "whisper+llm";
-            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "corrected", "changed": changed }));
+            emit!("transcribe-progress", json!({ "track": track, "stage": "corrected", "changed": changed }));
         }
     }
 
@@ -997,10 +1153,10 @@ pub(crate) fn finalize_transcription(app: AppHandle, payload: Value) -> Value {
         "source": { "name": source },
         "status": "ok", "indic": false, "hasWordTimings": has_word_timings,
     });
-    if let Some(path) = lyrics_cache_path(&app, &key) {
+    if let Some(path) = lyrics_cache_path(app, &key) {
         let _ = std::fs::write(&path, serde_json::to_string(&payload_out).unwrap_or_default());
     }
-    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "done", "lines": lines }));
+    emit!("transcribe-progress", json!({ "track": track, "stage": "done", "lines": lines }));
     json!({ "status": "ok", "lines": lines })
 }
 
