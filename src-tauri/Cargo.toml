@@ -83,6 +83,12 @@ sha2 = "0.10"
 # is the part AcoustID actually needs: raw u32 fingerprints are useless to the
 # API without its compression format.
 rusty-chromaprint = "0.3"
+# EBU R128 integrated loudness (loudness.rs, JOB-ENGINE section 5.6). The
+# reference implementation rather than a re-derivation: K-weighting
+# coefficients and two-stage gating are fiddly, published, and produce a
+# plausible-looking number when subtly wrong. Pure Rust by default — the `cc`
+# feature is opt-in and not enabled.
+ebur128 = "0.1"
 # The job journal and the lyric/track index (JOB-ENGINE section 4).
 # `bundled` compiles SQLite from source, adding no system dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }

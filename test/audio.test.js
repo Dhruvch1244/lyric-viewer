@@ -217,3 +217,42 @@ test('a frame without the waveform key leaves the spectrum path working', () => 
   backend.emit({ f: b64Bytes(512, 200) });   // no throw, no NaN
   assert.ok(true);
 });
+
+/* --------------------------------------------- loudness normalisation --- */
+/*
+  The per-track gain (loudness.rs, JOB-ENGINE §5.6). Without it the visuals
+  react to how hard a track was mastered as much as to the music. The gate has
+  to reject nonsense — it is a bias toward a reference level, not an automatic
+  level control — and must return to 1 rather than latching, since an
+  unmeasured track inheriting the last one's correction is confidently wrong
+  rather than merely absent.
+*/
+
+test('the loudness gain defaults to no correction', () => {
+  assert.equal(Audio.loudnessGain(), 1);
+});
+
+test('a plausible gain is accepted', () => {
+  for (const g of [0.5, 0.8, 1, 1.3, 2]) {
+    Audio.setLoudnessGain(g);
+    assert.equal(Audio.loudnessGain(), g);
+  }
+  Audio.setLoudnessGain(1);
+});
+
+test('a nonsensical gain falls back to no correction rather than being clamped', () => {
+  // Clamping would silently accept a caller that had gone wrong; 1 is the
+  // honest answer to "this number cannot be a loudness correction".
+  for (const bad of [0, -1, 40, 0.01, NaN, Infinity, null, undefined, 'loud', {}]) {
+    Audio.setLoudnessGain(1.5);
+    Audio.setLoudnessGain(bad);
+    assert.equal(Audio.loudnessGain(), 1, `accepted ${String(bad)}`);
+  }
+});
+
+test('clearing the gain returns to no correction', () => {
+  Audio.setLoudnessGain(1.7);
+  assert.equal(Audio.loudnessGain(), 1.7);
+  Audio.setLoudnessGain(1);
+  assert.equal(Audio.loudnessGain(), 1);
+});

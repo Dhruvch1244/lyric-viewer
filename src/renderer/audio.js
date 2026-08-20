@@ -146,6 +146,13 @@
     return true;
   }
 
+  /*
+    Per-track loudness gain (see `setLoudnessGain`). 1 means "no correction",
+    which is the value for every track this app has not measured — every SMTC
+    track, and any local file too short or too quiet for R128 to report on.
+  */
+  let loudnessGain = 1;
+
   /* Smoothed bands + detector state. */
   let bassEMA = 0;      // slow bass floor, for onset comparison
   /** Previous frame's spectrum, for spectral flux. Allocated with `freq`. */
@@ -427,6 +434,27 @@
     treble /= (n - midEnd);
     total /= n;
 
+    /*
+      Loudness normalisation (loudness.rs, JOB-ENGINE §5.6). Without it the
+      visuals react to how hard a track was MASTERED as much as to the music:
+      a modern release pinned at −6 LUFS drives everything to the ceiling and a
+      dynamic recording at −20 barely moves it.
+
+      Applied to the four band levels only, after they are averaged and before
+      anything derived from them. Not to `freq` itself: the centroid, the flux
+      and the band shape are all ratios within one frame, and scaling every bin
+      by a constant changes none of them — doing it there would cost a pass
+      over 512 bins per frame for no effect.
+
+      Clamped, because these feed 0..1 consumers throughout.
+    */
+    if (loudnessGain !== 1) {
+      bass = Math.min(1, bass * loudnessGain);
+      mid = Math.min(1, mid * loudnessGain);
+      treble = Math.min(1, treble * loudnessGain);
+      total = Math.min(1, total * loudnessGain);
+    }
+
     env.bass = bass; env.mid = mid; env.treble = treble; env.level = total;
 
     /*
@@ -536,8 +564,27 @@
     return running ? mediaStream : null;
   }
 
+  /**
+   * Set the current track's loudness gain, or clear it with anything falsy.
+   *
+   * Must be cleared on every track change: a previous song's correction
+   * applied to this one is worse than none, because it is confidently wrong in
+   * a specific direction rather than merely absent.
+   *
+   * Ignores values outside the range `loudness.rs` itself clamps to — this is
+   * a bias toward a reference level, and a caller handing it a gain of 40
+   * would be a bug, not a very quiet record.
+   *
+   * @param {number} gain linear multiplier
+   */
+  function setLoudnessGain(gain) {
+    const g = Number(gain);
+    loudnessGain = Number.isFinite(g) && g >= 0.25 && g <= 4 ? g : 1;
+  }
+
   window.AudioReactive = {
     start, startFromElement, stop, sample, isActive: () => running, getStream,
+    setLoudnessGain, loudnessGain: () => loudnessGain,
     /* The live graph, for consumers that do their own analysis rather than
        reading our envelope. Both are null when capture is off; a consumer must
        cope with that rather than assume sound is available. */

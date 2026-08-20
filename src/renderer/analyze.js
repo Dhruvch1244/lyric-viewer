@@ -235,6 +235,12 @@
          the previous song's boundaries. */
       if (window.HeatMap.setSections) window.HeatMap.setSections(result.sectionStartsMs || null);
     }
+    /* Loudness normalisation for the live envelope (loudness.rs). Always set,
+       with 1 when unmeasured, so a track with no measurement does not inherit
+       the previous song's correction. */
+    if (window.AudioReactive && window.AudioReactive.setLoudnessGain) {
+      window.AudioReactive.setLoudnessGain((result.loudness && result.loudness.gain) || 1);
+    }
     let bpm = null;
     let beatsMs = null;
     let source = 'none';

@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is three quarters done**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug), key detection (§7.13) and structure segmentation (§7.14) are in; loudness normalisation is not. Phase 7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is complete**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug), key detection (§7.13), structure segmentation (§7.14) and loudness normalisation (§7.15). Phase 7 — library indexing and diarization — is the only one not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -344,7 +344,7 @@ never calls the command, keeps working unchanged.
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
-| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). Loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
+| **6** ✅ | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). **Loudness (5.6) done** — EBU R128 integrated loudness driving a per-track gain on the live envelope (§7.15). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
@@ -1054,7 +1054,46 @@ would let "chorus" mean the one that recurs. That needs segment clustering on
 top of this and nothing consumes it yet; the boundaries are the part with a
 consumer today.
 
-**Not yet done from Phase 6:** loudness normalisation (§5.6).
+### 7.15 Phase 6, part 4: loudness, and the two things it must not correct for
+
+§5.6, and the smallest item in the phase. The visuals react to how loud the
+audio is, so today they also react to how hard the track was *mastered*: a
+modern release pinned at −6 LUFS drives everything to the ceiling and a
+dynamic recording at −20 barely moves it, even though a listener would call
+them equally loud.
+
+**The peak normalisation already in `analysis.rs` does not cover this.** That
+scales each track's envelopes by its own *peak*, which two recordings can share
+while sounding nothing alike — a compressed master has far more energy under
+the same peak than a dynamic one. EBU R128 measures gated mean loudness through
+a K-weighting filter, which is a model of perceived loudness rather than of the
+waveform's extremes. The `ebur128` crate is the reference implementation rather
+than a re-derivation, which matters here: those filter coefficients and the
+two-stage gating are fiddly, published, and produce a plausible-looking number
+when subtly wrong.
+
+Two things it deliberately does not correct for:
+
+- **System volume.** The live path hears whatever the user's volume knob is
+  set to. That is their choice about the room they are in; the master's level
+  is not. Correcting for it would also be a feedback loop — the visuals would
+  fight every volume change, which is exactly the shape of the v0.11.0
+  governor bug §3.2 warns about.
+- **Anything unmeasured.** Every SMTC track, and any local file too short or
+  too quiet for R128 to report on, gets a gain of exactly 1. The gain is reset
+  to 1 on every track change rather than latched, because a previous song's
+  correction applied to this one is confidently wrong in a specific direction,
+  which is worse than absent.
+
+Applied to the four band levels after they are averaged, **not** to the
+spectrum. The centroid, the flux and the band shape are all ratios within one
+frame, so scaling every bin by a constant changes none of them — doing it there
+would cost a pass over 512 bins per frame for no effect. And the setter rejects
+implausible values back to 1 instead of clamping them: clamping silently
+accepts a caller that has gone wrong, where this is a bias toward a reference
+level and a gain of 40 is a bug, not a very quiet record.
+
+**Phase 6 is complete.**
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.

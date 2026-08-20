@@ -209,6 +209,10 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
         log::info!("structure: {} section(s)", starts.len());
         out["sectionStartsMs"] = json!(starts);
     }
+    if let Some(l) = crate::loudness::measure(&samples, sample_rate) {
+        log::info!("loudness: {:.1} LUFS, gain {:.2}", l.lufs, l.gain);
+        out["loudness"] = serde_json::to_value(&l).unwrap_or(Value::Null);
+    }
     out
 }
 

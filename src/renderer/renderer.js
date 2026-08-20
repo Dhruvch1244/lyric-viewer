@@ -4968,6 +4968,11 @@ window.player.onTrack((track) => {
     // merely stale — worse than the energy-tier fallback they replaced.
     if (window.HeatMap.setSections) window.HeatMap.setSections(null);
   }
+  // Same reasoning for the loudness correction: unmeasured is 1, not whatever
+  // the last song needed.
+  if (window.AudioReactive && window.AudioReactive.setLoudnessGain) {
+    window.AudioReactive.setLoudnessGain(1);
+  }
   anticipation = 0;                         // nothing is known about this song yet
   anticipationToPeakMs = 0;
   if (window.BeatMap) {
