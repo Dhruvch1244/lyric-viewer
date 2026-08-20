@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). Phase 3: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), and model downloading + crash-safe transcription (§7.7) are all in — a fresh install can transcribe a song end to end and survive a crash mid-transcription without losing the work. Still open: native SMTC loopback recording and deleting `whisper.js`. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). Phases 5–7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). Phases 5–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -341,7 +341,7 @@ never calls the command, keeps working unchanged.
 |---|---|---|---|
 | **1** ✅ | `jobs` module: `Job`/`Priority`/`TrackKey`, mpsc intake, keyed dedup, cancellation tree, three lanes, below-normal priority. Port existing `thread::spawn` sites onto it. (SQLite journal moved to Phase 3 — §7.1.) | Low — behaviour-preserving refactor, unit-testable | No, except two main-thread stalls removed |
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
-| **3** 🔶 | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned) ✅, models download and verify themselves ✅, SQLite journal ✅ — real transcription, real per-word timing, and a crash mid-transcription no longer loses the work, all verified end to end (§7.3–7.7). Demucs follows. Still open: native SMTC loopback recording, deleting `whisper.js`. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
+| **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
@@ -457,10 +457,10 @@ seven integration tests drive the real process — handshake, clean shutdown,
 shutdown by closed pipe, silent-audio diagnosis, PCM mapping, bad sample rate,
 and surviving a bad job without dying.
 
-Still to come in this phase (stages 2–4 below closed the rest of this list
-except the last two): native song-length loopback recording so the SMTC path
-needs no PCM over IPC, the SQLite work, and only then deleting `whisper.js`
-and its ~26 MB of vendored WASM.
+Still to come in this phase (stages 2–5 and §7.10 closed the rest of this
+list): native song-length loopback recording so the SMTC path needs no PCM
+over IPC, the SQLite work, and only then deleting `whisper.js` and its ~26 MB
+of vendored WASM. The last of those did not happen — see §7.10.
 
 ### 7.4 Phase 3, stage 2: the log-mel front end
 
@@ -734,6 +734,75 @@ absent-`t`-key cases).
 Recording a declined phase rather than deleting it is the point: the next
 person to notice 1536 bytes crossing the boundary 50×/second should find the
 measurement instead of repeating it.
+
+### 7.10 Phase 3, stage 6: recording the song in the backend that already hears it
+
+The last structural gap. Local files reached the sidecar from stage 1, because
+Rust decodes them anyway; **SMTC playback — a browser, Spotify, anything this
+app does not control — still went through the WebView**, where `capture.js`
+accumulated a `ScriptProcessorNode`'s output and handed `transcribeAudio` a
+multi-megabyte `Float32Array` so that Rust could see it at all. That was the
+one remaining reason for whole-song PCM to cross IPC, and it was never
+necessary: `audio.rs` has run a WASAPI loopback thread since the native audio
+path landed. The samples were already in the backend; only the plumbing said
+otherwise.
+
+So `audio.rs` taps its own capture thread a second time. `start_recording`
+opens a `RecordingSink` — raw mono f32 at the device's native rate, streamed to
+a temp file — and the packet loop appends to it. `stop_recording` hands back
+`(path, rate)`; `discard_recording` throws it away when real lyrics turn up
+mid-song. Nothing but a track object crosses IPC in either direction, and
+`stop_native_song_recording` feeds
+`run_native_transcription` — the function `transcribe_local_file`'s job was
+split into for exactly this — so from the resample onwards the two sources are
+indistinguishable: same model download, same journal row, same sidecar, same
+`finalize_transcription`.
+
+Three decisions worth recording, each because the alternative fails quietly:
+
+- **The renderer asks which recorder it may use; it does not infer one.**
+  `AudioReactive.isActive()` is true for *both* capture paths, and the
+  getDisplayMedia fallback has no WASAPI thread to tap — the audio exists only
+  as a `MediaStream` inside the WebView. Deciding from `isActive()` would
+  produce a recording of pure silence with no error anywhere. Instead
+  `startNativeSongRecording` returning false *is* the signal to fall back
+  (`src/renderer/listen.js`), which is the same lesson 0.21.0's `SetParent`
+  bug taught: ask the system what happened.
+- **A packet whose rate does not match the sink's is dropped, not appended.**
+  Capture can stop and restart inside one recording (♫ toggled, device
+  changed), and a restart can open at a different format. Concatenating 44.1
+  and 48 kHz into one file does not fail — it produces a transcription whose
+  timestamps drift, which nothing downstream can detect.
+- **Recordings are swept at startup, not journaled.** A transcription is worth
+  resuming after a crash (§7.7); a *recording* is not — it only makes sense
+  while its song is still playing. But the file survives, and at native rate a
+  capped 12-minute one is over 100 MB, so `sweep_stale_recordings` deletes
+  temp files from other pids that have gone an hour untouched. An hour, not
+  twelve minutes, because a recording that hits its cap stops being written
+  while still perfectly live; other pids and not this one, because the app has
+  no single-instance guard.
+
+**`whisper.js` was not deleted, and that is the one item this phase dropped
+rather than finished.** Its stated purpose was to remove ~26 MB of vendored
+WASM once nothing needed it — but something does. Vocal isolation (§5.2's
+Demucs) has never been ported to the sidecar, and it runs as a pre-pass on the
+PCM *before* Whisper sees it, so the isolation and the transcription have to
+live in the same process. Deleting the WebView path would silently delete that
+opt-in with it. `listen.js` therefore routes an isolation-enabled recording to
+the WebView deliberately, and the three files (`whisper.js`, `demucs.js`,
+`capture.js`) are kept as a real fallback rather than as dead weight nobody got
+round to removing. The 26 MB comes back when Demucs lands in the sidecar, not
+before.
+
+Tested where being wrong is invisible: `listen.js`'s recorder choice and its
+start/stop race through fake dependencies that log what they were asked to do
+(22 tests — a leaked recorder raises nothing, it just leaves a temp file), and
+`audio.rs`'s sink, cap, rate check and sweep predicate as pure functions (the
+sweep *deletes* files, so its decision is tested as
+`is_abandoned_recording(name, own_prefix, age)` rather than by planting files
+and trusting mtime granularity). What is not covered anywhere, and is the
+honest boundary: the WASAPI thread itself calling `record_batch` once per
+packet, which needs a real device.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.

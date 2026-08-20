@@ -118,6 +118,29 @@ pub(crate) fn stop_audio_capture() {
     crate::audio::stop_capture();
 }
 
+/// Begin recording the active loopback capture for later transcription — see
+/// `audio.rs`'s module doc for why this exists (no whole-song PCM over IPC
+/// for SMTC playback). Requires `start_audio_capture` to already be on, same
+/// as `native-audio` frames do; returns false if it is not, or if a
+/// recording is already running.
+///
+/// The sidecar check is here rather than only at `stop_native_song_recording`
+/// on purpose: false is what makes `listen.js` record the song in the WebView
+/// instead, and it has to be answered before the song plays. Recording a whole
+/// track and only then discovering there is nothing to transcribe it with
+/// would cost the user the one play the WebView path could have learned from.
+#[tauri::command]
+pub(crate) fn start_native_song_recording() -> bool {
+    crate::inference::available() && crate::audio::start_recording()
+}
+
+/// Abandon the active recording without transcribing it — real (correctly
+/// timed) lyrics turned up for this song, or the user skipped past it.
+#[tauri::command]
+pub(crate) fn discard_native_song_recording() {
+    crate::audio::discard_recording();
+}
+
 /// Declare whether anything is consuming the time-domain waveform.
 ///
 /// Only MilkDrop reads it, and it is three quarters of the emitted frame, so

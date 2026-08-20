@@ -390,10 +390,11 @@ static INFERENCE_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Transcribe a local audio file in the inference sidecar.
 ///
-/// The local-file case first, because it needs no PCM over IPC: Rust already
-/// decodes these files for `analyze_local_file`, so the samples never leave
-/// the backend. Loopback-captured audio (the SMTC case) still goes through the
-/// WebView path until native song recording exists — see JOB-ENGINE section 7.3.
+/// The local-file case needs no PCM over IPC: Rust already decodes these
+/// files for `analyze_local_file`, so the samples never leave the backend.
+/// The SMTC case reaches the same pipeline through
+/// `stop_native_song_recording` below, which taps the WASAPI loopback thread
+/// instead of decoding a file — see JOB-ENGINE section 7.10.
 ///
 /// Returns immediately; the result arrives as `transcribe-progress` events and
 /// a cached lyrics file, exactly as the WebView path's does.
@@ -434,7 +435,6 @@ impl Runnable for NativeTranscribeJob {
 
     fn run(self: Box<Self>, cancel: &CancelToken) {
         let NativeTranscribeJob { app, track, path, key } = *self;
-        let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
 
         let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
         let Some((samples, rate)) = crate::analysis::decode_to_mono(&path) else {
@@ -444,82 +444,181 @@ impl Runnable for NativeTranscribeJob {
         if cancel.cancelled() {
             return;
         }
-        let pcm = crate::inference::resample_to_16k(&samples, rate);
-        drop(samples); // the decoded original can be several times the resampled size
+        run_native_transcription(app, track, key, samples, rate, None, cancel);
+    }
+}
 
-        // First transcription on a fresh install: the models directory is
-        // empty, and nothing else in the app ever populates it. This is a
-        // one-time ~79 MB fetch, cached on disk after — the same shape
-        // whisper.js already has for the WASM path, not new behaviour.
-        if let Some(models_dir) = crate::inference::model_dir(&app) {
-            let progress_app = app.clone();
-            let progress_track = track.clone();
-            let ensured = crate::models::ensure(
-                &models_dir,
-                |file, pct| {
-                    let _ = progress_app.emit(
-                        "transcribe-progress",
-                        json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
-                    );
-                },
-                &|| cancel.cancelled(),
-            );
-            if let Err(message) = ensured {
-                if message != "cancelled" {
-                    log::warn!("model download failed: {message}");
-                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
-                }
-                return;
-            }
-        }
+/// Shared by every native transcription entry point once each has produced
+/// its own `(samples, rate)` — a local file decodes them, a native song
+/// recording (see `NativeSongRecordingJob`) reads them straight back from
+/// disk with no decode step at all. From here on the pipeline cannot tell
+/// which one it was fed: download models if needed, journal the attempt so a
+/// crash does not lose it, run the sidecar, and finalize.
+fn run_native_transcription(
+    app: AppHandle,
+    track: Value,
+    key: String,
+    samples: Vec<f32>,
+    rate: u32,
+    language: Option<String>,
+    cancel: &CancelToken,
+) {
+    let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+    let pcm = crate::inference::resample_to_16k(&samples, rate);
+    drop(samples); // the pre-resample original can be several times the resampled size
 
-        // Journal the attempt before the sidecar can write anything, so a
-        // crash between here and the matching `finish` below leaves a row
-        // pointing at a real, resumable PCM file — see journal.rs. `t` is
-        // reconstructed from the same `track` value already used for the
-        // cache key, so a resumed row and a live job describe the track
-        // identically.
-        let t = track_from_value(&track);
-        let predicted_pcm_path = crate::inference::pcm_temp_path(job_id);
-        let journal_id = app
-            .try_state::<crate::journal::Journal>()
-            .and_then(|j| j.start(&key, &t.artist, &t.title, t.duration_ms, &predicted_pcm_path.to_string_lossy(), None));
-
-        let progress_track = track.clone();
+    // First transcription on a fresh install: the models directory is empty,
+    // and nothing else in the app ever populates it. This is a one-time
+    // ~79 MB fetch, cached on disk after — the same shape whisper.js already
+    // has for the WASM path, not new behaviour.
+    if let Some(models_dir) = crate::inference::model_dir(&app) {
         let progress_app = app.clone();
-        let result = crate::inference::transcribe(&app, job_id, &pcm, None, cancel, move |stage, pct| {
-            let _ = progress_app.emit(
-                "transcribe-progress",
-                json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
-            );
-        });
-
-        if let Some(id) = journal_id {
-            if let Some(j) = app.try_state::<crate::journal::Journal>() {
-                j.finish(id);
-            }
-        }
-
-        match result {
-            Ok(cues) => {
-                let cues = crate::inference::to_lyric_cues(cues);
-                if cues.is_empty() {
-                    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
-                    return;
-                }
-                // Straight into the existing finaliser: alignment to the real
-                // plain lyrics, LLM correction, caching and the done event are
-                // all identical whether the cues came from the sidecar or the
-                // WebView, and duplicating any of it would be how the two
-                // start disagreeing.
-                let payload = json!({ "track": track, "cues": cues });
-                let _ = finalize_transcription(app, payload);
-            }
-            Err(message) => {
-                log::warn!("native transcription failed: {message}");
+        let progress_track = track.clone();
+        let ensured = crate::models::ensure(
+            &models_dir,
+            |file, pct| {
+                let _ = progress_app.emit(
+                    "transcribe-progress",
+                    json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
+                );
+            },
+            &|| cancel.cancelled(),
+        );
+        if let Err(message) = ensured {
+            if message != "cancelled" {
+                log::warn!("model download failed: {message}");
                 let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
             }
+            return;
         }
+    }
+
+    // Journal the attempt before the sidecar can write anything, so a crash
+    // between here and the matching `finish` below leaves a row pointing at a
+    // real, resumable PCM file — see journal.rs.
+    let t = track_from_value(&track);
+    let predicted_pcm_path = crate::inference::pcm_temp_path(job_id);
+    let journal_id = app
+        .try_state::<crate::journal::Journal>()
+        .and_then(|j| j.start(&key, &t.artist, &t.title, t.duration_ms, &predicted_pcm_path.to_string_lossy(), language.as_deref()));
+
+    let progress_track = track.clone();
+    let progress_app = app.clone();
+    let result = crate::inference::transcribe(&app, job_id, &pcm, language, cancel, move |stage, pct| {
+        let _ = progress_app.emit(
+            "transcribe-progress",
+            json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
+        );
+    });
+
+    if let Some(id) = journal_id {
+        if let Some(j) = app.try_state::<crate::journal::Journal>() {
+            j.finish(id);
+        }
+    }
+
+    match result {
+        Ok(cues) => {
+            let cues = crate::inference::to_lyric_cues(cues);
+            if cues.is_empty() {
+                let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+                return;
+            }
+            // Straight into the existing finaliser: alignment to the real
+            // plain lyrics, LLM correction, caching and the done event are
+            // all identical whether the cues came from a local file, a
+            // native recording, or the WebView — duplicating any of it would
+            // be how those start disagreeing.
+            let payload = json!({ "track": track, "cues": cues });
+            let _ = finalize_transcription(app, payload);
+        }
+        Err(message) => {
+            log::warn!("native transcription failed: {message}");
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+        }
+    }
+}
+
+/* --------------------------------------- native SMTC song recording --- */
+
+/// Stop the native song recording (`start_native_song_recording`) and
+/// transcribe what was captured.
+///
+/// This is the SMTC-playback counterpart to `transcribe_local_file` — same
+/// pipeline from here on, different source for the samples. It replaces
+/// `src/renderer/capture.js` + `transcribeAudio`'s WebView Whisper pass: that
+/// path recorded PCM in a `ScriptProcessorNode` and pushed the whole
+/// multi-megabyte `Float32Array` across Tauri's IPC to get it into Rust at
+/// all. This has nothing to push — the backend captured the audio itself, so
+/// only a file path crosses the boundary (JOB-ENGINE §7.7's opening line).
+///
+/// `track` is the song that was JUST playing (the renderer's `listeningTrack`,
+/// captured before the track actually changed — this command fires on the
+/// change itself, the same "flush on the way out" shape `flushTranscription`
+/// already had).
+#[tauri::command]
+pub(crate) fn stop_native_song_recording(app: AppHandle, track: Value, language: Option<String>) -> Value {
+    let Some((path, rate)) = crate::audio::stop_recording() else {
+        return json!({ "status": "too-short" });
+    };
+    if !crate::inference::available() {
+        let _ = std::fs::remove_file(&path);
+        return json!({ "status": "unavailable", "message": "inference sidecar not installed" });
+    }
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    let queued = jobs::submit(NativeSongRecordingJob { app, track, path, rate, language, key }, Priority::Now);
+    json!({ "status": if queued { "queued" } else { "already-running" } })
+}
+
+/// The Inference-lane job behind `stop_native_song_recording`.
+struct NativeSongRecordingJob {
+    app: AppHandle,
+    track: Value,
+    path: std::path::PathBuf,
+    rate: u32,
+    language: Option<String>,
+    key: String,
+}
+
+impl Runnable for NativeSongRecordingJob {
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        // Same prefix `NativeTranscribeJob` uses for the same track: a local
+        // file and a native recording of the same song are the same job as
+        // far as dedup is concerned, and only one should ever run.
+        format!("transcribe:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let NativeSongRecordingJob { app, track, path, rate, language, key } = *self;
+        let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "decoding" }));
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                let _ =
+                    app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": format!("cannot read recording: {e}") }));
+                return;
+            }
+        };
+        // The raw native-rate file was only ever meant to survive this one
+        // read — the resample below produces the copy that actually
+        // proceeds, and nothing else references this path.
+        let _ = std::fs::remove_file(&path);
+
+        let samples: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        if cancel.cancelled() {
+            return;
+        }
+        run_native_transcription(app, track, key, samples, rate, language, cancel);
     }
 }
 

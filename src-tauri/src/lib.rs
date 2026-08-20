@@ -112,6 +112,13 @@ pub fn run() {
             app.manage(Mutex::<Option<smtc::Session>>::new(None));
             app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "available": false }))));
 
+            // Recording temp files a previous session left behind (audio.rs).
+            // Unlike a transcription, a recording is not journaled — it is
+            // only worth resuming while its song is still playing — so a hard
+            // kill leaves a file with nothing pointing at it, and a capped one
+            // is over 100 MB at native rate.
+            audio::sweep_stale_recordings();
+
             // The transcription journal (JOB-ENGINE section 4 / 7.1). Opened
             // before anything can submit a transcription job, and swept
             // immediately after — any row still present at this exact moment
@@ -165,6 +172,8 @@ pub fn run() {
             commands::playback::start_audio_capture,
             commands::playback::stop_audio_capture,
             commands::playback::set_audio_waveform,
+            commands::playback::start_native_song_recording,
+            commands::playback::discard_native_song_recording,
             commands::prefs::set_autostart,
             commands::prefs::get_autostart,
             commands::prefs::get_transcribe_config,
@@ -188,6 +197,7 @@ pub fn run() {
             commands::lyrics_cmds::presync_list,
             commands::lyrics_cmds::precompute_tracks,
             commands::lyrics_cmds::transcribe_local_file,
+            commands::lyrics_cmds::stop_native_song_recording,
             commands::misc::report_jobs,
             commands::misc::report_client_error,
             commands::misc::open_crash_log,

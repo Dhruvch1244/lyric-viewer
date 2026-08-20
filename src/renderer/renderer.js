@@ -4606,11 +4606,19 @@ function flushHeatmap() {
 /* ------------------------------------------- Whisper transcription (learn) */
 
 /**
- * The track whose audio PcmCapture is currently recording, or null. Held so
- * the recording is submitted under the song it actually belongs to, even
- * though the flush happens after the *next* track has already started.
+ * Owns the in-progress recording: which song it belongs to (the flush happens
+ * after the *next* track has already started, so the track has to be held),
+ * which of the two recorders is running, and the teardown for each. See
+ * listen.js — the recorder choice and its start/stop race live there because
+ * they are the part worth unit-testing.
  */
-let listeningTrack = null;
+const transcribeListener = window.TranscriptionListen.create({
+  player: window.player,
+  // Read lazily, not captured: capture.js is only needed on the webview path,
+  // and a missing PcmCapture must degrade to "native only" rather than throw.
+  getCapture: () => window.PcmCapture,
+  wantsIsolation: () => wantsVocalIsolation(),
+});
 
 /** Whether transcription is enabled + which language/model to use. */
 let transcribeCfg = { enabled: true, language: '', model: '', vocalIsolation: false };
@@ -4631,13 +4639,32 @@ let plainLyricsAvailable = false;
 let manualLyricsActive = false;
 
 /**
+ * Whether transcription should isolate vocals first — which only the webview
+ * recorder can do, since Demucs is not in the sidecar (JOB-ENGINE §5.2 lists
+ * it as following Whisper, not built). Read by listen.js when it picks a
+ * recorder and again when it flushes one, so flipping the setting mid-song
+ * cannot break a recording; at worst a song already being recorded natively
+ * finishes without isolation.
+ *
+ * Lite mode means "fewer effects, save resources" — isolation is an optional
+ * accuracy enhancement with a real CPU cost (a second multi-MB model, a full
+ * chunked inference pass), so it is the one thing worth skipping outright
+ * rather than just tuning down.
+ *
+ * @returns {boolean}
+ */
+function wantsVocalIsolation() {
+  return Boolean(transcribeCfg.vocalIsolation) && !liteMode;
+}
+
+/**
  * Start recording the current song so it can be transcribed once it ends.
  * Requires live loopback capture (the ♫ chip) — without real audio there is
- * nothing to transcribe.
+ * nothing to transcribe. Which recorder runs is listen.js's decision.
  */
 function beginTranscriptionListen() {
-  if (!transcribeCfg.enabled || !window.PcmCapture || !currentTrack) return;
-  if (listeningTrack) return;                       // already recording this song
+  if (!transcribeCfg.enabled || !currentTrack) return;
+  if (transcribeListener.isListening()) return;               // already recording this song
   if (!window.AudioReactive || !window.AudioReactive.isActive()) {
     // Loopback is off; say so rather than silently doing nothing, since the
     // fix (turn on ♫) is one click away. When the real words are already known,
@@ -4647,45 +4674,27 @@ function beginTranscriptionListen() {
       : 'no synced lyrics — enable ♫ to auto-transcribe');
     return;
   }
-  if (window.PcmCapture.start()) {
-    listeningTrack = currentTrack;
+  transcribeListener.begin(currentTrack).then((mode) => {
+    // null means no recorder would start, or the song changed while one was
+    // starting — either way there is nothing to promise the user.
+    if (!mode) return;
     setStatus(plainLyricsAvailable
       ? 'lyrics found — timing them to the music…'
       : 'no synced lyrics — listening to learn this song…');
-  }
+  });
 }
 
 /** Abandon the in-progress recording (real lyrics turned up, or user skipped). */
 function stopTranscriptionListen() {
-  if (!listeningTrack || !window.PcmCapture) return;
-  window.PcmCapture.reset();
-  listeningTrack = null;
+  transcribeListener.stop();
 }
 
 /**
- * Hand whatever was recorded to the main process for transcription. Called as
- * the track changes, which is the point we know the song is over.
+ * Hand whatever was recorded to the backend for transcription. Called as the
+ * track changes, which is the point we know the song is over.
  */
 function flushTranscription() {
-  if (!listeningTrack || !window.PcmCapture) return;
-  const track = listeningTrack;
-  listeningTrack = null;
-
-  const pcm = window.PcmCapture.take();   // null when too little audio to bother
-  if (!pcm) return;
-
-  window.player
-    .transcribeAudio({
-      track,
-      pcm,
-      language: transcribeCfg.language || undefined,
-      // Lite mode means "fewer effects, save resources" — vocal isolation is
-      // an optional accuracy enhancement with a real CPU cost (a second
-      // multi-MB model, a full chunked inference pass), so it's the one thing
-      // worth skipping outright rather than just tuning down.
-      vocalIsolation: Boolean(transcribeCfg.vocalIsolation) && !liteMode,
-    })
-    .catch((err) => console.warn('[transcribe] failed:', err && err.message));
+  transcribeListener.flush({ language: transcribeCfg.language || undefined });
 }
 
 window.player.onTranscribeProgress((data) => {

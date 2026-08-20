@@ -473,6 +473,11 @@
     <script src="sprites.js"></script>
     <script src="audio.js"></script>
     <script src="capture.js"></script>
+    <!-- Picks between the native (backend/sidecar) and webview recorders for
+         learning a song, and owns the teardown. Needs capture.js above only at
+         call time, but must load before renderer.js, which creates the
+         listener as it initialises. -->
+    <script src="listen.js"></script>
     <script src="beatmap.js"></script>
     <script src="wordtiming.js"></script>
     <script src="mood.js"></script>
