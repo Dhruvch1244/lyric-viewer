@@ -101,6 +101,9 @@ const els = {
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
   keyStatus: document.getElementById('keybox-status'),
+  acoustidInput: document.getElementById('keybox-acoustid'),
+  acoustidSave: document.getElementById('keybox-acoustid-save'),
+  acoustidStatus: document.getElementById('keybox-acoustid-status'),
   canvas: document.getElementById('backdrop'),
   swirl: document.getElementById('swirl'),
   milkdrop: document.getElementById('milkdrop'),
@@ -4700,6 +4703,7 @@ function flushTranscription() {
 window.player.onTranscribeProgress((data) => {
   const WORK = {
     download: 'downloading speech model', transcribing: 'transcribing',
+    identifying: 'identifying the song', identified: null,
     aligning: 'aligning words', aligned: null, 'align-weak': null,
     correcting: 'checking the words', corrected: null,
     'words-added': null,
@@ -4719,6 +4723,14 @@ window.player.onTranscribeProgress((data) => {
       break;
     case 'relanguage':
       setStatus('sounds Hindi — re-transcribing properly…');
+      break;
+    case 'identifying':
+      // Only ever fires for a track whose metadata looked like a video title,
+      // so the user has probably already noticed it was wrong.
+      setStatus('working out what that song actually was…');
+      break;
+    case 'identified':
+      setStatus(`identified: ${data.artist} — ${data.title}`);
       break;
     case 'aligned':
       // Real lyric text matched onto the transcribed timings — the good case.
@@ -5899,6 +5911,36 @@ els.keyInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') saveApiKey();
   if (e.key === 'Escape') closeKeybox();
 });
+
+/**
+ * Save the AcoustID key. Separate from `saveApiKey` rather than generalised,
+ * because the two report different things: an AI key changes which *provider*
+ * is active and refreshes the provider chip, while this one only enables
+ * song identification and has no provider to name.
+ */
+async function saveAcoustidKey() {
+  const value = els.acoustidInput.value.trim();
+  els.acoustidStatus.textContent = 'saving…';
+  try {
+    const res = await window.player.setApiKey('ACOUSTID_API_KEY', value);
+    if (res.status === 'ok') {
+      els.acoustidInput.value = '';
+      els.acoustidStatus.textContent = value ? 'saved — songs with video titles will be identified' : 'cleared';
+    } else {
+      els.acoustidStatus.textContent = res.message || 'save failed';
+    }
+  } catch (err) {
+    els.acoustidStatus.textContent = err.message || 'save failed';
+  }
+}
+
+if (els.acoustidSave) els.acoustidSave.addEventListener('click', saveAcoustidKey);
+if (els.acoustidInput) {
+  els.acoustidInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveAcoustidKey();
+    if (e.key === 'Escape') closeKeybox();
+  });
+}
 
 /* Pre-sync panel. The 📋 chip reveals a paste area; running it fetches + caches
    synced lyrics for the whole list in the background so those songs play instantly

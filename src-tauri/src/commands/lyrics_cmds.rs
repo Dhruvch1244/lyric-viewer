@@ -467,6 +467,11 @@ fn run_native_transcription(
     let pcm = crate::inference::resample_to_16k(&samples, rate);
     drop(samples); // the pre-resample original can be several times the resampled size
 
+    // Find out what this actually is, while the audio is in hand (JOB-ENGINE
+    // §5.1). Only fires on metadata that looks browser-shaped and only when a
+    // key is configured, so on a normal library it costs nothing.
+    let identified = identify_from_audio(&app, &track, &pcm);
+
     // First transcription on a fresh install: the models directory is empty,
     // and nothing else in the app ever populates it. This is a one-time
     // ~79 MB fetch, cached on disk after — the same shape whisper.js already
@@ -529,12 +534,70 @@ fn run_native_transcription(
             // all identical whether the cues came from a local file, a
             // native recording, or the WebView — duplicating any of it would
             // be how those start disagreeing.
-            let payload = json!({ "track": track, "cues": cues });
+            let mut payload = json!({ "track": track, "cues": cues });
+            if let Some(id) = identified {
+                payload["identified"] = json!({ "artist": id.artist, "title": id.title, "mbid": id.mbid });
+            }
             let _ = finalize_transcription(app, payload);
         }
         Err(message) => {
             log::warn!("native transcription failed: {message}");
             let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+        }
+    }
+}
+
+/// Identify what is really playing, from the audio rather than the metadata
+/// (JOB-ENGINE §5.1).
+///
+/// Placed on the transcription path on purpose, and not as a job of its own:
+/// this is the one moment the app already has a song's worth of decoded PCM in
+/// memory, so identification is a fingerprint pass and one request rather than
+/// a second recording. It is also the moment it is worth the most — a
+/// transcription with a garbage title finds no real lyrics to align to, so
+/// Whisper's mishearings get cached as *the* lyrics for that song.
+///
+/// Returns `None` far more often than not, and every one of those is normal:
+/// no key configured, metadata that already looks fine, too little audio, or
+/// nothing confident enough in the index. A failure here never fails the
+/// transcription — the worst case is the behaviour that exists today.
+fn identify_from_audio(app: &AppHandle, track: &Value, pcm: &[f32]) -> Option<crate::acoustid::Identified> {
+    if !crate::acoustid::available() {
+        return None;
+    }
+    let t = track_from_value(track);
+    if !crate::acoustid::worth_identifying(&t) {
+        return None;
+    }
+
+    let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "identifying" }));
+    let fp = match crate::fingerprint::compute(pcm, crate::inference::SAMPLE_RATE) {
+        Ok(fp) => fp,
+        Err(e) => {
+            log::info!("not fingerprinting: {e}");
+            return None;
+        }
+    };
+    // AcoustID scores on duration too, and it wants the WHOLE track's, not the
+    // excerpt the fingerprint covers. Zero when SMTC did not report one, which
+    // the lookup tolerates.
+    let duration_secs = (t.duration_ms.max(0) / 1000) as u32;
+    match crate::acoustid::identify(&fp, duration_secs) {
+        Ok(Some(id)) => {
+            log::info!("identified '{}' as '{} - {}' (score {:.2})", t.title, id.artist, id.title, id.score);
+            let _ = app.emit(
+                "transcribe-progress",
+                json!({ "track": track, "stage": "identified", "artist": id.artist, "title": id.title }),
+            );
+            Some(id)
+        }
+        Ok(None) => {
+            log::info!("acoustid had nothing confident for '{}'", t.title);
+            None
+        }
+        Err(e) => {
+            log::warn!("acoustid lookup failed: {e}");
+            None
         }
     }
 }
@@ -1157,13 +1220,31 @@ fn finalize_transcription_inner(app: &AppHandle, payload: Value, quiet: bool) ->
     }
 
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
-    let t = track_from_value(&track);
+    let mut t = track_from_value(&track);
     let raw_cues: Vec<crate::lyrics::Cue> = payload.get("cues").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     if raw_cues.is_empty() {
         emit!("transcribe-progress", json!({ "track": track, "stage": "empty" }));
         return json!({ "status": "empty" });
     }
     let key = track_key(&t.artist, &t.title);
+
+    // `identified` is what the AUDIO says this is (acoustid.rs), present only
+    // when the player's own metadata looked browser-shaped and a lookup came
+    // back confident. Applied strictly AFTER `key` is derived, which is the
+    // whole subtlety: the cache key has to stay the one the *player's*
+    // metadata produces, because that is what the next play of this song will
+    // look up — the browser will report the same video title again. Everything
+    // below wants the true names instead: the plain-lyric fetch, the LLM's
+    // context for correction, and the title/artist written into the cached
+    // payload and shown on screen.
+    if let Some(id) = payload.get("identified") {
+        let artist = id.get("artist").and_then(|a| a.as_str()).unwrap_or("").trim();
+        let title = id.get("title").and_then(|t| t.as_str()).unwrap_or("").trim();
+        if !artist.is_empty() && !title.is_empty() {
+            t.artist = artist.to_string();
+            t.title = title.to_string();
+        }
+    }
 
     if let Some(path) = lyrics_cache_path(app, &key) {
         if let Ok(text) = std::fs::read_to_string(&path) {

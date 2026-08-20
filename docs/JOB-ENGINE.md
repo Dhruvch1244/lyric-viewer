@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). Phases 5–7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. Phases 6–7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -343,7 +343,7 @@ never calls the command, keeps working unchanged.
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
-| **5** | Fingerprinting → AcoustID (5.1). Fixes browser metadata. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
+| **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
 
@@ -804,6 +804,92 @@ and trusting mtime granularity). What is not covered anywhere, and is the
 honest boundary: the WASAPI thread itself calling `record_batch` once per
 packet, which needs a real device.
 
+### 7.11 Phase 5: identifying the song from the sound
+
+§5.1's case in one line: SMTC from a browser reports the *video* title, every
+lookup downstream inherits it, and no amount of text cleaning recovers a title
+that was never in the string. `lyrics::clean_title` can strip `(Official
+Video)`; it cannot turn a channel name into an artist.
+
+Three modules, split by what can be wrong and how:
+
+- **`fingerprint.rs`** — PCM in, a Chromaprint string out. Pure computation, no
+  network, no key. `rusty-chromaprint` rather than a C binding, for the same
+  reason `sha2` beat system OpenSSL: Windows needs no toolchain and nothing
+  ships beside the exe. It also carries `FingerprintCompressor`, which is the
+  part that actually matters — AcoustID does not accept raw u32 fingerprints,
+  it accepts Chromaprint's own compressed encoding, and hand-rolling that
+  format produces a request rejected for reasons no local test reproduces.
+- **`acoustid.rs`** — when to ask, what to send, how to read the answer, and
+  which candidate to believe. Everything here is offline and tested offline
+  except the one `ureq` call.
+- **`musicbrainz.rs`** — MBID → canonical credit, keyless. Not the happy path
+  (`meta=recordings` usually inlines the metadata) but genuinely reached: a
+  fingerprint AcoustID knows, linked to a recording it returned bare, is
+  common. It is also the *better* source when reached — MusicBrainz carries
+  the join phrases (`"A feat. B"`) that AcoustID's flat name list loses, and
+  that string goes straight into a lyric search.
+
+**Where it runs, and why not as a job of its own.** Identification is hooked
+into `run_native_transcription`, not given a `Job` variant. That is the one
+moment the app already holds a song's worth of decoded PCM, so identification
+costs a fingerprint pass and one request instead of a second recording — and
+it is also where a wrong title does the most damage. A transcription of a
+mislabelled song finds no real lyrics to align against, so `align.rs` is
+skipped and Whisper's mishearings get written to the cache as *the* lyrics for
+that song, permanently. Identifying first is what turns that into a real
+alignment.
+
+**The subtlety worth writing down: the corrected name must not become the
+cache key.** `finalize_transcription_inner` derives `key` from the *player's*
+metadata and applies the identification strictly after, because the next play
+of that song will report the same video title again and look under the same
+garbage key. Caching under the true name would mean identifying, transcribing,
+and then never finding the result. So the true name drives the plain-lyric
+fetch, the LLM's correction context, and what is shown on screen; the key stays
+what the player says.
+
+**Two decisions made in the direction of doing nothing:**
+
+- **`worth_identifying` is narrow on purpose.** A bare `" - "` in a title is
+  not a signal — Spotify's own catalogue is full of `"Song 2 - Remastered
+  2012"`, and firing on those would spend a fingerprint and a request on most
+  of a normal library. What does fire: no artist at all, a channel-shaped
+  artist (`VEVO`, `- Topic`, `Records`), unambiguous platform noise (`official
+  video`, `lyric video`, `[4K]`), a pipe, or the artist repeated at the front
+  of the title (`"Seedhe Maut - Nanchaku"` credited to `Seedhe Maut` — a media
+  player never does that, an upload almost always does).
+- **`MIN_SCORE` is 0.8 and a duration mismatch is fatal.** A wrong
+  identification is worse than none: it rewrites the track's identity for the
+  lyric lookup, the artwork, the play history and the cache, and none of those
+  can tell they were lied to. A genuine match on clean audio scores well above
+  0.9, so the band below 0.8 is where a noisy capture brushes against a
+  different recording. The duration check catches the specific near-miss that
+  scores high anyway — the radio edit instead of the album cut, whose lyrics
+  do not line up.
+
+**What is verified and what is not.** The fingerprinter's algorithm id, its
+determinism, that different audio fingerprints differently, that the encoding
+is URL-safe base64 whose header declares the algorithm, that the cap works,
+and — the property AcoustID actually relies on — that a time-shifted copy of
+the same audio still matches under `match_fingerprints`. The AcoustID request
+shape, response parsing and candidate choice are covered against fixtures,
+including the mistake that would be invisible in production: sending the
+analysed excerpt's length as `duration` instead of the whole track's, which
+lowers every score behind a perfectly successful HTTP 200. **MusicBrainz is
+verified against the live service** (`a_real_recording_resolves`, `#[ignore]`d
+— it returns `Queen / Bohemian Rhapsody / 355s`).
+
+**AcoustID itself has never been called.** It needs a free application key
+from acoustid.org, entered in the 🔑 panel as `ACOUSTID_API_KEY`; without one
+`available()` is false and none of this code runs, so the app behaves exactly
+as it did before. `acoustid::tests::a_real_lookup_answers` is the one-command
+proof once a key exists — it deliberately fingerprints synthetic audio that
+matches nothing, so it tests that the request is *accepted* and the response
+parses without depending on any particular song being in the index. Until that
+has been run, treat this phase as plausible rather than proven; it is the same
+standing rule the rest of this document applies.
+
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
 
@@ -822,7 +908,10 @@ this app:
 | Native multi-thread vs single-thread WASM: 3–8× | **Estimate** from the threading change alone |
 | VAD roughly halves Whisper work | **Estimate** from typical vocal/instrumental ratio |
 | Silero: 2.3 MB, <1 ms per 30 ms chunk | Published, third-party |
-| chromaprint-next bit-identical, ~4% faster than C | Published, third-party |
+| ~~chromaprint-next bit-identical, ~4% faster than C~~ | **Not adopted.** §7.11 shipped `rusty-chromaprint` instead: `chromaprint-next` is at 0.1.0 and its docs.rs build 404s, while `rusty-chromaprint` 0.3.0 carries the `FingerprintCompressor` AcoustID requires. Both are pure Rust, which was the actual requirement. |
+| The fingerprint survives a time shift | **Measured** on this app — `fingerprint::tests::the_fingerprint_follows_the_content_not_the_clock` matches a clip against a copy of itself offset by 2 s. |
+| A MusicBrainz recording MBID resolves to a canonical credit | **Measured** against the live service (`musicbrainz::tests::a_real_recording_resolves`). |
+| An AcoustID lookup returns anything at all | **Never run.** No key has been registered — see §7.11. |
 | ~~Audio IPC costs 1.5–5% of the main thread~~ | **Withdrawn.** Was an extrapolation from a published `JSON.parse` benchmark; measurement put it at 0.038% of one core — see §6. |
 | Audio IPC costs 0.38 ms per second of main thread | **Measured** on V8 (node 24), 200k iterations, median of 7 runs, unique script per frame. Excludes WebView2's out-of-process `ExecuteScript` overhead, which is not measurable from a node harness. |
 | Tauri `Channel` raw frames are slower than `emit` at this size | **Measured** (0.0030 vs 0.0023 ms/frame) and **read from source** (`channel.rs`: a JSON number array under 1 KB, a `fetch` round trip over it). |

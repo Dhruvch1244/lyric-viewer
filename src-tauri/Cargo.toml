@@ -76,6 +76,13 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
 # Verifies downloaded ONNX models (models.rs) against a pinned SHA-256 —
 # pure Rust, no system OpenSSL, consistent with everything else here.
 sha2 = "0.10"
+# Chromaprint audio fingerprints for track identification (fingerprint.rs,
+# JOB-ENGINE section 5.1). A pure-Rust port, so Windows needs no C toolchain
+# and no chromaprint DLL beside the exe — the same reasoning that picked
+# `sha2` over system OpenSSL. It also carries `FingerprintCompressor`, which
+# is the part AcoustID actually needs: raw u32 fingerprints are useless to the
+# API without its compression format.
+rusty-chromaprint = "0.3"
 # The job journal and the lyric/track index (JOB-ENGINE section 4).
 # `bundled` compiles SQLite from source, adding no system dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }

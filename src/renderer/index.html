@@ -189,6 +189,18 @@
         <button id="keybox-save" class="chip" type="button">Save</button>
         <span id="keybox-status" class="keybox__status" role="status"></span>
 
+        <!-- AcoustID: identifies a song from its audio when the player's own
+             metadata is a video title. Separate from the key above because it
+             is not an AI provider and gates a different feature entirely — see
+             src-tauri/src/acoustid.rs. Free key from acoustid.org/new-application. -->
+        <div class="keybox__local">
+          <label class="keybox__label" for="keybox-acoustid">AcoustID key (identify songs by sound)</label>
+          <input id="keybox-acoustid" class="keybox__input" type="password"
+                 placeholder="acoustid.org/new-application" autocomplete="off" spellcheck="false" />
+          <button id="keybox-acoustid-save" class="chip" type="button">Save</button>
+          <span id="keybox-acoustid-status" class="keybox__status" role="status"></span>
+        </div>
+
         <!-- Local AI: pick a developer CLI to use when the cloud has no key or
              is out of quota. Available here on demand, not only when a request
              has already failed. -->

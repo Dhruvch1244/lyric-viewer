@@ -19,6 +19,7 @@
 //! - `commands`: the `#[tauri::command]` handlers, grouped by domain
 //!   (`prefs`, `lyrics_cmds`, `artwork_cmds`, `playback`, `updater`, `misc`).
 
+mod acoustid;
 mod align;
 mod analysis;
 mod artwork;
@@ -27,7 +28,9 @@ mod attribute;
 mod commands;
 mod correct;
 mod crashlog;
+mod fingerprint;
 mod genius;
+mod musicbrainz;
 mod jobs;
 mod kugou;
 mod llm;
