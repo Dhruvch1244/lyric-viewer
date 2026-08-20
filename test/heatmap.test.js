@@ -262,3 +262,107 @@ test('structure follows the map when something new is learned', () => {
   for (let i = 48; i < HeatMap.BIN_COUNT; i += 1) HeatMap.note(i * binMs + binMs / 2, env(1.0));
   assert.ok(HeatMap.sections().length > 1, 'the new drop should split the song');
 });
+
+/* ------------------------------------------- measured section boundaries --- */
+/*
+  `setSections` lets the native structure pass (structure.rs) say WHERE a song
+  changes section, while the heat map keeps saying WHAT each section is. The
+  two failure modes worth pinning: measured boundaries being ignored, and a
+  previous song's boundaries surviving a track change — the second is worse,
+  because a wrong boundary drawn confidently beats no boundary at all.
+*/
+
+/**
+ * Fill EVERY bin of a track, so coverage is complete and no bin is left
+ * unknown — an unknown bin smooths to zero and shows up as a spurious section
+ * of its own, which would make these tests measure the fixture rather than the
+ * code.
+ */
+function fillTrack(durationMs, levelAt) {
+  // `start` is a no-op when the duration matches the map it already holds —
+  // that is how peak-holding across replays works — so these tests, which all
+  // use the same length, have to clear it explicitly or each inherits the
+  // previous one's energy.
+  HeatMap.load(null);
+  HeatMap.start(durationMs);
+  HeatMap.setSections(null);
+  const binMs = durationMs / HeatMap.BIN_COUNT;
+  for (let i = 0; i < HeatMap.BIN_COUNT; i += 1) {
+    const ms = (i + 0.5) * binMs;
+    const v = levelAt(ms);
+    for (let n = 0; n <= HeatMap.MIN_SAMPLES; n += 1) HeatMap.note(ms, env(v));
+  }
+}
+
+test('measured boundaries replace the energy-tier ones', () => {
+  // A track with no loudness change at all: the tier path finds exactly one
+  // section, so any split here can only have come from the measured list.
+  fillTrack(200000, () => 0.5);
+  assert.equal(HeatMap.sections().length, 1, 'a flat track should have one tier section');
+
+  HeatMap.setSections([0, 50000, 120000]);
+  const s = HeatMap.sections();
+  assert.equal(s.length, 3, `expected 3 measured sections, got ${s.length}`);
+  assert.equal(s[0].startMs, 0);
+  assert.ok(Math.abs(s[1].startMs - 50000) < 3000, `section 2 starts at ${s[1].startMs}`);
+  assert.ok(Math.abs(s[2].startMs - 120000) < 3000, `section 3 starts at ${s[2].startMs}`);
+});
+
+test('measured sections are still named from their own energy', () => {
+  // The composition that makes this worth doing: structure says where, the
+  // heat map says what. A loud measured section must still come back "drop".
+  fillTrack(200000, (ms) => (ms >= 100000 ? 1.0 : 0.1));
+  HeatMap.setSections([0, 100000]);
+  const s = HeatMap.sections();
+  assert.equal(s.length, 2);
+  assert.ok(s[1].level > s[0].level, 'the loud half did not read as louder');
+  assert.equal(s[1].kind, 'drop', `loud measured section was named "${s[1].kind}"`);
+  assert.notEqual(s[0].kind, 'drop', `quiet measured section was named "${s[0].kind}"`);
+});
+
+test('sections cover the whole track with no gaps', () => {
+  fillTrack(200000, () => 0.5);
+  HeatMap.setSections([0, 50000, 120000]);
+  const s = HeatMap.sections();
+  assert.equal(s[0].startMs, 0);
+  for (let i = 1; i < s.length; i += 1) {
+    assert.equal(s[i].startMs, s[i - 1].endMs, `gap or overlap before section ${i}`);
+  }
+  assert.ok(s[s.length - 1].endMs >= 200000 - 3000, `track ends at ${s[s.length - 1].endMs}`);
+});
+
+test('clearing the boundaries goes back to energy tiers', () => {
+  fillTrack(200000, (ms) => (ms >= 100000 ? 1.0 : 0.1));
+  HeatMap.setSections([0, 30000, 60000, 90000, 150000]);
+  assert.ok(HeatMap.sections().length > 2);
+  HeatMap.setSections(null);
+  const s = HeatMap.sections();
+  assert.equal(s.length, 2, `tier fallback should find the one loudness change, got ${s.length}`);
+});
+
+test('a boundary list too short to mean anything is ignored', () => {
+  fillTrack(200000, () => 0.5);
+  HeatMap.setSections([0]);
+  assert.equal(HeatMap.sections().length, 1);
+  HeatMap.setSections([]);
+  assert.equal(HeatMap.sections().length, 1);
+});
+
+test('setting boundaries invalidates the memoised structure', () => {
+  // sections() is cached against `revision` and asked for every frame. If
+  // setSections did not bump it, measured boundaries would not appear until
+  // the next bin changed — which for a fully-analysed local file is never.
+  fillTrack(200000, () => 0.5);
+  const before = HeatMap.sections().length;
+  HeatMap.setSections([0, 100000]);
+  assert.notEqual(HeatMap.sections().length, before, 'the cached structure was served after a change');
+});
+
+test('two boundaries inside one bin do not produce an empty section', () => {
+  // 200s across 96 bins is ~2.1s per bin, so these three land together.
+  fillTrack(200000, () => 0.5);
+  HeatMap.setSections([0, 100000, 100100, 100200]);
+  for (const s of HeatMap.sections()) {
+    assert.ok(s.endMs > s.startMs, `empty section at ${s.startMs}`);
+  }
+});

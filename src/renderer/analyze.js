@@ -209,7 +209,8 @@
    *
    * @param {{windowMs:number, level:number[], bass:number[], treble:number[], onsets:number[],
    *          beats?:{bpm:number, beatsMs:number[], confidence:number},
-   *          key?:{tonic:number, name:string, major:boolean, label:string, confidence:number}}} result
+   *          key?:{tonic:number, name:string, major:boolean, label:string, confidence:number},
+   *          sectionStartsMs?:number[]}} result
    * @param {number} durationMs
    * @returns {{windows:number, onsets:number, bpm:number|null, beatsMs:number[]|null,
    *            key:object|null, source:string}}
@@ -227,6 +228,12 @@
           treble: result.treble[w],
         });
       }
+      /* Measured section boundaries (structure.rs), set AFTER the bins are
+         filled so the sections they define have energy to be named from.
+         Always called, with null when there are none, so a track with no
+         measured structure falls back to energy tiers rather than inheriting
+         the previous song's boundaries. */
+      if (window.HeatMap.setSections) window.HeatMap.setSections(result.sectionStartsMs || null);
     }
     let bpm = null;
     let beatsMs = null;

@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is half done**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug) and key detection (§7.13) are in; structure segmentation and loudness normalisation are not. Phase 7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is three quarters done**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug), key detection (§7.13) and structure segmentation (§7.14) are in; loudness normalisation is not. Phase 7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -344,7 +344,7 @@ never calls the command, keeps working unchanged.
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
-| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). Structure (5.4) and loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
+| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). Loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
@@ -1010,9 +1010,51 @@ palette-assignment blocks — one for the artwork palette, one for the mood
 palette — into a single `applyPalette`, since a tint applied to only one of
 them would recolour the app differently depending on which pass answered last.
 
-**Not yet done from Phase 6:** structure segmentation (§5.4) and loudness
-normalisation (§5.6). Structure will reuse `key::chromagram`, which is why it
-returns per-frame vectors rather than one averaged one.
+### 7.14 Phase 6, part 3: where the song changes section
+
+§5.4, by Foote's method, on the chromagram key detection already computes.
+Build the self-similarity matrix — a song's has visible square blocks along
+the diagonal, because within a chorus every frame resembles every other — then
+slide a **checkerboard kernel** down it. The kernel is positive on the two
+"within a block" quadrants and negative on the two "across the boundary" ones,
+so its response spikes exactly where the music stops resembling itself. The
+peaks of that response are the boundaries.
+
+**Why not the energy tiers `heatmap.js` already derives.** Those split a song
+where its *loudness* changes, which is a decent proxy and wrong in two common
+cases: a verse and a chorus at the same level read as one section, and a
+crescendo inside one section reads as two. Chroma novelty splits where the
+*harmony* changes, which is what a section boundary is.
+
+**The two compose rather than compete**, and that is the part worth copying
+elsewhere. `structure.rs` supplies *where* the boundaries are; `HeatMap`
+still names and levels each resulting section exactly as before, so `kind`
+("drop", "build", "verse") means what it always meant and every existing
+consumer — the timeline, the drop countdown, `sectionAt` — needed no change.
+`setSections(null)` returns to the tier fallback, which is what every SMTC
+track and every local file too uniform to commit to a boundary still uses.
+
+**A relative threshold cannot refuse, and that was a real bug.** The first
+version accepted peaks more than one standard deviation above the novelty
+curve's mean. A song that never changes harmony has a novelty curve flat at
+approximately zero — so its standard deviation is also approximately zero, and
+floating-point noise is many sigma above the mean. It found boundaries in a
+single sustained chord. The fix is a second, absolute floor expressed as a
+fraction of what a *perfect* boundary would score (about half the kernel's
+total magnitude, since the positive quadrants see similarity 1 and the
+negative ones see 0), so it stays meaningful if the kernel size ever changes.
+
+Peaks are also taken strongest-first rather than left-to-right: two candidates
+closer than the minimum section length are resolved in favour of the better
+one, where a forward scan would keep whichever came first and suppress a
+stronger boundary just after it.
+
+**Deliberately not done:** naming sections by repetition — the A-B-A-B-C that
+would let "chorus" mean the one that recurs. That needs segment clustering on
+top of this and nothing consumes it yet; the boundaries are the part with a
+consumer today.
+
+**Not yet done from Phase 6:** loudness normalisation (§5.6).
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.

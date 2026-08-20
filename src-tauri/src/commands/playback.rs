@@ -205,6 +205,10 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
         log::info!("key: {} (margin {:.2})", key.label, key.confidence);
         out["key"] = serde_json::to_value(&key).unwrap_or(Value::Null);
     }
+    if let Some(starts) = crate::structure::detect(&samples, sample_rate) {
+        log::info!("structure: {} section(s)", starts.len());
+        out["sectionStartsMs"] = json!(starts);
+    }
     out
 }
 

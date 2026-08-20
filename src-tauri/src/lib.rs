@@ -48,6 +48,7 @@ mod presets;
 #[cfg(windows)]
 mod smtc;
 mod state;
+mod structure;
 mod translate;
 mod transliterate;
 mod tray;

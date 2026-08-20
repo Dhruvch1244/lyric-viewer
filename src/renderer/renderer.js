@@ -4962,7 +4962,12 @@ window.player.onTrack((track) => {
   if (window.Tempo) window.Tempo.reset();   // a new song has its own tempo
   // An empty map for this track; the stored one (if any) arrives via `heatmap`
   // right after and replaces it, provided the track lengths agree.
-  if (window.HeatMap) window.HeatMap.start(track.durationMs || 0);
+  if (window.HeatMap) {
+    window.HeatMap.start(track.durationMs || 0);
+    // The previous song's measured boundaries are confidently wrong here, not
+    // merely stale — worse than the energy-tier fallback they replaced.
+    if (window.HeatMap.setSections) window.HeatMap.setSections(null);
+  }
   anticipation = 0;                         // nothing is known about this song yet
   anticipationToPeakMs = 0;
   if (window.BeatMap) {
