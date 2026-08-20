@@ -25,6 +25,7 @@ mod analysis;
 mod artwork;
 mod audio;
 mod attribute;
+mod beats;
 mod commands;
 mod correct;
 mod crashlog;

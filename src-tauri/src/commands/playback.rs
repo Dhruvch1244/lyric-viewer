@@ -174,6 +174,15 @@ pub(crate) fn end_local_playback(app: AppHandle) {
 /// per-window energy envelopes + bass onsets the renderer feeds into the heat
 /// map and tempo estimator — so a local song's shape is known on the first play
 /// with no Web Audio decode stalling the opening frames.
+///
+/// Also returns `beats`: a whole-song beat grid from `beats.rs`. That is a
+/// second pass over the same samples (an STFT the envelope analysis does not
+/// need), and it is worth it — the renderer's live estimator drifts by
+/// construction and was measured reading a 138 BPM track as 174. It is also
+/// cheap: 30 s of audio tracks in 0.02 s in a release build, so a four-minute
+/// song costs on the order of 0.15 s, against a decode that already happened.
+/// Absent when the track has no steady beat, which the renderer must treat as
+/// "no grid" rather than "zero BPM".
 #[tauri::command]
 pub(crate) fn analyze_local_file(path: String) -> Value {
     let (samples, sample_rate) = match crate::analysis::decode_to_mono(&path) {
@@ -184,6 +193,10 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
     let mut out = serde_json::to_value(&a).unwrap_or(json!({}));
     out["ok"] = json!(true);
     out["durationMs"] = json!((samples.len() as f64 / sample_rate as f64) * 1000.0);
+    if let Some(beats) = crate::beats::track(&samples, sample_rate) {
+        log::info!("beat grid: {:.1} BPM, {} beats, confidence {:.2}", beats.bpm, beats.beats_ms.len(), beats.confidence);
+        out["beats"] = serde_json::to_value(&beats).unwrap_or(Value::Null);
+    }
     out
 }
 

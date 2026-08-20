@@ -1200,6 +1200,17 @@ let anticipationToPeakMs = 0;
 
 let beatPeriodMs = 500;     // current estimated beat length
 let beatClockMs = 0;        // accumulates dt, wraps every beatPeriodMs
+/*
+  The measured beat grid for the current song (ms from its start), from the
+  native offline pass (beats.rs via analyze_local_file). Null for anything not
+  played locally, and cleared on every track change — a previous song's grid
+  applied to this one is worse than none.
+
+  Held rather than reduced to a BPM because it also supplies the PHASE: the
+  live phase tracker needs ♫ capture, and without it the clock free-runs and
+  drifts against the music even when the period is exactly right.
+*/
+let songBeatsMs = null;
 let beatPhase = 0;          // 0..1 within the current beat
 let beatFlash = 0;          // decays after each beat, drives pulses/flicker
 /* Screen flicker/strobe (0..1). Rises on drops + high energy, and micro-strobes
@@ -3308,12 +3319,26 @@ function drawBackdrop(now) {
 
       if (known) {
         const period = 60000 / known;
-        const ph = window.Tempo.phaseFor(period);
         tempoLocked = true;
         tempoBpm = known;
         beatPeriodMs = period;
-        if (ph && ph.confidence >= TEMPO_LOCK_OUT) {
-          beatClockMs = ((now - ph.phaseMs) % period + period) % period;
+        /*
+          Phase from the measured grid when there is one, and only then from
+          live capture. The grid is exact and needs no audio at all, so this is
+          the one case where the clock stays in step with ♫ turned off — which
+          is most of the time. `beatPhaseAt` returns null before the first
+          measured beat (an intro can precede it), and that falls through to
+          the live tracker rather than pinning the clock at zero.
+        */
+        const gridPhase = window.SongAnalysis
+          && window.SongAnalysis.beatPhaseAt(songBeatsMs, estimatePosition());
+        if (gridPhase !== null && gridPhase !== undefined) {
+          beatClockMs = gridPhase % period;
+        } else {
+          const ph = window.Tempo.phaseFor(period);
+          if (ph && ph.confidence >= TEMPO_LOCK_OUT) {
+            beatClockMs = ((now - ph.phaseMs) % period + period) % period;
+          }
         }
       } else {
       /*
@@ -4801,6 +4826,11 @@ window.player.onTrack((track) => {
   currentTrack = track;
   durationMs = track.durationMs || 0;
   lastProgressPct = -1;           // force the bar to redraw for the new song
+  // The previous song's beat positions are meaningless here, and applying
+  // them would put the clock confidently out of step rather than merely
+  // free-running. The new song's grid arrives with its `analysed` event, if
+  // it gets one at all.
+  songBeatsMs = null;
   // The previous song's cover choice says nothing about this one, and a stale
   // selection would mark the wrong tile in the picker.
   artworkChosen = false;
@@ -6347,6 +6377,10 @@ if (window.LocalPlayer) {
   window.LocalPlayer.on('analysed', (track, summary) => {
     const bpm = summary.bpm ? ` · ${summary.bpm.toFixed(0)} BPM` : '';
     setStatus(`analysed ${track.title} in ${Math.round(summary.ms)}ms${bpm}`);
+    // The measured grid, when the native pass produced one. Its BPM is also
+    // what `summary.bpm` now carries, so the prior below is the grid's tempo
+    // rather than the onset estimator's guess (beats.rs, JOB-ENGINE §7.12).
+    songBeatsMs = summary.beatsMs || null;
     if (summary.bpm && window.Tempo) {
       tempoLocked = true;
       tempoBpm = summary.bpm;

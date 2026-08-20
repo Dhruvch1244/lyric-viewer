@@ -196,12 +196,20 @@
    * envelopes + `onsets`; the envelopes may be plain arrays (JSON from Rust) or
    * typed arrays — both index the same.
    *
-   * @param {{windowMs:number, level:number[], bass:number[], treble:number[], onsets:number[]}} result
+   * `result.beats` is the native beat grid (`beats.rs`, JOB-ENGINE §7.12) and
+   * is preferred over the onset estimator whenever it is present: it is a
+   * dynamic program over the whole song rather than a guess from a rolling
+   * window, and it carries the beat *positions*, not only a tempo. The
+   * estimator stays as the fallback for the Web Audio path, which has no such
+   * grid.
+   *
+   * @param {{windowMs:number, level:number[], bass:number[], treble:number[], onsets:number[],
+   *          beats?:{bpm:number, beatsMs:number[], confidence:number}}} result
    * @param {number} durationMs
-   * @returns {{windows:number, onsets:number, bpm:number|null}}
+   * @returns {{windows:number, onsets:number, bpm:number|null, beatsMs:number[]|null, source:string}}
    */
   function applyAnalysis(result, durationMs) {
-    if (!result || !result.level) return { windows: 0, onsets: 0, bpm: null };
+    if (!result || !result.level) return { windows: 0, onsets: 0, bpm: null, beatsMs: null, source: 'none' };
     if (window.HeatMap) {
       window.HeatMap.start(durationMs);
       for (let w = 0; w < result.level.length; w += 1) {
@@ -213,12 +221,51 @@
       }
     }
     let bpm = null;
-    const onsets = result.onsets || [];
-    if (window.Tempo && onsets.length) {
-      const est = window.Tempo.estimate(onsets);
-      if (est) bpm = est.bpm;
+    let beatsMs = null;
+    let source = 'none';
+    const grid = result.beats;
+    if (grid && grid.bpm > 0 && Array.isArray(grid.beatsMs) && grid.beatsMs.length > 1) {
+      bpm = grid.bpm;
+      beatsMs = grid.beatsMs;
+      source = 'grid';
     }
-    return { windows: result.level.length, onsets: onsets.length, bpm };
+    const onsets = result.onsets || [];
+    if (bpm === null && window.Tempo && onsets.length) {
+      const est = window.Tempo.estimate(onsets);
+      if (est) { bpm = est.bpm; source = 'onsets'; }
+    }
+    return { windows: result.level.length, onsets: onsets.length, bpm, beatsMs, source };
+  }
+
+  /**
+   * How far past the most recent measured beat a playback position sits.
+   *
+   * The point of keeping the grid rather than only its tempo: the beat clock's
+   * PHASE can then come from the measurement too. The live alternative
+   * (`Tempo.phaseFor`) needs loopback capture to be on, so with ♫ off the
+   * clock free-runs and slowly slides against the music even though the period
+   * is exactly right. A grid knows where every beat is with no audio at all.
+   *
+   * Reads the grid rather than assuming a fixed period, because a real grid is
+   * not perfectly even — that is the whole reason it is a list of positions
+   * and not a number.
+   *
+   * @param {number[]|null} beatsMs measured beat positions, ascending
+   * @param {number} positionMs current playback position, same origin
+   * @returns {number|null} ms since the last beat, or null before the first
+   *   beat / with no usable grid
+   */
+  function beatPhaseAt(beatsMs, positionMs) {
+    if (!Array.isArray(beatsMs) || beatsMs.length < 2) return null;
+    if (!(positionMs >= beatsMs[0])) return null; // also catches NaN
+    let lo = 0;
+    let hi = beatsMs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (beatsMs[mid] <= positionMs) lo = mid;
+      else hi = mid - 1;
+    }
+    return positionMs - beatsMs[lo];
   }
 
   /**
@@ -240,7 +287,7 @@
     return out;
   }
 
-  const api = { analyseSamples, findOnsets, loadFromBuffer, applyAnalysis, WINDOW_MS, ONSET_THRESHOLD };
+  const api = { analyseSamples, findOnsets, loadFromBuffer, applyAnalysis, beatPhaseAt, WINDOW_MS, ONSET_THRESHOLD };
 
   // Browser IIFE by default; also requireable so the arithmetic can be tested
   // in Node with no browser and no AudioContext.

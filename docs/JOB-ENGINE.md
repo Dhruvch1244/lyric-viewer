@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. Phases 6–7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 has started**: offline beat tracking is in (§7.12), closing the measured 138 → 174 BPM tempo bug; structure, key and loudness are not. Phase 7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -344,7 +344,7 @@ never calls the command, keeps working unchanged.
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
-| **6** | DSP suite: beat tracking (5.3), structure (5.4), key (5.5), loudness (5.6). Pure Rust, incremental. | Low each | Yes — visuals |
+| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). Structure (5.4), key (5.5) and loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
@@ -890,6 +890,78 @@ parses without depending on any particular song being in the index. Until that
 has been run, treat this phase as plausible rather than proven; it is the same
 standing rule the rest of this document applies.
 
+### 7.12 Phase 6, part 1: the beat grid, and the tempo bug it closes
+
+§5.3's case is the only one in this document backed by a bug the app actually
+shipped: on a real 138 BPM track the live estimator reported **174**. That is
+not a tuning failure. A causal estimator watching a rolling window has to
+commit before the evidence that would settle the question has arrived, and
+inside any one window a syncopated bar is indistinguishable from a faster
+tempo. Nothing you can do to a streaming estimator fixes that; you have to
+stop streaming.
+
+`beats.rs` is Ellis's dynamic-programming beat tracker (2007) — the standard
+answer, and ~150 lines of arithmetic:
+
+1. **Onset strength envelope** — half-wave-rectified spectral flux over 40
+   log-spaced bands, log-compressed, then flattened against its own local mean
+   over 1.5 s. That last step is what stops the DP putting every beat in the
+   loudest chorus.
+2. **One global tempo** — autocorrelation of that envelope, weighted by a
+   log-Gaussian centred on 120 BPM. The weighting is load-bearing, not
+   cosmetic: a click train's autocorrelation peaks just as hard at two and
+   three times the true period, and nothing in the signal says which is "the"
+   tempo. Without it a 138 BPM track can be reported as 69 with complete
+   confidence.
+3. **The grid by dynamic programming** — every beat placed where the envelope
+   is strong *and* the spacing from the previous beat is near the global
+   period, maximised over the whole song at once. This is the step a streaming
+   tracker cannot perform, and the reason the result cannot drift: there is one
+   period for the entire track, so a syncopated bar would have to pay a penalty
+   for every beat after it as well.
+
+`aubio` does all this too, but binds to a C library that is a real build burden
+on Windows (§5.3 said so and it is still true). `rustfft` was already a
+dependency, so this adds nothing to the tree.
+
+**Two things it returns beyond a BPM, and both matter.**
+
+- **The beat positions, not just the period.** The renderer's clock previously
+  took its phase from `Tempo.phaseFor`, which needs live loopback capture — so
+  with ♫ off, which is most of the time, the period was exactly right and the
+  phase free-ran and slid against the music. `SongAnalysis.beatPhaseAt` reads
+  the current playback position against the measured grid instead, and needs no
+  audio at all. It also reads the *grid*, not an assumed period, because a real
+  grid breathes.
+- **A confidence.** Normalised autocorrelation at the chosen period. An ambient
+  or rubato track scores low and gets no grid, which is the correct answer —
+  the failure mode worth avoiding is a tracker that always answers and hands
+  the visuals a beat clock for music that has no beat.
+
+**Where the tempo number now comes from.** `applyAnalysis` prefers
+`result.beats.bpm` over `Tempo.estimate(onsets)` and reports which it used. The
+lock-in machinery downstream is unchanged — `Tempo.setPrior(bpm)` already
+existed and already stops the live estimator re-deriving and overwriting a
+known tempo — so this replaces the *value* fed into a mechanism that was
+already right, rather than rebuilding it.
+
+**Cost:** 30 s of audio tracks in 0.02 s in a release build, so a four-minute
+song is around 0.15 s, on a thread that had already decoded the file.
+
+**Tested against click trains whose answer is known by construction**,
+including one at 138 BPM specifically because that is the case that was wrong.
+Beyond the tempo, three properties that a BPM assertion alone cannot see: that
+the grid lands *on* the clicks within two hops (a grid can have exactly the
+right tempo and be half a beat out of phase, which passes every BPM check and
+looks wrong in every frame), that it spans the whole song rather than a
+confident fragment, and that silence produces no grid at all. The onset
+envelope is checked separately for being peaked rather than flat — a flat
+envelope still yields a confident-looking tempo and an evenly spaced grid of
+nothing.
+
+**Not yet done from Phase 6:** structure segmentation (§5.4), key detection
+(§5.5) and loudness normalisation (§5.6).
+
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
 
@@ -903,7 +975,8 @@ this app:
 | Claim | Basis |
 |---|---|
 | ~3 ms draw cost, ghost mode removes ~95% | **Measured** on this app, v0.11.0 |
-| Live tempo drift 138 → 174 BPM | **Measured** on this app |
+| Live tempo drift 138 → 174 BPM | **Measured** on this app. **Closed in §7.12** — the offline DP tracker recovers 138 to within 2% on a synthetic 138 BPM train, and the grid it produces has no window to drift within. Not yet re-checked against that original real track. |
+| Offline beat tracking costs ~0.15 s for a four-minute song | **Measured** — 30 s of audio tracks in 0.02 s in a release build. |
 | `numThreads = 1` in the WASM path | **Read from source** (`whisper.js:65`) |
 | Native multi-thread vs single-thread WASM: 3–8× | **Estimate** from the threading change alone |
 | VAD roughly halves Whisper work | **Estimate** from typical vocal/instrumental ratio |
