@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 has started**: offline beat tracking is in (§7.12), closing the measured 138 → 174 BPM tempo bug; structure, key and loudness are not. Phase 7 not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is half done**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug) and key detection (§7.13) are in; structure segmentation and loudness normalisation are not. Phase 7 not started.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -344,7 +344,7 @@ never calls the command, keeps working unchanged.
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
-| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). Structure (5.4), key (5.5) and loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
+| **6** 🔶 | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). Structure (5.4) and loudness (5.6) not started. Pure Rust, incremental. | Low each | Yes — visuals |
 | **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
@@ -959,8 +959,60 @@ envelope is checked separately for being peaked rather than flat — a flat
 envelope still yields a confident-looking tempo and an evenly spaced grid of
 nothing.
 
-**Not yet done from Phase 6:** structure segmentation (§5.4), key detection
-(§5.5) and loudness normalisation (§5.6).
+### 7.13 Phase 6, part 2: musical key, and refusing to name one
+
+§5.5, in two steps neither of which is large. **Chroma**: fold the spectrum
+onto the twelve pitch classes, so a song in A minor puts weight on A, C and E
+regardless of which octaves they were played in — the invariance the method
+needs and the reason a raw spectrum will not do. **Krumhansl-Schmuckler**:
+correlate that twelve-vector against the twenty-four published key profiles
+(twelve rotations each of a major and a minor template, measured from listener
+ratings) and take the best.
+
+The STFT here is four times `beats.rs`'s window and *not* shared with it,
+because the two want opposite things: a beat tracker needs time resolution to
+place a transient, a key detector needs frequency resolution to tell a low C
+from a low C♯. 8192 samples at 44.1 kHz is 5.4 Hz per bin, which separates
+semitones down to about F♯2.
+
+**The failure worth engineering against is being confidently wrong.** Key
+detection on real recordings is hard — a mix with heavy sub-bass and dense
+percussion has chroma dominated by noise, and the correlation will still name
+a key without hesitation. So the confidence is the **margin over the best
+differing key**, not the raw correlation: the runner-up is almost always the
+relative major/minor or the dominant, which share most of their notes, and
+every plausible key correlates highly at once. Below a threshold `detect`
+returns nothing. Saying nothing is a fine answer; tinting the whole app for a
+key the song is not in is not.
+
+Two things the tests caught that nothing else would have:
+
+- **A transposition error in the published major profile.** The constant had
+  been written with one value dropped and a made-up one appended. Nothing
+  fails when that happens — no panic, no wrong shape, just a detector that
+  quietly favours the wrong keys for a whole class of songs. The test that
+  found it asserts the profile's peak is its tonic and that each mode favours
+  its own third, which is the structural claim the numbers exist to make.
+- **Pearson correlation is scale- and contrast-invariant.** A first attempt at
+  a confidence test blended a profile toward flat and expected less certainty;
+  the correlation was identical to fifteen decimal places. That is a property
+  worth having (a quiet passage and a loud one in the same key must agree, or
+  the key would appear to change when the chorus arrives) and it is now
+  asserted rather than assumed.
+
+**Where it shows up.** The tempo chip becomes `♩ 128 · F# minor`, and the
+palette is tinted by mode — minor toward blue, major toward amber. That tint
+is a partial nudge *toward* a target hue, not a fixed rotation, because a fixed
+rotation warms a blue palette and cools a red one; the wraparound in
+`hueTowards` is the part that can be quietly wrong (350° → 10° is +20, not
+−340) and is unit-tested. Applying it also forced the two duplicated
+palette-assignment blocks — one for the artwork palette, one for the mood
+palette — into a single `applyPalette`, since a tint applied to only one of
+them would recolour the app differently depending on which pass answered last.
+
+**Not yet done from Phase 6:** structure segmentation (§5.4) and loudness
+normalisation (§5.6). Structure will reuse `key::chromagram`, which is why it
+returns per-frame vectors rather than one averaged one.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.

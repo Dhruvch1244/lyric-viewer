@@ -161,3 +161,49 @@ test('the search finds the right beat in a long grid', () => {
     assert.equal(SongAnalysis.beatPhaseAt(grid, beat * 500 + 123), 123, `wrong beat near index ${beat}`);
   }
 });
+
+/* ------------------------------------------------------- key tinting --- */
+/*
+  `hueTowards` biases a palette by musical key (minor cool, major warm). A
+  fixed rotation cannot express that — +20° warms a blue palette and cools a
+  red one — so the tint is a partial move toward a target hue. The one thing
+  that can be quietly wrong is the wraparound: a naive subtraction sends a
+  colour near 0° the long way through every other hue on the wheel.
+*/
+
+test('a hue moves part of the way toward its target', () => {
+  assert.equal(SongAnalysis.hueTowards(0, 100, 0.5), 50);
+  assert.equal(SongAnalysis.hueTowards(200, 100, 0.5), 150);
+  assert.equal(SongAnalysis.hueTowards(200, 100, 0), 200, 'zero amount must not move it');
+  assert.equal(SongAnalysis.hueTowards(200, 100, 1), 100, 'a full amount lands on the target');
+});
+
+test('the nudge takes the short way round the wheel', () => {
+  // 350 → 10 is +20, not −340. Going the long way would sweep the palette
+  // through green and blue on the way to a warm tint.
+  assert.equal(SongAnalysis.hueTowards(350, 10, 0.5), 0);
+  assert.equal(SongAnalysis.hueTowards(10, 350, 0.5), 0);
+  assert.equal(SongAnalysis.hueTowards(350, 30, 1), 30);
+});
+
+test('the result always lands in 0..360', () => {
+  for (const [hue, target] of [[350, 10], [10, 350], [0, 180], [359, 1], [1, 359], [-40, 200], [400, 10]]) {
+    const got = SongAnalysis.hueTowards(hue, target, 0.18);
+    assert.ok(got >= 0 && got < 360, `hueTowards(${hue}, ${target}) = ${got}`);
+  }
+});
+
+test('an exactly opposite hue moves by a consistent half-turn', () => {
+  // 180° apart is the one genuinely ambiguous case — both directions are the
+  // "short" way. It must pick one and not oscillate or return NaN.
+  const got = SongAnalysis.hueTowards(0, 180, 0.5);
+  assert.ok(Number.isFinite(got) && got >= 0 && got < 360, `got ${got}`);
+  assert.equal(SongAnalysis.hueTowards(0, 180, 0.5), SongAnalysis.hueTowards(0, 180, 0.5));
+});
+
+test('a small amount keeps the colour recognisably its own', () => {
+  // The tint biases the artwork's palette rather than replacing it, so the
+  // shipped amount must move a hue by well under a quarter turn.
+  const moved = Math.abs(SongAnalysis.hueTowards(200, 35, 0.18) - 200);
+  assert.ok(moved < 40, `a 0.18 nudge moved the hue ${moved}°`);
+});

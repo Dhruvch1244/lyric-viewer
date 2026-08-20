@@ -39,6 +39,7 @@ mod localcli;
 mod history;
 mod inference;
 mod journal;
+mod key;
 mod lyrics;
 mod models;
 mod mood;

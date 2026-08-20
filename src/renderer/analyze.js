@@ -203,13 +203,21 @@
    * estimator stays as the fallback for the Web Audio path, which has no such
    * grid.
    *
+   * `result.key` is the detected musical key (`key.rs`, §7.13), passed
+   * through untouched. Absent whenever nothing was decisive enough to name,
+   * which is a normal outcome the caller must handle rather than a failure.
+   *
    * @param {{windowMs:number, level:number[], bass:number[], treble:number[], onsets:number[],
-   *          beats?:{bpm:number, beatsMs:number[], confidence:number}}} result
+   *          beats?:{bpm:number, beatsMs:number[], confidence:number},
+   *          key?:{tonic:number, name:string, major:boolean, label:string, confidence:number}}} result
    * @param {number} durationMs
-   * @returns {{windows:number, onsets:number, bpm:number|null, beatsMs:number[]|null, source:string}}
+   * @returns {{windows:number, onsets:number, bpm:number|null, beatsMs:number[]|null,
+   *            key:object|null, source:string}}
    */
   function applyAnalysis(result, durationMs) {
-    if (!result || !result.level) return { windows: 0, onsets: 0, bpm: null, beatsMs: null, source: 'none' };
+    if (!result || !result.level) {
+      return { windows: 0, onsets: 0, bpm: null, beatsMs: null, key: null, source: 'none' };
+    }
     if (window.HeatMap) {
       window.HeatMap.start(durationMs);
       for (let w = 0; w < result.level.length; w += 1) {
@@ -234,7 +242,7 @@
       const est = window.Tempo.estimate(onsets);
       if (est) { bpm = est.bpm; source = 'onsets'; }
     }
-    return { windows: result.level.length, onsets: onsets.length, bpm, beatsMs, source };
+    return { windows: result.level.length, onsets: onsets.length, bpm, beatsMs, key: result.key || null, source };
   }
 
   /**
@@ -269,6 +277,29 @@
   }
 
   /**
+   * Move a hue part of the way toward a target hue, the short way round.
+   *
+   * Used to tint a palette by musical key (minor cool, major warm). A fixed
+   * rotation cannot express that: +20° warms a blue palette and cools a red
+   * one. Nudging toward a target does the same thing to every palette, and
+   * keeping `amount` small biases the artwork's colours rather than replacing
+   * them.
+   *
+   * The short way round is the whole subtlety — going from 350° to 10° is +20,
+   * not −340, and a naive subtraction sends the colour the long way through
+   * every other hue on the wheel.
+   *
+   * @param {number} hue degrees, any range
+   * @param {number} target degrees
+   * @param {number} amount 0..1 of the way there
+   * @returns {number} degrees in [0, 360)
+   */
+  function hueTowards(hue, target, amount) {
+    const delta = ((((target - hue) % 360) + 540) % 360) - 180;
+    return ((hue + delta * amount) % 360 + 360) % 360;
+  }
+
+  /**
    * Average all channels into one Float32Array.
    * @param {AudioBuffer} buffer
    * @returns {Float32Array}
@@ -287,7 +318,10 @@
     return out;
   }
 
-  const api = { analyseSamples, findOnsets, loadFromBuffer, applyAnalysis, beatPhaseAt, WINDOW_MS, ONSET_THRESHOLD };
+  const api = {
+    analyseSamples, findOnsets, loadFromBuffer, applyAnalysis, beatPhaseAt, hueTowards,
+    WINDOW_MS, ONSET_THRESHOLD,
+  };
 
   // Browser IIFE by default; also requireable so the arithmetic can be tested
   // in Node with no browser and no AudioContext.

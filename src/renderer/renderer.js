@@ -1125,6 +1125,52 @@ let palette = ['#0d0d1a', '#4361ee', '#7209b7', '#4cc9f0'];
 let baseTint = '#0d0d1a';
 let vignette = null; // cached gradient, rebuilt on resize
 
+/* The palette exactly as delivered (artwork hash, then mood), before the key
+   tint below. Kept because the key usually arrives AFTER the palette does —
+   they come from different passes — so the tint has to be re-applied to the
+   original rather than compounded onto an already-tinted one. */
+let rawPalette = null;
+/* The current song's musical key (key.rs), or null when nothing was decisive
+   enough to name. Cleared on every track change. */
+let songKey = null;
+
+/* Hue targets for the key tint: minor pulls toward blue, major toward amber —
+   the "minor cool, major warm" of JOB-ENGINE §5.5. Applied as a partial nudge
+   TOWARD the target rather than a fixed rotation, because a fixed rotation
+   warms a blue palette and cools a red one. */
+const KEY_HUE_MINOR = 215;
+const KEY_HUE_MAJOR = 35;
+/* How far toward that target. Small on purpose: this biases the artwork's own
+   colours, it does not replace them with two fixed schemes. */
+const KEY_HUE_AMOUNT = 0.18;
+
+/**
+ * Set the palette, tinted by the song's key when one is known.
+ *
+ * The single place `palette`, `baseTint`, the glow seeds and the `--accent`
+ * CSS variable are assigned. There used to be two identical copies of this —
+ * one for the artwork palette, one for the mood palette — and a key tint
+ * applied to only one of them would recolour the app differently depending on
+ * which pass answered last.
+ *
+ * @param {string[]|null|undefined} colours four hex colours, or anything else
+ *   (ignored, so a caller need not check)
+ */
+function applyPalette(colours) {
+  if (Array.isArray(colours) && colours.length >= 4) rawPalette = colours;
+  if (!rawPalette) return;
+  const target = !songKey ? null : songKey.major ? KEY_HUE_MAJOR : KEY_HUE_MINOR;
+  palette = target === null
+    ? rawPalette.slice()
+    : rawPalette.map((c) => {
+      const to = window.SongAnalysis.hueTowards(hueOf(c), target, KEY_HUE_AMOUNT);
+      return shiftHex(c, to - hueOf(c));
+    });
+  baseTint = palette[0];
+  seedGlows([palette[1], palette[2], palette[1]]);
+  document.documentElement.style.setProperty('--accent', palette[3]);
+}
+
 /* Extra reactive background layers. Everything below scales with the energy
    envelope (intensity/pulse/buildup/drop) and a slowly drifting global hue, so
    the backdrop keeps changing instead of settling. */
@@ -1595,6 +1641,26 @@ function hslToHex(h, s, l) {
 }
 
 /** Rotate a hex colour's hue by `deg`, preserving saturation/lightness. */
+/**
+ * Hue of a hex colour, in degrees. The same extraction `shiftHex` does
+ * internally, exposed because the key tint needs to know where a colour
+ * currently is before deciding how far to move it.
+ * @param {string} hex
+ * @returns {number} 0..360
+ */
+function hueOf(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
+}
+
 function shiftHex(hex, deg) {
   const n = parseInt(hex.slice(1), 16);
   let r = ((n >> 16) & 255) / 255;
@@ -4092,7 +4158,10 @@ function updateBpmChip() {
   if (!els.bpm) return;
   if (tempoLocked && tempoBpm > 0) {
     els.bpm.hidden = false;
-    els.bpm.textContent = `♩ ${Math.round(tempoBpm)}`;
+    // The key rides along when one was detected. It is measured from the same
+    // offline pass as the tempo, so if the tempo is shown the key is known or
+    // there wasn't one — no separate loading state to represent.
+    els.bpm.textContent = songKey ? `♩ ${Math.round(tempoBpm)} · ${songKey.label}` : `♩ ${Math.round(tempoBpm)}`;
   } else {
     els.bpm.hidden = true;
   }
@@ -4829,8 +4898,10 @@ window.player.onTrack((track) => {
   // The previous song's beat positions are meaningless here, and applying
   // them would put the clock confidently out of step rather than merely
   // free-running. The new song's grid arrives with its `analysed` event, if
-  // it gets one at all.
+  // it gets one at all. Its key goes with it, and must be cleared BEFORE the
+  // palette below is applied or this song's colours carry the last one's tint.
   songBeatsMs = null;
+  songKey = null;
   // The previous song's cover choice says nothing about this one, and a stale
   // selection would mark the wrong tile in the picker.
   artworkChosen = false;
@@ -4876,12 +4947,7 @@ window.player.onTrack((track) => {
   }
 
   // Instant hash palette; recolours the whole background for this song.
-  if (Array.isArray(track.palette) && track.palette.length >= 4) {
-    palette = track.palette;
-    baseTint = palette[0];
-    seedGlows([palette[1], palette[2], palette[1]]);
-    document.documentElement.style.setProperty('--accent', palette[3]);
-  }
+  applyPalette(track.palette);
 
   // New song → drop the old backdrop photo + any leftover clones, and show the
   // glowing hero until lyrics (if any) start.
@@ -4997,12 +5063,7 @@ window.player.onAttribution((payload) => {
 
 window.player.onMood((data) => {
   if (!isForCurrentTrack(data.track)) return;
-  if (Array.isArray(data.palette) && data.palette.length >= 4) {
-    palette = data.palette;
-    baseTint = palette[0];
-    seedGlows([palette[1], palette[2], palette[1]]);
-    document.documentElement.style.setProperty('--accent', palette[3]);
-  }
+  applyPalette(data.palette);
   if (typeof data.energy === 'number') baseEnergy = data.energy;
   currentMood = data.mood || null;
   applyMoodProfile();
@@ -6381,6 +6442,10 @@ if (window.LocalPlayer) {
     // what `summary.bpm` now carries, so the prior below is the grid's tempo
     // rather than the onset estimator's guess (beats.rs, JOB-ENGINE §7.12).
     songBeatsMs = summary.beatsMs || null;
+    // The key arrives from the same pass, which usually lands after the
+    // palette did — so re-apply the palette to pick up its tint.
+    songKey = summary.key || null;
+    applyPalette(null);
     if (summary.bpm && window.Tempo) {
       tempoLocked = true;
       tempoBpm = summary.bpm;

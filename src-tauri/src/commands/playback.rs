@@ -183,6 +183,10 @@ pub(crate) fn end_local_playback(app: AppHandle) {
 /// song costs on the order of 0.15 s, against a decode that already happened.
 /// Absent when the track has no steady beat, which the renderer must treat as
 /// "no grid" rather than "zero BPM".
+///
+/// And `key`, from `key.rs`, on the same terms: absent when nothing is
+/// decisive enough to name. Both are optional by design — a tracker or a
+/// detector that always answers is worse than one that sometimes does not.
 #[tauri::command]
 pub(crate) fn analyze_local_file(path: String) -> Value {
     let (samples, sample_rate) = match crate::analysis::decode_to_mono(&path) {
@@ -196,6 +200,10 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
     if let Some(beats) = crate::beats::track(&samples, sample_rate) {
         log::info!("beat grid: {:.1} BPM, {} beats, confidence {:.2}", beats.bpm, beats.beats_ms.len(), beats.confidence);
         out["beats"] = serde_json::to_value(&beats).unwrap_or(Value::Null);
+    }
+    if let Some(key) = crate::key::detect(&samples, sample_rate) {
+        log::info!("key: {} (margin {:.2})", key.label, key.confidence);
+        out["key"] = serde_json::to_value(&key).unwrap_or(Value::Null);
     }
     out
 }
