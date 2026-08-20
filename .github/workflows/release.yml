@@ -35,8 +35,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows alone bundles the inference sidecar, via the bundle-time
+          # config overlay. See the "inference sidecar" note below for why it
+          # is per-platform and why the overlay is not in the base config.
           - platform: windows-latest
-            args: ''
+            args: '--config tauri.bundle.conf.json'
+            sidecar: true
           - platform: macos-latest
             args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04
@@ -75,6 +79,25 @@ jobs:
         # lockfile doesn't fail the in-sync check — this pipeline only needs the
         # JS deps present for the vendor:whisper step, not byte-for-byte pinning.
         run: npm install
+
+      # The inference sidecar (src-tauri/sidecar) — native Whisper + Silero
+      # VAD, and everything that hangs off them: word-level timing, the
+      # crash-safe transcription journal, and AcoustID identification, which
+      # runs on the transcription path. Without this step the bundle ships
+      # without it, `inference::available()` is false, and all of that silently
+      # falls back to the WebView Whisper path — a degraded build, not a broken
+      # one, which is exactly why it could go unnoticed.
+      #
+      # Windows only, and deliberately: the sidecar is staged per target triple
+      # and macOS here builds `universal-apple-darwin`, which is two of them.
+      # The Windows-only OS integrations (SMTC, WASAPI loopback) are what feed
+      # it in the first place. `tauri-build` fails at cargo-check time if a
+      # declared `externalBin` is missing, so the overlay and this step have to
+      # travel together — which is why the overlay is in `args` above rather
+      # than in the base config.
+      - name: Build the inference sidecar
+        if: matrix.sidecar
+        run: npm run vendor:sidecar
 
       - name: Build + publish
         uses: tauri-apps/tauri-action@v0

@@ -2,6 +2,106 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.37.0 — 2026-08-20
+
+The job-engine release: background work gets a scheduler, transcription moves
+out of the browser engine into a real process, and the app measures four new
+things about every local song. Full design notes and the reasoning behind each
+decision are in `docs/JOB-ENGINE.md`.
+
+- **Transcription runs natively, and word-level timing works for the first
+  time.** Whisper and Silero VAD now run in a separate `lyric-inference`
+  process using ONNX Runtime, instead of in the WebView. The WebView path was
+  pinned to **one thread** — not a choice, a consequence of the asset protocol
+  setting no COOP/COEP, so no `SharedArrayBuffer`, so no WASM threads — and a
+  crash there took the whole app with it. The sidecar gets every core, runs at
+  `BELOW_NORMAL_PRIORITY_CLASS` with background I/O so it cannot starve the
+  render thread, and the OS reclaims all of its memory when it exits.
+  - **The WebView path had never successfully transcribed anything.** Word
+    timing comes from the decoder's cross-attention weights, and
+    `onnx-community/whisper-base` — the model it named — exports none, so
+    `return_timestamps: 'word'` threw and failed the entire transcription
+    rather than just the word timing. Fixed independently of the rewrite:
+    `DEFAULT_MODEL` is now `whisper-base_timestamped` (the same weights,
+    exported with `output_attentions=True`) and a failure to get word timing
+    falls back to segment timing instead of propagating.
+  - **Silero VAD, for correctness as much as speed.** Given 30 s of
+    instrumental, Whisper does not return nothing — it invents plausible
+    lyrics, confidently, with timestamps. Not asking it is the only fix that
+    works. Spans are batched into ≤30 s windows, because Whisper's input is a
+    fixed 30 s whether it is full or not; transcribing spans one at a time
+    would have been slower than not running the VAD at all.
+  - **Models download and verify themselves.** The models directory's own doc
+    comment had always claimed this happened and nothing ever wrote to it, so
+    every transcription on a fresh install failed with "model file not
+    found" — a correct message pointing at the wrong fix. Six files, each
+    pinned to an exact source commit and SHA-256-checked.
+  - **A crash mid-transcription no longer loses the work.** A SQLite journal
+    records the attempt and the decoded PCM file; a row still present at the
+    next launch can only mean the process died, and the transcription resumes
+    silently into the cache.
+- **Songs played through Spotify, a browser or any other app are transcribed
+  from the backend's own recording.** That path used to record PCM in a
+  `ScriptProcessorNode` and push a multi-megabyte `Float32Array` across IPC so
+  Rust could see audio it had already captured itself. Now only a file path
+  crosses the boundary. The renderer *asks* the backend whether it can record
+  rather than inferring it — both capture paths look identical from the
+  renderer, and guessing wrong would have recorded silence with no error
+  anywhere.
+- **Songs start instantly on a repeat listen.** Lyrics for what plays next are
+  fetched before it starts: local playback knows its own queue, and SMTC
+  playback is predicted from a 500-entry play history (the song that has
+  followed this one at least twice before). A wrong guess costs one request
+  and is invisible — precompute writes the cache and never draws anything.
+- **Five uncoordinated background threads became one scheduler.** Skipping
+  through five tracks used to start five lyric fetches and five artwork
+  fan-outs, none cancellable or deduplicated. Now: three lanes (network, CPU,
+  inference-at-concurrency-1), keyed dedup, a cancellation tree per track, and
+  below-normal CPU threads. Two main-thread stalls were found and fixed while
+  porting — a playlist pre-sync that ran a whole list inline on a sync command,
+  and an artwork fan-out that spawned a thread only to block on its result.
+- **Tempo is measured, not guessed.** A real 138 BPM track was measured being
+  read as **174** by the live estimator. A causal estimator drifts by
+  construction — it must commit before the evidence that would settle the
+  question has arrived. Local files now get an offline dynamic-programming beat
+  tracker over the whole song: one tempo for the entire track, and the actual
+  beat *positions*, so the beat clock keeps phase even with audio capture off,
+  which it previously could not. Costs about 0.15 s for a four-minute song.
+- **Musical key, section boundaries and loudness, all measured per song.** The
+  tempo chip reads `♩ 128 · F# minor`; the palette is tinted by mode (minor
+  cooler, major warmer); the timeline's sections are now cut where the
+  *harmony* changes rather than where the loudness does — a verse and a chorus
+  at the same level used to read as one section and a crescendo as two; and
+  EBU R128 integrated loudness gives each track a gain so a quiet jazz record
+  and a loud EDM master drive the visuals with comparable force. Each one
+  refuses to answer when it is not sure: an ambient track gets no beat grid,
+  an ambiguous song gets no key, and a track that never changes harmony gets no
+  boundaries.
+- **Song identification from the audio itself** — fingerprint → AcoustID →
+  MusicBrainz — for the single largest source of wrong lyrics: SMTC from a
+  browser reports the *video* title, and no amount of text cleaning recovers a
+  title that was never in the string. **Needs a free AcoustID key** (🔑 panel);
+  without one nothing in this path runs and the app behaves exactly as before.
+  It only fires on metadata that actually looks browser-shaped, and refuses any
+  match below 0.8 confidence or with the wrong duration — a wrong
+  identification would rewrite the song's identity for lyrics, artwork, history
+  and the cache, and none of those can tell they were lied to.
+- **The audio IPC "firehose" was profiled and left alone.** The estimate that
+  it cost 1.5–5% of the main thread was **40–130× too high** — measured, it is
+  0.038% of one core. Tauri's binary channel turned out to be *slower* than the
+  eval-based `emit` it would have replaced. What did ship is the one finding
+  the profiling supported: three quarters of every audio frame is a waveform
+  only MilkDrop reads, so it is now sent only while something is asking for it.
+  2179 → 804 bytes per frame.
+- **Both release channels now actually ship the sidecar.** `release.yml` never
+  built or bundled it and the MSIX layout never staged it, so a tagged build
+  would have installed and run perfectly while silently having none of the
+  above — a quieter app, not an error anyone would report.
+- **Spotify playlist import and its OAuth stack removed.** Dead weight: it
+  needed a client secret the app cannot ship, and the pre-sync paste box does
+  the same job with no account.
+- Test counts: 203 JS, 318 Rust (was 152 / 61 at 0.36.0).
+
 ## 0.36.0 — 2026-08-19
 
 - **CI now actually runs the test suite.** `.github/workflows/ci.yml`: `cargo

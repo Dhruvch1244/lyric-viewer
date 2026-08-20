@@ -25,7 +25,7 @@ use crate::fingerprint::Fingerprint;
 use crate::lyrics::Track;
 
 const LOOKUP: &str = "https://api.acoustid.org/v2/lookup";
-const USER_AGENT: &str = "lyric-overlay/0.36.0 (https://github.com/Dhruvch1244/lyric-viewer)";
+const USER_AGENT: &str = "lyric-overlay/0.37.0 (https://github.com/Dhruvch1244/lyric-viewer)";
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
 /// The environment variable the 🔑 panel writes an AcoustID key into.
