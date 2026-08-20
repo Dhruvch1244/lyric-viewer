@@ -38,8 +38,13 @@ jobs:
           # Windows alone bundles the inference sidecar, via the bundle-time
           # config overlay. See the "inference sidecar" note below for why it
           # is per-platform and why the overlay is not in the base config.
+          # The path is repo-root-relative, not relative to src-tauri: the CLI
+          # resolves --config against the project root it detects (where
+          # package.json is), so a bare filename fails with "cannot find the
+          # file specified" — which is what `npm run tauri:build` had been
+          # doing, unnoticed, since the overlay was introduced.
           - platform: windows-latest
-            args: '--config tauri.bundle.conf.json'
+            args: '--config src-tauri/tauri.bundle.conf.json'
             sidecar: true
           - platform: macos-latest
             args: '--target universal-apple-darwin'

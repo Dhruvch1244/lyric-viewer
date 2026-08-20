@@ -8,7 +8,7 @@
     "vendor:presets": "node scripts/vendor-presets.js",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "npm run vendor:sidecar && tauri build --config tauri.bundle.conf.json",
+    "tauri:build": "npm run vendor:sidecar && tauri build --config src-tauri/tauri.bundle.conf.json",
     "vendor:whisper": "node scripts/vendor-whisper.js",
     "vendor:demucs": "node scripts/vendor-demucs.js",
     "vendor:sidecar": "node scripts/vendor-sidecar.js",
