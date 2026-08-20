@@ -221,6 +221,11 @@ pub fn set_waveform(enabled: bool) {
 }
 
 /// Whether the waveform is currently wanted.
+// Same situation as `build_payload` below, and the same fix: only the Windows
+// capture loop reads the flag back, while the tests run on every platform. Its
+// writer `set_waveform` needs no such treatment — that one is reached from a
+// cross-platform Tauri command.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn waveform_enabled() -> bool {
     WAVEFORM.load(Ordering::Relaxed)
 }
