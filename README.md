@@ -37,6 +37,13 @@ audio-reactive system is built — measured tempo, kick and drop detection,
 learned per-song energy maps, word-level sync, and dancing artist sprites. Local
 file playback landed in 0.18.0.
 
+0.37.0 moved the heavy work off the UI: background jobs run through one
+scheduler instead of five loose threads, speech recognition runs in its own
+native process (every core, rather than the single thread a browser engine
+allowed), and a local file is measured before its first chorus — real tempo and
+beat positions, key, section boundaries, mastering loudness. See
+[`docs/JOB-ENGINE.md`](docs/JOB-ENGINE.md) for the design and the reasoning.
+
 ## How it works
 
 ```
@@ -69,9 +76,15 @@ runtime — `node`/`npm` are only needed to develop and build it.
   SMTC now-playing detection, wallpaper mode, WASAPI capture — see
   `.github/workflows/release.yml`)
 - Node.js 18+ and the [Rust toolchain](https://rustup.rs/) (stable)
-- **Windows PowerShell 5.1** (`powershell.exe`) must be present. PowerShell 7 (`pwsh`)
-  removed the WinRT type projection the SMTC poller depends on, so 7 alone is not enough.
-  5.1 ships with Windows by default.
+
+**No PowerShell requirement any more.** Up to 0.34.0 this section demanded
+Windows PowerShell 5.1, because now-playing detection ran in a long-lived
+`powershell.exe` child that streamed JSON over a pipe — and PowerShell 7
+removed the WinRT type projection that script depended on, so 5.1 specifically
+was load-bearing. 0.35.0 replaced the whole thing with the WinRT API called
+directly from Rust (`src-tauri/src/smtc.rs`), which also returned the ~92MB
+that child process cost. `smtc-poll.ps1` survives only as a debugging probe
+(`npm run probe`).
 
 ## Run
 
@@ -273,11 +286,28 @@ one translation call for its whole lifetime in the cache.
 
 ## Design notes
 
-**Word-level timing is interpolated, not real.** LRCLIB provides line-level
-timestamps only. True word-level (A2) timing exists essentially only in Musixmatch's
-paid "richsync" data. `buildWordTimings()` in `src/renderer/renderer.js` approximates
-it by distributing each line's duration across its words weighted by word length.
-It tracks natural delivery closely enough for emphasis, but it is an approximation.
+**Word-level timing is real where a transcription anchored it, interpolated
+everywhere else.** This note used to say "interpolated, not real" flatly, and
+that stopped being true in 0.37.0.
+
+LRCLIB still provides line-level timestamps only, and true word-level (A2)
+timing still exists essentially only in Musixmatch's paid "richsync" data. But
+the app measures its own: the native Whisper decoder produces per-word
+timestamps from its cross-attention weights (DTW, `src-tauri/sidecar/src/dtw.rs`),
+and `align::attach_word_timings` grafts those onto the *real* lyric text
+whenever a line's word count matches what Whisper heard for it. Lines it cannot
+anchor keep the estimate — `buildWordTimings()` in `src/renderer/renderer.js`,
+distributing the line's duration across its words weighted by word length.
+
+That split is deliberate and visible in the data: a cue carries a `words` array
+only when the timing was measured. A mishearing that merges or splits words
+leaves the line on the estimate rather than moving the words to confidently
+wrong places.
+
+Worth knowing if you are reading old notes: **the WebView path this originally
+described had never actually produced word timing at all.** It named an ONNX
+export with no cross-attention output, so the request for word timestamps threw
+and took the whole transcription with it. Fixed in 0.37.0.
 
 **Titles are noisy and need cleaning on both sides.** Browser sessions report raw
 video titles. A verified live sample:
