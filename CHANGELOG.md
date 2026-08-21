@@ -2,6 +2,39 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.38.1 — 2026-08-21
+
+Follow-up to 0.38.0: the watched-folder backfill it shipped ran, but nothing
+on screen said so, and one pre-existing bug made it look like it wasn't
+running at all.
+
+- **Watched folders now actually sync lyrics, not just audio DSP.** 0.38.0's
+  Idle-lane backfill only ever computed beat/key/structure/loudness into a
+  cache nothing displays. It never fetched lyrics, so the one thing visible
+  in the Library panel — the "lyrics" badge — could never light up for a
+  watched file. Added a second per-file Idle-lane job (`Lane::Io`, separate
+  from the CPU-bound analysis job) that reuses the same lyrics lookup the
+  local-queue lookahead already runs.
+- **Every song's badges were wrong, not just watched folders' — `list_synced`
+  never actually read `beatmap`/`heatmap` off the cache it returns.** The
+  renderer has always asked for `it.hasBeatmap`/`it.hasHeatmap`; since
+  neither field existed in the response, every card's beats/shape badge read
+  "no" even for a song with a real learned map on disk from being played
+  through with audio capture on.
+- **The library backfill is now visible.** It ran on background threads with
+  nothing on screen saying so — indistinguishable from stuck. It now feeds
+  the same `#work` HUD chip and tray tooltip `whisper.js`/pre-sync already
+  use for "multiple things running at once," showing live "N lyrics, M audio
+  left" counts as it works through a folder.
+- **Manual lyrics search.** A third escape hatch alongside "import a .lrc
+  file" and the cover-art picker's near-miss grid, for the same two
+  failures: automatic lookup finds nothing, or it confidently matches the
+  wrong song. Free-text search against LRCLIB, showing which results have
+  real timestamps before you pick one, applying a pick to whatever's
+  actually playing rather than trusting the searched title/artist.
+- Test counts: 203 JS, 331 Rust (unchanged from 0.38.0 — this pass added
+  coverage for existing suites rather than net-new modules).
+
 ## 0.38.0 — 2026-08-21
 
 Two reported bugs fixed, and the start of Phase 7 (library indexing).
