@@ -74,6 +74,7 @@
     onHeatmap: (cb) => on('heatmap', cb),
     onPresyncProgress: (cb) => on('presync-progress', cb),
     onTranscribeProgress: (cb) => on('transcribe-progress', cb),
+    onModelConsentNeeded: (cb) => on('model-consent-needed', cb),
     onIdle: (cb) => on('idle', cb),
     onVisibility: (cb) => on('overlay-visibility', cb),
     onDisplayMode: (cb) => on('display-mode', cb),
@@ -142,6 +143,7 @@
 
     reportJobs: (payload) => call('report_jobs', { payload }),
     reportClientError: (message) => call('report_client_error', { message }),
+    answerModelConsent: (consent, remember) => call('answer_model_consent', { consent, remember }),
     openCrashLog: () => call('open_crash_log', {}, { status: 'error', message: 'unavailable' }),
     setCrashReporting: (enabled) => call('set_crash_reporting', { enabled }),
     artworkCandidates: (track) => call('artwork_candidates', { track }, { candidates: [] }),

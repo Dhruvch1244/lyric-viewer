@@ -498,6 +498,25 @@
       </div>
     </section>
 
+    <!-- Speech-model download consent. The Whisper/Silero weights are ~82MB —
+         too large to fetch the quiet, no-warning way every other background
+         lookup in this app does. Deliberately blocking (a dimmed backdrop,
+         not a corner panel): downloading megabytes onto someone's connection
+         without asking first is a different kind of thing than a lyric or
+         artwork lookup. Doubles as the download log once answered yes — one
+         panel, two states, not two separate UI surfaces. -->
+    <div id="model-consent-backdrop" class="modelconsent-backdrop" hidden></div>
+    <section id="model-consent" class="modelconsent" hidden role="dialog" aria-modal="true" aria-label="Download speech model">
+      <h2 class="modelconsent__title">Download the speech model?</h2>
+      <p id="model-consent-body" class="modelconsent__body"></p>
+      <div id="model-consent-ask" class="modelconsent__row">
+        <button id="model-consent-yes" class="chip" type="button">Download</button>
+        <button id="model-consent-later" class="chip chip--muted" type="button">Not now</button>
+        <button id="model-consent-never" class="chip chip--muted" type="button">Don't ask again</button>
+      </div>
+      <div id="model-consent-log" class="modelconsent__log" hidden></div>
+    </section>
+
     <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles
          themselves are loaded by milkdrop.html, not here — this page must not
          have them, and must not have eval. -->

@@ -43,6 +43,7 @@ mod journal;
 mod key;
 mod loudness;
 mod lyrics;
+mod model_consent;
 mod models;
 mod mood;
 mod netease;
@@ -229,6 +230,7 @@ pub fn run() {
             commands::lyrics_cmds::transcribe_audio,
             commands::lyrics_cmds::report_transcribe_progress,
             commands::lyrics_cmds::finalize_transcription,
+            commands::lyrics_cmds::answer_model_consent,
             commands::library_cmds::add_library_folder,
             commands::library_cmds::remove_library_folder,
             commands::library_cmds::get_library_folders,

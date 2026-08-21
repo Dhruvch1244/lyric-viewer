@@ -94,6 +94,14 @@ const els = {
   whatsnewList: document.getElementById('whatsnew-list'),
   whatsnewVersion: document.getElementById('whatsnew-version'),
   whatsnewClose: document.getElementById('whatsnew-close'),
+  modelConsentBackdrop: document.getElementById('model-consent-backdrop'),
+  modelConsent: document.getElementById('model-consent'),
+  modelConsentBody: document.getElementById('model-consent-body'),
+  modelConsentAsk: document.getElementById('model-consent-ask'),
+  modelConsentYes: document.getElementById('model-consent-yes'),
+  modelConsentLater: document.getElementById('model-consent-later'),
+  modelConsentNever: document.getElementById('model-consent-never'),
+  modelConsentLog: document.getElementById('model-consent-log'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -4804,22 +4812,38 @@ function flushTranscription() {
 }
 
 window.player.onTranscribeProgress((data) => {
+  // NOTE: the backend's actual stage name is 'downloading-model' — a lookup
+  // key of plain 'download'/'downloading' here silently matched nothing, so
+  // the ~82MB first-run model fetch used to run with zero feedback anywhere
+  // in the UI. 'model-declined' fires when the model-consent modal
+  // (onModelConsentNeeded, below) is answered no.
   const WORK = {
-    download: 'downloading speech model', transcribing: 'transcribing',
+    'downloading-model': 'downloading speech model', transcribing: 'transcribing',
     identifying: 'identifying the song', identified: null,
     aligning: 'aligning words', aligned: null, 'align-weak': null,
     correcting: 'checking the words', corrected: null,
     'words-added': null,
-    done: null, empty: null, error: null,
+    done: null, empty: null, error: null, 'model-declined': null,
   };
   if (Object.prototype.hasOwnProperty.call(WORK, data.stage)) {
     const pct = typeof data.pct === 'number' ? ` ${data.pct}%` : '';
     setJob('whisper', WORK[data.stage] ? WORK[data.stage] + pct : null);
   }
   if (!data) return;
+  // The model-consent panel's "downloading" state (a live per-file log) is
+  // only ever open while stage stays 'downloading-model'; anything else
+  // arriving means that phase ended — successfully or not — so close it
+  // rather than leave a finished download log sitting on screen.
+  if (data.stage !== 'downloading-model' && els.modelConsentLog && !els.modelConsentLog.hidden) {
+    closeModelConsent();
+  }
   switch (data.stage) {
-    case 'downloading':
-      setStatus(`downloading speech model… ${data.pct}%`);
+    case 'downloading-model':
+      setStatus(`downloading speech model — ${data.file} ${data.pct}%`);
+      updateModelDownloadProgress(data.file, data.pct);
+      break;
+    case 'model-declined':
+      setStatus('speech model download declined — this song will stay unsynced');
       break;
     case 'starting':
       setStatus('transcribing the last song…');
@@ -4870,6 +4894,109 @@ window.player.onTranscribeProgress((data) => {
       break;
   }
 });
+
+/*
+  Speech-model download consent + log (backend: model_consent.rs). One panel,
+  two states, not two separate UI surfaces: "asking" (Download / Not now /
+  Don't ask again) transitions straight into "downloading" (a live per-file
+  log, fed by the 'downloading-model' stage above) the moment Download is
+  clicked — the backend's Inference-lane thread is genuinely blocked on
+  exactly that answer, so there is no other state to represent.
+*/
+
+/** @param {number} bytes @returns {string} */
+function humanBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(mb >= 10 ? 0 : 1)}MB` : `${Math.round(bytes / 1024)}KB`;
+}
+
+function closeModelConsent() {
+  if (els.modelConsent) els.modelConsent.hidden = true;
+  if (els.modelConsentBackdrop) els.modelConsentBackdrop.hidden = true;
+}
+
+window.player.onModelConsentNeeded((data) => {
+  if (!els.modelConsent) return;
+  const files = (data && data.files) || [];
+  const total = humanBytes(data && data.totalBytes);
+  if (els.modelConsentBody) {
+    els.modelConsentBody.textContent =
+      `Auto-transcribing an unsynced song needs a one-time ${total} download ` +
+      `(Whisper + a voice detector, ${files.length} file${files.length === 1 ? '' : 's'}). ` +
+      `Cached after this — every song after the first uses it instantly, no more asking.`;
+  }
+  if (els.modelConsentAsk) els.modelConsentAsk.hidden = false;
+  if (els.modelConsentLog) els.modelConsentLog.replaceChildren();
+  if (els.modelConsentLog) els.modelConsentLog.hidden = true;
+  if (els.modelConsentBackdrop) els.modelConsentBackdrop.hidden = false;
+  els.modelConsent.hidden = false;
+});
+
+/**
+ * One file's row in the download log — created on its first progress event,
+ * updated in place on every one after.
+ * @param {string} file @param {number} pct
+ */
+function updateModelDownloadProgress(file, pct) {
+  if (!els.modelConsentLog || els.modelConsentLog.hidden) return;
+  let row = els.modelConsentLog.querySelector(`[data-file="${CSS.escape(file)}"]`);
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'modelconsent__file';
+    row.dataset.file = file;
+    const top = document.createElement('div');
+    top.className = 'modelconsent__file-row';
+    const name = document.createElement('span');
+    name.className = 'modelconsent__file-name';
+    name.textContent = file;
+    const pctEl = document.createElement('span');
+    pctEl.className = 'modelconsent__file-pct';
+    top.append(name, pctEl);
+    const track = document.createElement('div');
+    track.className = 'modelconsent__file-track';
+    const fill = document.createElement('div');
+    fill.className = 'modelconsent__file-fill';
+    track.appendChild(fill);
+    row.append(top, track);
+    els.modelConsentLog.appendChild(row);
+  }
+  const pctEl = row.querySelector('.modelconsent__file-pct');
+  const fill = row.querySelector('.modelconsent__file-fill');
+  if (pctEl) pctEl.textContent = `${pct}%`;
+  if (fill) fill.style.width = `${pct}%`;
+  row.classList.toggle('modelconsent__file--done', pct >= 100);
+}
+
+if (els.modelConsentYes) {
+  els.modelConsentYes.addEventListener('click', () => {
+    if (els.modelConsentAsk) els.modelConsentAsk.hidden = true;
+    if (els.modelConsentLog) els.modelConsentLog.hidden = false;
+    window.player.answerModelConsent(true, true);
+  });
+}
+if (els.modelConsentLater) {
+  els.modelConsentLater.addEventListener('click', () => {
+    window.player.answerModelConsent(false, false);
+    closeModelConsent();
+  });
+}
+if (els.modelConsentNever) {
+  els.modelConsentNever.addEventListener('click', () => {
+    window.player.answerModelConsent(false, true);
+    closeModelConsent();
+  });
+}
+if (els.modelConsentBackdrop) {
+  els.modelConsentBackdrop.addEventListener('click', () => {
+    // Only while still asking — a stray click on the backdrop during an
+    // active download shouldn't read as cancelling a fetch already in flight.
+    if (els.modelConsentAsk && !els.modelConsentAsk.hidden) {
+      window.player.answerModelConsent(false, false);
+      closeModelConsent();
+    }
+  });
+}
 
 window.player.getTranscribeConfig().then((cfg) => {
   if (cfg) transcribeCfg = cfg;
@@ -5527,7 +5654,7 @@ if (window.player.onWallpaperPointer) {
   A MutationObserver on the panels' `hidden` attribute keeps it in step no
   matter which of the many open/close paths fired, without hooking each one.
 */
-const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch]
+const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent]
   .filter(Boolean);
 
 function anyPanelOpen() {

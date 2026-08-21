@@ -474,9 +474,18 @@ fn run_native_transcription(
 
     // First transcription on a fresh install: the models directory is empty,
     // and nothing else in the app ever populates it. This is a one-time
-    // ~79 MB fetch, cached on disk after — the same shape whisper.js already
-    // has for the WASM path, not new behaviour.
+    // ~82 MB fetch, cached on disk after — the same shape whisper.js already
+    // has for the WASM path, not new behaviour. Asked about (model_consent.rs)
+    // before it starts, not after: `allow` blocks this Inference-lane thread
+    // until the renderer answers a `model-consent-needed` prompt, or resolves
+    // instantly if a decision (or nothing missing) is already on record.
     if let Some(models_dir) = crate::inference::model_dir(&app) {
+        let missing = crate::models::missing_files(&models_dir);
+        if !crate::model_consent::allow(&app, &missing) {
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "model-declined" }));
+            return;
+        }
+
         let progress_app = app.clone();
         let progress_track = track.clone();
         let ensured = crate::models::ensure(
@@ -738,6 +747,11 @@ impl Runnable for ResumeTranscribeJob {
         let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
 
         if let Some(models_dir) = crate::inference::model_dir(&app) {
+            let missing = crate::models::missing_files(&models_dir);
+            if !crate::model_consent::allow(&app, &missing) {
+                let _ = std::fs::remove_file(&job.pcm_path);
+                return;
+            }
             let ensured = crate::models::ensure(&models_dir, |_, _| {}, &|| cancel.cancelled());
             if let Err(message) = ensured {
                 if message != "cancelled" {
@@ -1271,6 +1285,14 @@ pub(crate) fn transcribe_audio(app: AppHandle, payload: Value) -> Value {
 #[tauri::command]
 pub(crate) fn report_transcribe_progress(app: AppHandle, data: Value) {
     let _ = app.emit("transcribe-progress", data);
+}
+
+/// The renderer's answer to `model-consent-needed` (model_consent.rs). Wakes
+/// whichever Inference-lane job is blocked waiting for it, and — if
+/// `remember` is set — persists the decision so the prompt never fires again.
+#[tauri::command]
+pub(crate) fn answer_model_consent(consent: bool, remember: bool, app: AppHandle) {
+    crate::model_consent::answer(&app, consent, remember);
 }
 
 /// A cached lyrics payload's `source` is a bare string ("whisper",

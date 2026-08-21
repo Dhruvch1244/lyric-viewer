@@ -123,6 +123,14 @@ fn already_present(path: &Path, file: &ModelFile) -> bool {
     std::fs::metadata(path).map(|m| m.len() == file.size).unwrap_or(false)
 }
 
+/// (name, size) of every file `ensure` would actually have to download right
+/// now. Empty on a machine that already has everything — which is what lets
+/// `model_consent::allow` skip the prompt entirely on every transcription
+/// after the first, rather than only skipping the download itself.
+pub(crate) fn missing_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
+    FILES.iter().filter(|f| !already_present(&model_dir.join(f.name), f)).map(|f| (f.name, f.size)).collect()
+}
+
 /// Stream one file to disk via a `.part` temp path, verify it, then rename
 /// into place. The temp path plus the rename is what stops a download killed
 /// mid-write from being mistaken for a complete file later — `already_present`
@@ -327,6 +335,29 @@ mod tests {
         let result = ensure(&dir, |_, _| calls += 1, &|| false);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(calls, 0, "progress was reported for files that were already present");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_files_is_empty_once_everything_is_on_disk() {
+        let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-e", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in FILES {
+            std::fs::write(dir.join(f.name), vec![0u8; f.size as usize]).unwrap();
+        }
+        assert!(missing_files(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_files_lists_only_what_is_actually_absent() {
+        let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-f", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Only the first file present; the rest of the directory is empty.
+        std::fs::write(dir.join(FILES[0].name), vec![0u8; FILES[0].size as usize]).unwrap();
+        let missing = missing_files(&dir);
+        assert_eq!(missing.len(), FILES.len() - 1);
+        assert!(!missing.iter().any(|(name, _)| *name == FILES[0].name));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
