@@ -2,6 +2,31 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.39.0 — 2026-08-21
+
+Asks before it downloads, and shows its work while it does.
+
+- **The speech model is no longer fetched silently.** Auto-transcribing an
+  unsynced song needs a one-time ~82MB download (Whisper + a voice
+  detector); it always has, but nothing ever asked or showed progress. A
+  blocking modal — the one dialog in this app with an actual dimmed
+  backdrop — now asks first: Download / Not now / Don't ask again, the
+  decision remembered so it only asks once. Approving turns the same panel
+  into a live per-file download log.
+- **Fixed the bug that made it look silent even before the prompt existed.**
+  The renderer was listening for progress stages named `download`/
+  `downloading`; the backend has always emitted `downloading-model`. Neither
+  matched, so the fetch ran with genuinely zero feedback anywhere in the UI
+  — easy to mistake for a hang.
+- **Known gap:** the WebView/WASM Whisper fallback warms its own separate
+  model cache in the background on every startup (`schedulePreload` in
+  `renderer.js`), and is not yet gated by this consent — it's pure
+  `transformers.js`, no Rust backend involved, and only ever matters when
+  native capture or the sidecar isn't available. Left for a follow-up.
+- Diarization (§5.8, discussed as a candidate for this release) is **not**
+  in this release — still unscoped, deferred rather than rushed.
+- Test counts: 203 JS, 334 Rust (was 203 / 331 at 0.38.1).
+
 ## 0.38.1 — 2026-08-21
 
 Follow-up to 0.38.0: the watched-folder backfill it shipped ran, but nothing
