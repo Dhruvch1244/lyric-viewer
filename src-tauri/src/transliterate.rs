@@ -35,10 +35,16 @@ fn schema() -> Value {
 }
 
 /// Transliterate a cue list into Devanagari, preserving timing (incl. endMs).
-/// None on any failure / no provider.
-pub fn to_devanagari(cues: &[Cue]) -> Option<Vec<Cue>> {
-    if !llm::is_available() || cues.is_empty() {
-        return None;
+/// `Err` on any failure / no provider — carries the reason (no provider
+/// configured, which provider(s) failed and why, or a malformed response) so
+/// the renderer can show the caller something more useful than a blanket
+/// "transliteration failed".
+pub fn to_devanagari(cues: &[Cue]) -> Result<Vec<Cue>, String> {
+    if !llm::is_available() {
+        return Err("no LLM provider configured".into());
+    }
+    if cues.is_empty() {
+        return Err("no lyrics to transliterate".into());
     }
     let texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
     let mut converted: Vec<String> = Vec::with_capacity(texts.len());
@@ -51,10 +57,13 @@ pub fn to_devanagari(cues: &[Cue]) -> Option<Vec<Cue>> {
             "Transliterate these lyric lines to Devanagari. Return one output line per input line.\n\n{}",
             serde_json::to_string_pretty(&json!({ "lines": batch })).unwrap_or_default()
         );
-        let parsed = llm::convert(SYSTEM_PROMPT, &user, &schema()).ok()?;
-        let lines = parsed.get("lines").and_then(|v| v.as_array())?;
+        let parsed = llm::convert(SYSTEM_PROMPT, &user, &schema())?;
+        let lines = parsed
+            .get("lines")
+            .and_then(|v| v.as_array())
+            .ok_or("malformed response: no \"lines\" array")?;
         if lines.len() != batch.len() {
-            return None;
+            return Err(format!("line count mismatch: sent {}, received {}", batch.len(), lines.len()));
         }
         for l in lines {
             converted.push(l.as_str().unwrap_or("").to_string());
@@ -62,19 +71,17 @@ pub fn to_devanagari(cues: &[Cue]) -> Option<Vec<Cue>> {
         i = end;
     }
 
-    Some(
-        cues
-            .iter()
-            .enumerate()
-            .map(|(idx, c)| Cue {
-                time_ms: c.time_ms,
-                text: converted.get(idx).cloned().unwrap_or_else(|| c.text.clone()),
-                end_ms: c.end_ms,
-                // The script conversion runs on the whole line, not word by
-                // word, so there's no per-word split to attach measured
-                // timing to here.
-                words: None,
-            })
-            .collect(),
-    )
+    Ok(cues
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| Cue {
+            time_ms: c.time_ms,
+            text: converted.get(idx).cloned().unwrap_or_else(|| c.text.clone()),
+            end_ms: c.end_ms,
+            // The script conversion runs on the whole line, not word by
+            // word, so there's no per-word split to attach measured
+            // timing to here.
+            words: None,
+        })
+        .collect())
 }

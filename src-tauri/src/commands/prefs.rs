@@ -96,13 +96,13 @@ pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<
     }
     let cues: Vec<crate::lyrics::Cue> = cached.get("cues").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     match crate::transliterate::to_devanagari(&cues) {
-        Some(deva) => {
+        Ok(deva) => {
             let val = serde_json::to_value(&deva).unwrap_or(Value::Null);
             cached["cuesDevanagari"] = val.clone();
             let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
             json!({ "status": "ok", "cues": val })
         }
-        None => json!({ "status": "error", "message": "transliteration failed" }),
+        Err(message) => json!({ "status": "error", "message": message }),
     }
 }
 

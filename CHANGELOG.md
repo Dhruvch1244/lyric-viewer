@@ -2,6 +2,41 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.38.0 — 2026-08-21
+
+Two reported bugs fixed, and the start of Phase 7 (library indexing).
+
+- **Synced lyrics could freeze mid-song and never move again.** The SMTC
+  position estimator projected forward from the last real timeline update
+  using its age (`staleness_ms`), but capped that projection at 30 seconds and
+  fell back to the raw, un-advanced position past it. Most source apps only
+  push a fresh timeline on play/pause/seek — not continuously — so any song
+  played through for more than 30 seconds without an interaction (i.e. most
+  songs) hit that cap and froze there for the rest of the track, even though
+  the very next line already correctly bounds the estimate against the
+  track's own duration. The cap is gone; only a genuinely unset timestamp is
+  now treated as untrustworthy.
+- **Devanagari transliteration and English translation could fail outright.**
+  The Tauri port never actually implemented an `ANTHROPIC_API_KEY` provider —
+  Claude went through Electron's Node SDK before, and the raw-API
+  replacement was left as a TODO — while the UI kept telling users to set
+  exactly that key for both features. Wired up a real Claude provider
+  (Messages API, no SDK) in the same Gemini → Groq → HuggingFace → Claude
+  order the old build used. Both features also used to collapse every
+  failure into a generic "transliteration/translation failed"; they now
+  surface the actual reason (which provider, why).
+- **Phase 7, first cut: a library that survives a restart.** Folders can now
+  be *watched* rather than only one-off scanned: a persisted folder list is
+  re-scanned every 60s, and everything the scan finds is pre-analysed (beat
+  map, key, section boundaries, loudness) in the Idle lane — the same pass
+  `analyze_local_file` runs on demand, run ahead of time so a local file's
+  shape is already known before it's ever played, the same way a streamed
+  track precomputed on `Next`/`Idle` already is. New "Watched folders" strip
+  in the Library panel shows each folder's analysed/found count with add and
+  remove controls. Diarization (§5.8) remains the rest of Phase 7's scope;
+  see `docs/JOB-ENGINE.md` §7.16.
+- Test counts: 203 JS, 331 Rust (was 203 / 318 at 0.37.0).
+
 ## 0.37.0 — 2026-08-20
 
 The job-engine release: background work gets a scheduler, transcription moves

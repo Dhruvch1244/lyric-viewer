@@ -2,9 +2,11 @@
 //!
 //! A Rust port of `llm.js`. `convert(system, user, schema)` runs a structured
 //! JSON conversion on the first configured provider that succeeds, in the same
-//! precedence order: Gemini → Groq → HuggingFace. (Claude went through the
-//! Node SDK in Electron; it can be added as a raw API call later.) Keys come
-//! from environment variables, matching keys.js's env layer.
+//! precedence order as the old Electron build: Gemini → Groq → HuggingFace →
+//! Claude, then a consented local CLI last. Claude went through the Node SDK
+//! in Electron and was left as a raw-API TODO through the first cut of this
+//! port — `call_anthropic` below is that gap closed, using the Messages API
+//! directly. Keys come from environment variables, matching keys.js's env layer.
 
 use serde_json::{json, Value};
 
@@ -30,10 +32,17 @@ fn groq_key() -> Option<String> {
 fn hf_key() -> Option<String> {
     env_any(&["HF_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN"])
 }
+fn anthropic_key() -> Option<String> {
+    env_any(&["ANTHROPIC_API_KEY"])
+}
 
 /// Whether any provider — a cloud key or a consented local CLI — can run.
 pub fn is_available() -> bool {
-    gemini_key().is_some() || groq_key().is_some() || hf_key().is_some() || crate::localcli::is_ready()
+    gemini_key().is_some()
+        || groq_key().is_some()
+        || hf_key().is_some()
+        || anthropic_key().is_some()
+        || crate::localcli::is_ready()
 }
 
 /// The provider that would answer first, for the renderer's status chip.
@@ -44,6 +53,8 @@ pub fn active_provider() -> Option<&'static str> {
         Some("groq")
     } else if hf_key().is_some() {
         Some("huggingface")
+    } else if anthropic_key().is_some() {
+        Some("claude")
     } else {
         None
     }
@@ -173,6 +184,45 @@ fn call_openai_compatible(url: &str, model: &str, key: &str, system: &str, user:
     parse_json_loose(text)
 }
 
+/// Claude via the Messages API directly — no SDK, since Electron's Node SDK
+/// dependency doesn't carry over to a Rust binary. Anthropic has no
+/// `response_format`/JSON-mode knob the way the OpenAI-compatible providers
+/// above do, so the schema is asked for in the system prompt and the reply is
+/// parsed the same best-effort way as Groq/HF's completions.
+fn call_anthropic(system: &str, user: &str, schema: &Value) -> Result<Value, String> {
+    let key = anthropic_key().ok_or("no anthropic key")?;
+    let model = std::env::var("LYRIC_OVERLAY_ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-5".into());
+    let sys = format!(
+        "{system}\n\nReturn ONLY a JSON object that conforms to this JSON Schema (no markdown, no commentary):\n{schema}"
+    );
+    let body = json!({
+        "model": model,
+        "max_tokens": 8192,
+        "temperature": 0.2,
+        "system": sys,
+        "messages": [{ "role": "user", "content": user }],
+    });
+    let resp = ureq::post("https://api.anthropic.com/v1/messages")
+        .set("Content-Type", "application/json")
+        .set("x-api-key", &key)
+        .set("anthropic-version", "2023-06-01")
+        .timeout(TIMEOUT)
+        .send_json(body);
+    let data: Value = match resp {
+        Ok(r) => r.into_json().map_err(|e| format!("anthropic decode: {e}"))?,
+        Err(ureq::Error::Status(code, r)) => {
+            let detail = r.into_string().unwrap_or_default();
+            return Err(format!("anthropic {code}: {}", detail.chars().take(200).collect::<String>()));
+        }
+        Err(e) => return Err(format!("anthropic transport: {e}")),
+    };
+    let text = data
+        .pointer("/content/0/text")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    parse_json_loose(text)
+}
+
 /// Best-effort JSON extraction from a completion that may wrap it in prose or a
 /// ```json fence. `pub(crate)` so `localcli.rs` can reuse it for CLI output,
 /// which has the same no-structured-output problem as the chat APIs below.
@@ -222,6 +272,12 @@ pub fn convert(system: &str, user: &str, schema: &Value) -> Result<Value, String
         match call_openai_compatible("https://router.huggingface.co/v1/chat/completions", &model, &key, system, user, schema) {
             Ok(v) => return Ok(v),
             Err(e) => failures.push(format!("hf: {e}")),
+        }
+    }
+    if anthropic_key().is_some() {
+        match call_anthropic(system, user, schema) {
+            Ok(v) => return Ok(v),
+            Err(e) => failures.push(format!("claude: {e}")),
         }
     }
 

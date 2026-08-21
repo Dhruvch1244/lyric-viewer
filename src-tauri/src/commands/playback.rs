@@ -187,9 +187,13 @@ pub(crate) fn end_local_playback(app: AppHandle) {
 /// And `key`, from `key.rs`, on the same terms: absent when nothing is
 /// decisive enough to name. Both are optional by design — a tracker or a
 /// detector that always answers is worse than one that sometimes does not.
-#[tauri::command]
-pub(crate) fn analyze_local_file(path: String) -> Value {
-    let (samples, sample_rate) = match crate::analysis::decode_to_mono(&path) {
+///
+/// A plain function, not the command itself, so `library.rs`'s Idle-lane
+/// backfill (JOB-ENGINE.md §7.16) can run the exact same analysis a live
+/// `analyze_local_file` call would, rather than a second implementation that
+/// could drift from this one.
+pub(crate) fn analyze_local_file_value(path: &str) -> Value {
+    let (samples, sample_rate) = match crate::analysis::decode_to_mono(path) {
         Some(pair) => pair,
         None => return json!({ "ok": false }),
     };
@@ -216,8 +220,15 @@ pub(crate) fn analyze_local_file(path: String) -> Value {
     out
 }
 
-/// Audio file extensions the pickers and folder scan accept.
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma"];
+#[tauri::command]
+pub(crate) fn analyze_local_file(path: String) -> Value {
+    analyze_local_file_value(&path)
+}
+
+/// Audio file extensions the pickers and folder scan accept. Also the set
+/// `library.rs`'s folder walk indexes — one list, so a format added to the
+/// picker is automatically a format the library watcher notices too.
+pub(crate) const AUDIO_EXTS: &[&str] = &["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma"];
 
 /// One queue item from a file path: {localPath, title (filename stem), artist}.
 fn local_item(path: &std::path::Path) -> Value {

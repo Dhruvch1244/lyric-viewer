@@ -30,12 +30,22 @@ const SMTC_INTERVAL_MS: u64 = 250;
 
 /// Best-effort current position, projecting past SMTC's stale `positionMs` while
 /// playing — mirrors `estimatePositionMs` in the old smtc.js.
+///
+/// Most source apps only push a fresh timeline on play/pause/seek, not
+/// continuously, so `staleness_ms` routinely climbs into the minutes for any
+/// song that plays through without an interaction — that is the NORMAL case,
+/// not a bad reading. A previous version capped staleness at 30s and fell
+/// back to the raw (un-projected) position past that, which froze the
+/// reported position — and every synced lyric on screen — for the rest of
+/// the track. Only `staleness_ms == -1` (the source never set a timestamp at
+/// all, per smtc.rs) is actually untrustworthy; `end_ms` below is what
+/// keeps a legitimately large staleness from reporting past the track's end.
 #[cfg(windows)]
 fn estimate_position(s: &crate::smtc::Session) -> i64 {
     if s.status != "Playing" {
         return s.position_ms;
     }
-    let staleness = if s.staleness_ms >= 0 && s.staleness_ms < 30_000 { s.staleness_ms } else { 0 };
+    let staleness = if s.staleness_ms >= 0 { s.staleness_ms } else { 0 };
     let projected = s.position_ms + staleness;
     if s.end_ms > 0 {
         projected.min(s.end_ms)
@@ -258,3 +268,46 @@ pub(crate) fn start_power_watcher(app: AppHandle) {
 
 #[cfg(not(windows))]
 pub(crate) fn start_power_watcher(_app: AppHandle) {}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    fn session(status: &str, position_ms: i64, end_ms: i64, staleness_ms: i64) -> crate::smtc::Session {
+        crate::smtc::Session {
+            status: status.into(),
+            position_ms,
+            end_ms,
+            staleness_ms,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_long_running_song_with_no_seek_still_advances_past_thirty_seconds() {
+        // The regression: most source apps only push a fresh timeline on
+        // play/pause/seek, so a song playing uninterrupted for minutes is
+        // normal, not a bad reading. staleness_ms of 90s used to get clamped
+        // back to 0 here, freezing every synced lyric for the rest of the track.
+        let s = session("Playing", 10_000, 240_000, 90_000);
+        assert_eq!(estimate_position(&s), 100_000);
+    }
+
+    #[test]
+    fn projected_position_is_still_bounded_by_the_track_length() {
+        let s = session("Playing", 10_000, 60_000, 90_000);
+        assert_eq!(estimate_position(&s), 60_000);
+    }
+
+    #[test]
+    fn an_unset_timestamp_projects_nothing() {
+        let s = session("Playing", 10_000, 240_000, -1);
+        assert_eq!(estimate_position(&s), 10_000);
+    }
+
+    #[test]
+    fn a_paused_session_reports_the_raw_position_unprojected() {
+        let s = session("Paused", 10_000, 240_000, 90_000);
+        assert_eq!(estimate_position(&s), 10_000);
+    }
+}

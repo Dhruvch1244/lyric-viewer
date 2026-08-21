@@ -1049,14 +1049,14 @@ pub(crate) fn request_translation(app: AppHandle, state: State<Mutex<CurTrack>>)
     }
 
     match crate::translate::to_english(&cues) {
-        Some((language, en_cues)) => {
+        Ok((language, en_cues)) => {
             let en_val = serde_json::to_value(&en_cues).unwrap_or(Value::Null);
             cached["cuesEnglish"] = en_val.clone();
             cached["language"] = json!(language);
             let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
             json!({ "status": "ok", "cues": en_val, "language": language })
         }
-        None => json!({ "status": "error", "message": "translation failed" }),
+        Err(message) => json!({ "status": "error", "message": message }),
     }
 }
 

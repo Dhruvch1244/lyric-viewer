@@ -311,6 +311,17 @@
         <span id="library-count" class="library__count"></span>
         <button id="library-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
       </header>
+
+      <!-- Watched folders (JOB-ENGINE.md §5.7/§7.16): unlike "Add folder…"
+           above, which scans once and forgets, a watched folder is persisted
+           and re-scanned in the background, and everything it finds is
+           pre-analysed (beat map, key, structure, loudness) in the Idle lane
+           before you ever press play on it. -->
+      <div id="library-watched" class="library__watched">
+        <button id="library-watch-folder" class="chip chip--muted" type="button" title="Watch a folder — remembered across restarts and kept analysed in the background">+ Watch folder…</button>
+        <ul id="library-watched-list" class="library__watched-list"></ul>
+      </div>
+
       <div id="library-grid" class="library__grid"></div>
       <p id="library-empty" class="library__empty" hidden></p>
     </section>

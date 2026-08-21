@@ -81,6 +81,7 @@
     onLocalcliOffer: (cb) => on('localcli-offer', cb),
     onOffset: (cb) => on('offset', cb),
     onNativeAudio: (cb) => on('native-audio', cb),
+    onLibraryChanged: (cb) => on('library-changed', cb),
 
     /* ---- invoke commands (renderer → main). snake_case per Tauri. ---- */
     // Re-announce whatever SMTC already knows, once onTrack/onTick are
@@ -126,6 +127,12 @@
 
     openLocalFiles: () => call('open_local_files', {}, []),
     openLocalFolder: () => call('open_local_folder', {}, []),
+    /* Watched-folder library (JOB-ENGINE.md §5.7, phase 7 first cut): unlike
+       openLocalFolder above, this folder is remembered and re-scanned in the
+       background rather than picked fresh every time. */
+    addLibraryFolder: () => call('add_library_folder', {}, { status: 'error', message: 'unavailable' }),
+    removeLibraryFolder: (path) => call('remove_library_folder', { path }, { status: 'error', message: 'unavailable' }),
+    getLibraryFolders: () => call('get_library_folders', {}, []),
     readLocalFile: (filePath) => call('read_local_file', { filePath }),
     /* Native per-song analysis (symphonia decode + envelope/onset DSP) so the
        renderer doesn't decode + crunch the whole track on the UI thread. */

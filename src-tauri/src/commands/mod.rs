@@ -4,6 +4,7 @@
 //! only place that needs every command name qualified by its submodule path.
 
 pub(crate) mod artwork_cmds;
+pub(crate) mod library_cmds;
 pub(crate) mod lyrics_cmds;
 pub(crate) mod misc;
 pub(crate) mod playback;

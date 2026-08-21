@@ -34,6 +34,7 @@ mod genius;
 mod musicbrainz;
 mod jobs;
 mod kugou;
+mod library;
 mod llm;
 mod localcli;
 mod history;
@@ -162,6 +163,7 @@ pub fn run() {
             watchers::start_smtc(handle.clone());
             watchers::start_pointer_forwarding(handle.clone());
             watchers::start_power_watcher(handle.clone());
+            library::start_library_watcher(handle.clone());
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
@@ -225,6 +227,9 @@ pub fn run() {
             commands::lyrics_cmds::transcribe_audio,
             commands::lyrics_cmds::report_transcribe_progress,
             commands::lyrics_cmds::finalize_transcription,
+            commands::library_cmds::add_library_folder,
+            commands::library_cmds::remove_library_folder,
+            commands::library_cmds::get_library_folders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

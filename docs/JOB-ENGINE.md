@@ -345,7 +345,7 @@ never calls the command, keeps working unchanged.
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** ✅ | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). **Loudness (5.6) done** — EBU R128 integrated loudness driving a per-track gain on the live envelope (§7.15). Pure Rust, incremental. | Low each | Yes — visuals |
-| **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
+| **7** 🔶 | Library indexing (5.7) — **done (§7.16):** persisted watch-folder list, background rescan, and Idle-lane pre-analysis (beat map, key, structure, loudness) of everything it finds. **Not done:** diarization (5.8, gated on 3 and 6 landing well — they have). | Medium / high | Yes — a watched folder survives a restart and pre-analyses itself in the background |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
 a strict improvement over five uncoordinated threads.
@@ -1097,6 +1097,75 @@ level and a gain of 40 is a bug, not a very quiet record.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
+
+---
+
+### 7.16 Phase 7: a library that survives a restart, and keeps itself analysed
+
+§5.7's actual gap, before this: `open_local_folder` (§ above, `playback.rs`)
+scans a folder once, on click, and hands the result straight to the queue.
+Nothing about the folder itself is remembered — close the app and reopen it,
+and every folder has to be re-picked and re-scanned from a blank slate, and
+nothing is pre-analysed until the moment it's actually played.
+
+**Landed** (`library.rs`, `commands/library_cmds.rs`):
+
+- `Prefs.library_folders: Vec<String>` — the watch list, persisted the same
+  way as every other preference. Just the list; scan results live in their
+  own file (`library-index.json`) so this stays small even at a few thousand
+  tracks.
+- A manual, bounded-depth folder walk (`scan_folder`) rather than a `walkdir`
+  dependency — matching this codebase's habit of reaching for `std` first.
+  Symlinks are not followed, and a depth cap backstops a cycle that check
+  somehow misses.
+- `rescan` diffs a fresh walk against the persisted index — new file, changed
+  file (size or mtime moved), or gone (deleted, or its folder was dropped
+  from the watch list) — and emits `library-changed` with the counts. Pulled
+  apart into a pure `diff_index` plus the I/O around it (load, walk, save,
+  emit) specifically so the diff logic has unit tests that don't need a real
+  `AppHandle` — the same shape `correct.rs`'s `merge_corrections` uses.
+- `start_library_watcher`: one more `std::thread::spawn` loop alongside the
+  SMTC and wallpaper watchers in `watchers.rs`, polling every 60s. Reads
+  `Prefs.library_folders` fresh each tick rather than snapshotting it at
+  startup, so adding or removing a folder takes effect without restarting
+  the thread. 60s, not `SMTC_INTERVAL_MS`'s 250ms or the power watcher's 2s:
+  a folder walk is real disk I/O, and library contents change on human
+  timescales (copying in an album), not the sub-second timescales those
+  other two watchers exist for.
+- **The Idle-lane analysis backfill** — 5.7's other half. Each `LibraryEntry`
+  now carries an `analyzed` flag, reset to `false` whenever `diff_index` sees
+  a file appear or change and left alone when it doesn't. `queue_backfill`
+  walks the index after every scan and submits one `LibraryAnalyzeJob` per
+  unanalysed file at `Priority::Idle`, `Lane::Cpu` — one job per file, not
+  one job for the whole backlog the way `PresyncJob` is, since this is
+  CPU-bound local work with nothing to be polite to and should actually use
+  the CPU lane's `N-1` worker threads rather than tie up one of them running
+  everything serially. Each job runs the exact same DSP pass
+  `analyze_local_file` runs on demand — pulled out as
+  `playback::analyze_local_file_value` so there is one implementation, not
+  two that could drift — strips the per-window envelope (live-reactive data
+  the renderer wants during THIS play, not a durable summary; keeping it
+  would multiply the cache by every song's sample count for nothing a cold
+  backfill needs) and persists the rest (beats/key/section
+  starts/loudness/duration) to `library-analysis/<hash of the path>.json`.
+  `INDEX_LOCK`, a plain `Mutex<()>`, serialises the index read-modify-write
+  against several of these finishing at once across the CPU lane's threads —
+  contention costs microseconds against DSP work measured in the hundreds of
+  milliseconds (§7.12), so it is not a bottleneck.
+- Three commands — `add_library_folder` (same picker + `AlwaysOnTopGuard`
+  shape as `open_local_folder`, plus an immediate `rescan` so the count isn't
+  stale until the next tick), `remove_library_folder`, `get_library_folders`
+  (now also reporting `analyzedCount` per folder) — and matching
+  `window.player` entries in `tauri-shim.js`
+  (`addLibraryFolder`/`removeLibraryFolder`/`getLibraryFolders`,
+  `onLibraryChanged`).
+- A "Watched folders" strip inside the existing Library panel (`index.html`,
+  `renderer.js`) rather than a new HUD chip — folders show their tail name,
+  an "analysed/found" count, and a remove control, refreshed on
+  `library-changed` while the panel is open.
+
+**Not done:** diarization (5.8) remains unstarted and still exploratory per
+§5.8's own description — Phase 7's only remaining piece.
 
 ---
 

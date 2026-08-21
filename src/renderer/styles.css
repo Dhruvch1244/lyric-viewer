@@ -2040,6 +2040,74 @@ body.engine-milkdrop .stage::before {
   color: var(--chrome-ink-dim);
 }
 
+/* Watched folders (§7.16) — a short strip above the grid, not another panel:
+   folders persist and re-scan themselves, so this is closer to a settings
+   list than to the song grid below it. Wraps rather than scrolling since a
+   realistic watch list is a handful of folders, not hundreds. */
+.library__watched {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.library__watched-list {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.library__watched-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem 0.3rem 0.7rem;
+  font-size: 0.76rem;
+  color: var(--chrome-ink-dim);
+  background: var(--chrome-card);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--chrome-radius-pill);
+  max-width: 20rem;
+}
+
+.library__watched-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library__watched-count {
+  flex: none;
+  color: var(--chrome-ink-faint);
+}
+
+.library__watched-remove {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--chrome-ink-faint);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.library__watched-remove:hover,
+.library__watched-remove:focus-visible {
+  color: var(--chrome-ink);
+  background: var(--chrome-surface-solid);
+  outline: none;
+}
+
 /* Auto-fitting grid: the panel adapts to the window instead of scrolling a
    single narrow column the way the old list did. */
 .library__grid {

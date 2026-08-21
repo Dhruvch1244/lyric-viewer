@@ -50,6 +50,8 @@ const els = {
   libraryCount: document.getElementById('library-count'),
   libraryClose: document.getElementById('library-close'),
   libraryEmpty: document.getElementById('library-empty'),
+  libraryWatchFolder: document.getElementById('library-watch-folder'),
+  libraryWatchedList: document.getElementById('library-watched-list'),
   transport: document.getElementById('transport'),
   trPrev: document.getElementById('tr-prev'),
   trPlay: document.getElementById('tr-play'),
@@ -6364,6 +6366,7 @@ function openLibrary() {
   els.library.hidden = false;
   document.body.classList.add('show-cursor');
   refreshSyncedList();
+  refreshWatchedFolders();
   if (els.librarySearch) els.librarySearch.focus();
 }
 
@@ -6382,11 +6385,80 @@ async function addLocalFiles(fromFolder) {
   window.LocalPlayer.enqueue(picked);
 }
 
+/*
+  Watched folders (JOB-ENGINE.md §5.7/§7.16). Distinct from addLocalFiles
+  above: that scans once and hands the result to the queue; this persists the
+  folder and the backend keeps it re-scanned and pre-analysed in the
+  background, so it survives a restart instead of needing to be re-picked
+  every session.
+*/
+
+/** Re-fetch the watched-folder list from the backend and redraw it. */
+async function refreshWatchedFolders() {
+  if (!els.libraryWatchedList || !window.player.getLibraryFolders) return;
+  let folders = [];
+  try {
+    folders = await window.player.getLibraryFolders();
+  } catch { /* show whatever was drawn before */ return; }
+  renderWatchedFolders(Array.isArray(folders) ? folders : []);
+}
+
+/** @param {Array<{path: string, trackCount: number, analyzedCount: number}>} folders */
+function renderWatchedFolders(folders) {
+  if (!els.libraryWatchedList) return;
+  els.libraryWatchedList.textContent = '';
+  const frag = document.createDocumentFragment();
+  for (const f of folders) {
+    const li = document.createElement('li');
+    li.className = 'library__watched-item';
+
+    const name = document.createElement('span');
+    name.className = 'library__watched-path';
+    // The tail of the path is what tells two folders apart at a glance
+    // ("Albums" vs "Downloads"); the full path is still one hover away.
+    name.textContent = f.path.split(/[\\/]/).filter(Boolean).pop() || f.path;
+    name.title = f.path;
+
+    const count = document.createElement('span');
+    count.className = 'library__watched-count';
+    count.textContent = `${f.analyzedCount ?? 0}/${f.trackCount ?? 0}`;
+    count.title = 'analysed / found — the rest are queued in the background';
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'library__watched-remove';
+    remove.textContent = '×';
+    remove.title = `Stop watching ${f.path}`;
+    remove.addEventListener('click', async () => {
+      const result = await window.player.removeLibraryFolder(f.path).catch(() => null);
+      renderWatchedFolders(result && Array.isArray(result.folders) ? result.folders : folders.filter((x) => x.path !== f.path));
+    });
+
+    li.append(name, count, remove);
+    frag.appendChild(li);
+  }
+  els.libraryWatchedList.appendChild(frag);
+}
+
 if (els.libraryBtn) els.libraryBtn.addEventListener('click', openLibrary);
 if (els.libraryClose) els.libraryClose.addEventListener('click', closeLibrary);
 if (els.librarySearch) els.librarySearch.addEventListener('input', renderLibrary);
 if (els.libraryAdd) els.libraryAdd.addEventListener('click', () => addLocalFiles(false));
 if (els.libraryAddFolder) els.libraryAddFolder.addEventListener('click', () => addLocalFiles(true));
+if (els.libraryWatchFolder) {
+  els.libraryWatchFolder.addEventListener('click', async () => {
+    const result = await window.player.addLibraryFolder();
+    if (result && result.status === 'ok' && Array.isArray(result.folders)) renderWatchedFolders(result.folders);
+    else if (result && result.status === 'error') setStatus(result.message || 'could not watch that folder');
+  });
+}
+// Counts move as the Idle-lane backfill works through a newly-added folder;
+// only worth redrawing while the panel showing them is actually open.
+if (window.player.onLibraryChanged) {
+  window.player.onLibraryChanged(() => {
+    if (els.library && !els.library.hidden) refreshWatchedFolders();
+  });
+}
 
 /* ------------------------------------------------------- local playback UI */
 

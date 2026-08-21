@@ -40,10 +40,15 @@ fn schema() -> Value {
 }
 
 /// Translate a full cue list to English, preserving timing. Returns
-/// (language, translated cues) or None on any failure / no provider.
-pub fn to_english(cues: &[Cue]) -> Option<(String, Vec<Cue>)> {
-    if !llm::is_available() || cues.is_empty() {
-        return None;
+/// (language, translated cues) or `Err` on any failure / no provider — the
+/// reason travels with it (see transliterate.rs's `to_devanagari`, ported
+/// from the same Option-swallows-everything shape for the same reason).
+pub fn to_english(cues: &[Cue]) -> Result<(String, Vec<Cue>), String> {
+    if !llm::is_available() {
+        return Err("no LLM provider configured".into());
+    }
+    if cues.is_empty() {
+        return Err("no lyrics to translate".into());
     }
     let texts: Vec<String> = cues.iter().map(|c| c.text.clone()).collect();
     let mut translated: Vec<String> = Vec::with_capacity(texts.len());
@@ -57,10 +62,14 @@ pub fn to_english(cues: &[Cue]) -> Option<(String, Vec<Cue>)> {
             "Translate these lyric lines to English. Return one output line per input line.\n\n{}",
             serde_json::to_string_pretty(&json!({ "lines": batch })).unwrap_or_default()
         );
-        let parsed = llm::convert(SYSTEM_PROMPT, &user, &schema()).ok()?;
-        let lines = parsed.get("lines").and_then(|v| v.as_array())?;
+        let parsed = llm::convert(SYSTEM_PROMPT, &user, &schema())?;
+        let lines = parsed
+            .get("lines")
+            .and_then(|v| v.as_array())
+            .ok_or("malformed response: no \"lines\" array")?;
         if lines.len() != batch.len() {
-            return None; // count mismatch — reject rather than misalign
+            // count mismatch — reject rather than misalign
+            return Err(format!("line count mismatch: sent {}, received {}", batch.len(), lines.len()));
         }
         if i == 0 {
             language = parsed.get("language").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
@@ -83,5 +92,5 @@ pub fn to_english(cues: &[Cue]) -> Option<(String, Vec<Cue>)> {
             words: None,
         })
         .collect();
-    Some((language, out))
+    Ok((language, out))
 }

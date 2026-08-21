@@ -95,6 +95,11 @@ pub(crate) struct Prefs {
     /// entry to the (self-hosted, maintainer-controlled) remote endpoint on
     /// top of always writing it locally. See crashlog.rs's module doc.
     pub(crate) crash_reporting_enabled: bool,
+    /// Folders `library.rs`'s background watcher scans and re-scans (JOB-
+    /// ENGINE.md §5.7, phase 7). Just the watch list — the scan results live
+    /// in their own index file, not here, so this stays small even once a
+    /// folder holds thousands of tracks.
+    pub(crate) library_folders: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -109,6 +114,7 @@ impl Default for Prefs {
             display_mode: "full".into(),
             vocal_isolation: false,
             crash_reporting_enabled: false,
+            library_folders: Vec::new(),
         }
     }
 }
