@@ -40,6 +40,7 @@ mod history;
 mod inference;
 mod journal;
 mod key;
+mod library;
 mod loudness;
 mod lyrics;
 mod models;

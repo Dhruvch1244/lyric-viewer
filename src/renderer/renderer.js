@@ -5744,7 +5744,7 @@ els.scriptBtn.addEventListener('click', async () => {
   const next = script === 'devanagari' ? 'latin' : 'devanagari';
   if (next === 'devanagari' && !cuesDevanagari) {
     if (!transliterationAvailable) {
-      setStatus('set GEMINI_API_KEY or ANTHROPIC_API_KEY for Devanagari');
+      setStatus('set GEMINI_API_KEY, GROQ_API_KEY or HF_API_KEY for Devanagari');
       return;
     }
     setStatus('transliterating…');
@@ -5776,7 +5776,7 @@ els.translateBtn.addEventListener('click', async () => {
     return;
   }
   if (!translationAvailable) {
-    setStatus('set GEMINI_API_KEY or ANTHROPIC_API_KEY for translation');
+    setStatus('set GEMINI_API_KEY, GROQ_API_KEY or HF_API_KEY for translation');
     return;
   }
   setStatus('translating…');

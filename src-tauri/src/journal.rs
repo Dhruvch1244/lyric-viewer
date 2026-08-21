@@ -29,11 +29,24 @@
 //! WAL mode: concurrent readers with a single writer, which this workload
 //! already is — the journal is written from the Inference lane and swept once
 //! at startup, never both at once.
+//!
+//! SECOND TABLE, SAME FILE: `local_analysis` (JOB-ENGINE §5.7/§7). One row per
+//! local file's `beats`/`key`/`sectionStartsMs`/`loudness` — the DSP suite
+//! Phase 6 built, keyed on the file path plus its mtime/size so a file that
+//! changed on disk after being analysed is correctly treated as stale rather
+//! than serving a wrong answer for the wrong version of the file. Written by
+//! both `analyze_local_file` (the interactive path, one file, on demand) and
+//! the `Idle`-lane `LocalIndexJob` (`library.rs`, one per file in a folder just
+//! opened) — the same cache, so whichever one gets there first is the one the
+//! other reuses. This is the "SQLite replaces the JSON cache" §4 named,
+//! finally with a second consumer to justify the table living here rather
+//! than as its own file.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 pub(crate) struct Journal(Mutex<Connection>);
@@ -82,6 +95,13 @@ impl Journal {
                 pcm_path    TEXT NOT NULL,
                 language    TEXT,
                 started_at  INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS local_analysis (
+                path        TEXT PRIMARY KEY,
+                mtime       INTEGER NOT NULL,
+                size        INTEGER NOT NULL,
+                data        TEXT NOT NULL,
+                analysed_at INTEGER NOT NULL
             );",
         )?;
         Ok(Self(Mutex::new(conn)))
@@ -161,6 +181,39 @@ impl Journal {
         }
         rows.into_iter().map(|(_, job)| job).collect()
     }
+
+    /// A cached analysis for `path`, but only if it is still fresh — the
+    /// stored `mtime`/`size` match what the caller just read off the file.
+    /// Anything else (no row, or the file changed since) is treated as a
+    /// miss: silently wrong analysis for a re-recorded/re-encoded file would
+    /// be worse than the cost of one re-analysis.
+    pub(crate) fn get_local_analysis(&self, path: &str, mtime: i64, size: u64) -> Option<Value> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM local_analysis WHERE path = ?1 AND mtime = ?2 AND size = ?3",
+                params![path, mtime, size as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| log::warn!("cannot read local analysis cache for {path}: {e}"))
+            .ok()?;
+        data.and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    /// Store (or replace) the analysis for `path` at its current `mtime`/`size`.
+    /// Replacing rather than merging is deliberate — a stale row for a file
+    /// that has since changed is exactly the row this call is meant to
+    /// overwrite, not accumulate alongside.
+    pub(crate) fn put_local_analysis(&self, path: &str, mtime: i64, size: u64, data: &Value) {
+        let Ok(json) = serde_json::to_string(data) else { return };
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute(
+            "INSERT INTO local_analysis (path, mtime, size, data, analysed_at) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size, data = excluded.data, analysed_at = excluded.analysed_at",
+            params![path, mtime, size as i64, json, now_unix()],
+        );
+    }
 }
 
 fn now_unix() -> i64 {
@@ -170,6 +223,7 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn memory_journal() -> Journal {
         Journal::new(Connection::open_in_memory().unwrap()).unwrap()
@@ -240,5 +294,42 @@ mod tests {
         assert_eq!(stale.len(), 2);
         assert!(stale.iter().any(|s| s.track_key == "k1"));
         assert!(stale.iter().any(|s| s.track_key == "k2" && s.language.as_deref() == Some("es")));
+    }
+
+    #[test]
+    fn a_local_analysis_round_trips_at_the_same_mtime_and_size() {
+        let j = memory_journal();
+        let data = json!({ "ok": true, "beats": { "bpm": 120.0 } });
+        j.put_local_analysis("C:\\music\\a.mp3", 1000, 4096, &data);
+        assert_eq!(j.get_local_analysis("C:\\music\\a.mp3", 1000, 4096), Some(data));
+    }
+
+    #[test]
+    fn a_changed_mtime_misses_the_cache() {
+        let j = memory_journal();
+        j.put_local_analysis("C:\\music\\a.mp3", 1000, 4096, &json!({ "ok": true }));
+        assert_eq!(j.get_local_analysis("C:\\music\\a.mp3", 1001, 4096), None, "a file re-touched after analysis must not serve the old answer");
+    }
+
+    #[test]
+    fn a_changed_size_misses_the_cache() {
+        let j = memory_journal();
+        j.put_local_analysis("C:\\music\\a.mp3", 1000, 4096, &json!({ "ok": true }));
+        assert_eq!(j.get_local_analysis("C:\\music\\a.mp3", 1000, 4097), None, "a re-encoded file must not serve the old answer");
+    }
+
+    #[test]
+    fn an_unanalysed_path_is_a_clean_miss() {
+        let j = memory_journal();
+        assert_eq!(j.get_local_analysis("C:\\music\\never-seen.mp3", 0, 0), None);
+    }
+
+    #[test]
+    fn re_analysing_a_path_replaces_rather_than_duplicates() {
+        let j = memory_journal();
+        j.put_local_analysis("C:\\music\\a.mp3", 1000, 4096, &json!({ "beats": { "bpm": 100.0 } }));
+        j.put_local_analysis("C:\\music\\a.mp3", 2000, 5000, &json!({ "beats": { "bpm": 128.0 } }));
+        assert_eq!(j.get_local_analysis("C:\\music\\a.mp3", 1000, 4096), None, "the old mtime/size must no longer resolve");
+        assert_eq!(j.get_local_analysis("C:\\music\\a.mp3", 2000, 5000), Some(json!({ "beats": { "bpm": 128.0 } })));
     }
 }

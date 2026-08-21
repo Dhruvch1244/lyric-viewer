@@ -345,7 +345,7 @@ never calls the command, keeps working unchanged.
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
 | **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** ✅ | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). **Loudness (5.6) done** — EBU R128 integrated loudness driving a per-track gain on the live envelope (§7.15). Pure Rust, incremental. | Low each | Yes — visuals |
-| **7** | Library indexing (5.7). Diarization (5.8) only if 3 and 6 land well. | Medium / high | Yes |
+| **7** 🔶 | Library indexing (5.7) — **the cache-first path shipped; the watcher did not.** `analyze_local_file`'s decode + beat/key/structure/loudness pass is now cached (`journal.rs`'s `local_analysis` table, keyed on path + mtime/size) and pre-run at `Idle` priority for every file in a folder as soon as it's opened (`library.rs`, §7.16). No persisted "watched folders" list, no filesystem-event watcher, no settings UI — those needed a real scope decision (a new dependency, new persisted state, new UI) that a bug-fix pass wasn't the place to make unilaterally. Diarization (5.8) not attempted — exploratory, and the phase note gates it on 3 and 6 "landing well," a judgement call left to whoever picks it up next. | Medium | Yes |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
 a strict improvement over five uncoordinated threads.
@@ -1097,6 +1097,52 @@ level and a gain of 40 is a bug, not a very quiet record.
 
 Phases 2 and 5 are where a user would actually notice. If the goal is impact
 per unit of work, **1 → 2 → 5 → 3** is a defensible reordering of the middle.
+
+### 7.16 Phase 7: local library indexing, minus the watcher
+
+§5.7's one sentence — "watch a music folder and pre-analyse it in the `Idle`
+lane" — bundles two different features, and only one of them landed here.
+
+**What was actually broken first.** `analyze_local_file`
+(`commands/playback.rs`) is the decode + `beats`/`key`/`structure`/`loudness`
+pass local playback runs on every file. It had **no cache at all** — a
+four-minute song paid the same ~0.15s DSP cost (on top of the decode) on its
+tenth play as its first, because nothing before Phase 7 had a place to put
+the answer. `journal.rs` already held one SQLite connection for the
+transcription journal (§4's "SQLite replaces the JSON cache," until now true
+of exactly one table); this phase adds `local_analysis` — one row per file
+path, keyed on `(path, mtime, size)` so a file re-encoded or replaced on disk
+is a cache **miss**, not a wrong answer served with confidence. `analyze()`
+itself (`library.rs`) is unchanged from what `analyze_local_file` already
+did — this phase moved it, not rewrote it — and `analyze_cached()` wraps it:
+stat, check the cache, decode-and-store on a miss.
+
+**Pre-analysis.** `library::index_folder` submits one `LocalIndexJob` per
+audio file at `Priority::Idle` — behind the playing track's own `Now`/`Next`
+work by construction, per `jobs/mod.rs`'s capacity-first dispatch, so
+indexing forty files never competes with the song already playing. Wired
+into both `open_local_folder` and `open_local_files`: the moment either
+picker returns, every file it found is queued. Untracked (`track()` is
+`None`), the same choice Phase 2's pre-sync bulk import made, for the same
+reason — this is work for files that are not playing and often not even
+queued, so a track change must not cancel it.
+
+**What was deliberately not built: the "watch" half.** There is no
+persisted list of folders, no `notify`-crate filesystem watcher, no settings
+panel to add or remove one. `index_folder` runs once, off the same
+enumeration the folder/file pickers already did — a file dropped into a
+previously-opened folder later is not indexed until that folder is opened
+again (or the file is simply played, which caches it the interactive way).
+That is a real, separably-scoped feature — a new dependency, new persisted
+state, a UI surface someone has to design — and picking it up silently
+inside an unrelated bug-fix pass was the wrong call. The payoff §5.7's
+sentence is actually after — "every local file starts with full analysis...
+already on disk" — is fully delivered for the only folders local playback
+today ever sees: the ones the user has opened through the app itself.
+
+Diarization (5.8) was not attempted; the phase note already gated it on "3
+and 6 landing well," which is a judgement call for whoever picks it up next,
+not a default this pass should have made for them.
 
 ---
 

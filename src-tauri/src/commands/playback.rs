@@ -187,33 +187,15 @@ pub(crate) fn end_local_playback(app: AppHandle) {
 /// And `key`, from `key.rs`, on the same terms: absent when nothing is
 /// decisive enough to name. Both are optional by design — a tracker or a
 /// detector that always answers is worse than one that sometimes does not.
+///
+/// Cache-first (`library::analyze_cached`, JOB-ENGINE §5.7/Phase 7): a file
+/// already indexed by `open_local_folder`'s background pass, or simply played
+/// before, returns its stored result for one stat call instead of paying the
+/// decode + DSP cost again. A cache miss still runs the full pass inline, so
+/// playing a file this session has never seen is unchanged from before.
 #[tauri::command]
-pub(crate) fn analyze_local_file(path: String) -> Value {
-    let (samples, sample_rate) = match crate::analysis::decode_to_mono(&path) {
-        Some(pair) => pair,
-        None => return json!({ "ok": false }),
-    };
-    let a = crate::analysis::analyse_samples(&samples, sample_rate);
-    let mut out = serde_json::to_value(&a).unwrap_or(json!({}));
-    out["ok"] = json!(true);
-    out["durationMs"] = json!((samples.len() as f64 / sample_rate as f64) * 1000.0);
-    if let Some(beats) = crate::beats::track(&samples, sample_rate) {
-        log::info!("beat grid: {:.1} BPM, {} beats, confidence {:.2}", beats.bpm, beats.beats_ms.len(), beats.confidence);
-        out["beats"] = serde_json::to_value(&beats).unwrap_or(Value::Null);
-    }
-    if let Some(key) = crate::key::detect(&samples, sample_rate) {
-        log::info!("key: {} (margin {:.2})", key.label, key.confidence);
-        out["key"] = serde_json::to_value(&key).unwrap_or(Value::Null);
-    }
-    if let Some(starts) = crate::structure::detect(&samples, sample_rate) {
-        log::info!("structure: {} section(s)", starts.len());
-        out["sectionStartsMs"] = json!(starts);
-    }
-    if let Some(l) = crate::loudness::measure(&samples, sample_rate) {
-        log::info!("loudness: {:.1} LUFS, gain {:.2}", l.lufs, l.gain);
-        out["loudness"] = serde_json::to_value(&l).unwrap_or(Value::Null);
-    }
-    out
+pub(crate) fn analyze_local_file(path: String, app: AppHandle) -> Value {
+    crate::library::analyze_cached(&app, &path)
 }
 
 /// Audio file extensions the pickers and folder scan accept.
@@ -245,7 +227,13 @@ pub(crate) fn open_local_files(app: AppHandle) -> Value {
     }
     let picked = builder.blocking_pick_files();
     match picked {
-        Some(paths) => json!(paths.into_iter().filter_map(|p| p.into_path().ok()).map(|p| local_item(&p)).collect::<Vec<_>>()),
+        Some(paths) => {
+            let paths: Vec<std::path::PathBuf> = paths.into_iter().filter_map(|p| p.into_path().ok()).collect();
+            // Background pre-analysis (JOB-ENGINE §5.7/Phase 7) — Idle
+            // priority, so this never competes with whatever is playing.
+            crate::library::index_folder(&app, &paths);
+            json!(paths.iter().map(|p| local_item(p)).collect::<Vec<_>>())
+        }
         None => json!([]),
     }
 }
@@ -272,6 +260,11 @@ pub(crate) fn open_local_folder(app: AppHandle) -> Value {
             .collect();
         paths.sort();
         items = paths.iter().map(|p| local_item(p)).collect();
+        // Background pre-analysis (JOB-ENGINE §5.7/Phase 7): queue every file
+        // in the folder just opened at Idle priority, so by the time any of
+        // them actually plays its beat grid, key, structure and loudness are
+        // already on disk instead of being computed on that first play.
+        crate::library::index_folder(&app, &paths);
     }
     json!(items)
 }
