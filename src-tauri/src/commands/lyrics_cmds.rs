@@ -784,8 +784,10 @@ impl Runnable for ResumeTranscribeJob {
 /// words on screen with a different song's. Writing only to the cache means a
 /// wrong guess costs one wasted request and can never be seen.
 ///
-/// Returns whether anything was newly cached.
-fn warm_lyrics_cache(app: &AppHandle, title: &str, artist: &str, key: &str, cancel: &CancelToken) -> bool {
+/// Returns whether anything was newly cached. `pub(crate)` so `library.rs`'s
+/// watched-folder backfill can warm the same cache for files that are not
+/// queued or playing — see `LibraryLyricsJob`.
+pub(crate) fn warm_lyrics_cache(app: &AppHandle, title: &str, artist: &str, key: &str, cancel: &CancelToken) -> bool {
     // Already on disk — the common case once a library has been played
     // through, and the reason this is cheap to run on every track change.
     if let Some(path) = lyrics_cache_path(app, key) {
@@ -1123,6 +1125,14 @@ pub(crate) fn save_heatmap(payload: Value, app: AppHandle) -> Value {
 
 /// Every song with cached synced lyrics, for the library panel. Reads the
 /// title/artist persisted alongside each cached lyric.
+///
+/// `hasBeatmap`/`hasHeatmap` were never actually read here — `renderLibrary`
+/// in renderer.js has always asked for `it.hasBeatmap`/`it.hasHeatmap`, and
+/// since neither field was ever present in this output, `Boolean(undefined)`
+/// silently made every card's beats/shape badge read as "no" even for a
+/// track `save_beatmap`/`save_heatmap` really did persist a learned map for.
+/// Same cache file, both fields — `merge_track_cache` (see `save_beatmap`)
+/// writes `beatmap`/`heatmap` onto the exact record this reads.
 #[tauri::command]
 pub(crate) fn list_synced(app: AppHandle) -> Value {
     let Some(dir) = app.path().app_config_dir().ok().map(|d| d.join("lyrics")) else {
@@ -1142,6 +1152,9 @@ pub(crate) fn list_synced(app: AppHandle) -> Value {
             "title": title,
             "artist": v.get("artist").and_then(|a| a.as_str()).unwrap_or(""),
             "source": v.get("source"),
+            "hasCues": has_cues,
+            "hasBeatmap": v.get("beatmap").is_some(),
+            "hasHeatmap": v.get("heatmap").and_then(|h| h.get("bins")).map(|b| b.is_array()).unwrap_or(false),
         }));
     }
     out.sort_by_key(|v: &Value| v["title"].as_str().unwrap_or("").to_lowercase());

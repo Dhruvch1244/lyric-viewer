@@ -1,10 +1,16 @@
 //! Phase 7 (JOB-ENGINE.md §5.7/§7): a persisted list of watched library
 //! folders, a background scan that keeps an on-disk index of what's in them
-//! current, and an Idle-lane backfill that pre-analyses whatever the scan
-//! finds — the same beat/key/structure/loudness pass `analyze_local_file`
-//! runs on demand, run ahead of time so a local file's shape is already known
-//! before it's ever pressed play on, the same way a `Next`/`Idle`-precomputed
-//! streamed track is (§7.2).
+//! current, and two Idle-lane backfills over whatever the scan finds:
+//! per-file audio DSP (beat/key/structure/loudness, the same pass
+//! `analyze_local_file` runs on demand) and a synced-lyrics lookup (the same
+//! `warm_lyrics_cache` the local-queue lookahead uses) — so a watched file's
+//! shape AND its lyrics are both known before it's ever pressed play on, the
+//! same way a `Next`/`Idle`-precomputed streamed track is (§7.2).
+//!
+//! The two are deliberately separate jobs on separate lanes: DSP is CPU-bound
+//! (`Lane::Cpu`), a lyrics lookup is a network round trip (`Lane::Io`) — one
+//! job doing both would sit on a CPU-lane thread for the network wait, which
+//! is exactly what the lane split exists to avoid.
 //!
 //! What this does NOT do: diarization (§5.8) is a separate, still-exploratory
 //! piece of work gated on this and phase 6, not part of it.
@@ -18,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::commands::lyrics_cmds::{track_key, warm_lyrics_cache};
 use crate::commands::playback::{analyze_local_file_value, AUDIO_EXTS};
 use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 
@@ -30,7 +37,7 @@ const SCAN_INTERVAL_SECS: u64 = 60;
 
 /// One file's last-seen shape, enough to tell "unchanged" from "re-encoded /
 /// replaced" without hashing the whole library on every scan, plus whether
-/// the Idle-lane backfill has analysed it at that shape yet.
+/// each Idle-lane backfill has covered it at that shape yet.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct LibraryEntry {
     pub(crate) size: u64,
@@ -41,6 +48,13 @@ pub(crate) struct LibraryEntry {
     /// same reasoning as `beats.rs`'s "no grid" over a wrong one.
     #[serde(default)]
     pub(crate) analyzed: bool,
+    /// Whether a synced-lyrics lookup has been attempted for this file at
+    /// this shape — regardless of whether it found anything. A miss is not
+    /// retried on every scan tick; the file changing (a different edit, or a
+    /// genuinely different song under the same name) is what earns it
+    /// another attempt.
+    #[serde(default)]
+    pub(crate) lyrics_synced: bool,
 }
 
 /// path (as given by `std::fs`, not canonicalised — see `scan_folder`) → entry.
@@ -99,7 +113,7 @@ fn entry_for(path: &Path) -> Option<LibraryEntry> {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    Some(LibraryEntry { size: meta.len(), modified_ms, analyzed: false })
+    Some(LibraryEntry { size: meta.len(), modified_ms, analyzed: false, lyrics_synced: false })
 }
 
 /// Recursive folder walk collecting audio files. Manual rather than a crate
@@ -196,20 +210,25 @@ pub(crate) fn rescan(app: &AppHandle, folders: &[String]) {
     queue_backfill(app, &index);
 }
 
-/// Submit an Idle-lane analysis job for every index entry not yet analysed at
-/// its current size/mtime. One job per file rather than one job for the whole
-/// backlog — unlike `PresyncJob`'s single serial loop (which exists to be
-/// polite to a network API's rate), this is CPU-bound local work with nothing
-/// to be polite to, so it should actually use the CPU lane's `N-1` worker
-/// threads rather than tie up one of them running everything serially. Each
-/// job dedupes on its own path, so calling this again while a scan's earlier
-/// backfill is still in flight queues nothing twice.
+/// Submit the Idle-lane backfill jobs for whatever the index doesn't already
+/// cover at its current size/mtime — one `LibraryAnalyzeJob` per unanalysed
+/// file (`Lane::Cpu`) and one `LibraryLyricsJob` per file with no lyrics
+/// lookup attempted yet (`Lane::Io`). One job per file rather than one job
+/// for the whole backlog — unlike `PresyncJob`'s single serial loop (which
+/// exists to be polite to a network API's rate), each file here is
+/// independent work with nothing to be polite to *across* files, so this
+/// should actually use both lanes' worker threads rather than tie up one of
+/// them running everything serially. Each job dedupes on its own path, so
+/// calling this again while a scan's earlier backfill is still in flight
+/// queues nothing twice.
 fn queue_backfill(app: &AppHandle, index: &Index) {
     for (path, entry) in index {
-        if entry.analyzed {
-            continue;
+        if !entry.analyzed {
+            jobs::submit(LibraryAnalyzeJob { app: app.clone(), path: path.clone() }, Priority::Idle);
         }
-        jobs::submit(LibraryAnalyzeJob { app: app.clone(), path: path.clone() }, Priority::Idle);
+        if !entry.lyrics_synced {
+            jobs::submit(LibraryLyricsJob { app: app.clone(), path: path.clone() }, Priority::Idle);
+        }
     }
 }
 
@@ -228,6 +247,31 @@ fn mark_analyzed(app: &AppHandle, path: &str, expect: &LibraryEntry) {
             save_index(app, &index);
         }
     }
+}
+
+/// Same shape as `mark_analyzed`, for the lyrics lookup. Set regardless of
+/// whether `warm_lyrics_cache` actually found anything — a miss is a real
+/// answer (LRCLIB/NetEase/Kugou don't have this song under this guessed
+/// title), not a reason to re-hit those services on every scan tick forever.
+fn mark_lyrics_synced(app: &AppHandle, path: &str, expect: &LibraryEntry) {
+    let _guard = INDEX_LOCK.lock().unwrap();
+    let mut index = load_index(app);
+    if let Some(entry) = index.get_mut(path) {
+        if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
+            entry.lyrics_synced = true;
+            save_index(app, &index);
+        }
+    }
+}
+
+/// A watched file's guessed title, the same way `playback::local_item` guesses
+/// one for the queue: the filename stem, no artist. It is what
+/// `open_local_folder`/`LocalPlayer` already play a file under, so a lyrics
+/// lookup made under this name is exactly as good a guess as the one that
+/// would run anyway the moment this file is actually pressed play on — this
+/// backfill just makes that guess ahead of time instead of at that moment.
+fn guessed_title(path: &str) -> String {
+    Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string()
 }
 
 /// The Idle-lane job behind `queue_backfill`: the same DSP pass
@@ -281,10 +325,52 @@ impl Runnable for LibraryAnalyzeJob {
     }
 }
 
-/// Track counts per watched folder, for a settings panel — total found and
-/// how many the backfill has reached so far (e.g. "142/500 analysed"). Read
-/// fresh from disk rather than threaded through, since this is called rarely
-/// (opening a settings panel), not from the hot path.
+/// The Idle-lane job behind `queue_backfill`'s lyrics half: the same
+/// `warm_lyrics_cache` the local-queue lookahead (`PrecomputeJob` in
+/// `lyrics_cmds.rs`) uses, run for a watched file instead of a queued one.
+/// Writing to the shared lyrics cache is what makes this file's "lyrics"
+/// badge in the Library panel (`list_synced`) light up without it ever
+/// having been played, and what makes pressing play on it later take the
+/// instant cache-hit path instead of a live lookup.
+///
+/// `track()` is `None` for the same reason `LibraryAnalyzeJob`'s is: this is
+/// background work on files that are not necessarily playing, so a track
+/// change must not cancel it.
+struct LibraryLyricsJob {
+    app: AppHandle,
+    path: String,
+}
+
+impl Runnable for LibraryLyricsJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("library-lyrics:{}", self.path)
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let LibraryLyricsJob { app, path } = *self;
+        if cancel.cancelled() {
+            return;
+        }
+        let Some(expect) = entry_for(Path::new(&path)) else { return }; // gone since it was queued
+        let title = guessed_title(&path);
+        if title.is_empty() {
+            return;
+        }
+        let key = track_key("", &title);
+        warm_lyrics_cache(&app, &title, "", &key, cancel);
+        mark_lyrics_synced(&app, &path, &expect);
+    }
+}
+
+/// Track counts per watched folder, for a settings panel — total found, how
+/// many the audio backfill has reached, and how many the lyrics backfill has
+/// (e.g. "88/142 lyrics synced"). Read fresh from disk rather than threaded
+/// through, since this is called rarely (opening a settings panel), not from
+/// the hot path.
 pub(crate) fn folder_summaries(app: &AppHandle, folders: &[String]) -> Vec<Value> {
     let index = load_index(app);
     folders
@@ -292,7 +378,13 @@ pub(crate) fn folder_summaries(app: &AppHandle, folders: &[String]) -> Vec<Value
         .map(|f| {
             let entries: Vec<&LibraryEntry> = index.iter().filter(|(k, _)| Path::new(k).starts_with(f)).map(|(_, v)| v).collect();
             let analyzed = entries.iter().filter(|e| e.analyzed).count();
-            json!({ "path": f, "trackCount": entries.len(), "analyzedCount": analyzed })
+            let lyrics_synced = entries.iter().filter(|e| e.lyrics_synced).count();
+            json!({
+                "path": f,
+                "trackCount": entries.len(),
+                "analyzedCount": analyzed,
+                "lyricsSyncedCount": lyrics_synced,
+            })
         })
         .collect()
 }
@@ -419,13 +511,14 @@ mod tests {
         let dir = scratch_dir("changed");
         let path = write_file(&dir, "a.mp3", "hello");
         let mut existing = Index::new();
-        existing.insert(path.to_string_lossy().to_string(), LibraryEntry { size: 999, modified_ms: 1, analyzed: true });
+        existing.insert(path.to_string_lossy().to_string(), LibraryEntry { size: 999, modified_ms: 1, analyzed: true, lyrics_synced: true });
 
         let (index, added, updated) = diff_index(existing, std::slice::from_ref(&dir), std::slice::from_ref(&path));
         assert_eq!((added, updated), (0, 1));
         let entry = index.get(&path.to_string_lossy().to_string()).unwrap();
         assert_eq!(entry.size, 5);
         assert!(!entry.analyzed, "a changed file's stale analysis must not survive as if it still applied");
+        assert!(!entry.lyrics_synced, "a changed file's stale lyrics-synced flag must not survive either");
     }
 
     #[test]
@@ -447,7 +540,7 @@ mod tests {
         let dir = scratch_dir("removed");
         let gone = dir.join("gone.mp3"); // never actually written
         let mut existing = Index::new();
-        existing.insert(gone.to_string_lossy().to_string(), LibraryEntry { size: 1, modified_ms: 1, analyzed: false });
+        existing.insert(gone.to_string_lossy().to_string(), LibraryEntry { size: 1, modified_ms: 1, analyzed: false, lyrics_synced: false });
 
         let (index, added, updated) = diff_index(existing, std::slice::from_ref(&dir), &[]);
         assert!(index.is_empty());

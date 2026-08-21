@@ -6403,7 +6403,7 @@ async function refreshWatchedFolders() {
   renderWatchedFolders(Array.isArray(folders) ? folders : []);
 }
 
-/** @param {Array<{path: string, trackCount: number, analyzedCount: number}>} folders */
+/** @param {Array<{path: string, trackCount: number, analyzedCount: number, lyricsSyncedCount: number}>} folders */
 function renderWatchedFolders(folders) {
   if (!els.libraryWatchedList) return;
   els.libraryWatchedList.textContent = '';
@@ -6419,10 +6419,13 @@ function renderWatchedFolders(folders) {
     name.textContent = f.path.split(/[\\/]/).filter(Boolean).pop() || f.path;
     name.title = f.path;
 
+    // Lyrics is the number people actually care about here ("is this song
+    // ready to play with words on screen"); audio analysis is background
+    // detail, so it only shows up in the tooltip.
     const count = document.createElement('span');
     count.className = 'library__watched-count';
-    count.textContent = `${f.analyzedCount ?? 0}/${f.trackCount ?? 0}`;
-    count.title = 'analysed / found — the rest are queued in the background';
+    count.textContent = `${f.lyricsSyncedCount ?? 0}/${f.trackCount ?? 0} lyrics`;
+    count.title = `${f.lyricsSyncedCount ?? 0}/${f.trackCount ?? 0} lyrics synced · ${f.analyzedCount ?? 0}/${f.trackCount ?? 0} audio analysed — both run in the background`;
 
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -6452,11 +6455,15 @@ if (els.libraryWatchFolder) {
     else if (result && result.status === 'error') setStatus(result.message || 'could not watch that folder');
   });
 }
-// Counts move as the Idle-lane backfill works through a newly-added folder;
-// only worth redrawing while the panel showing them is actually open.
+// Counts move as the Idle-lane backfill works through a newly-added folder —
+// and so does the main grid's "lyrics" badge, as warm_lyrics_cache lands real
+// synced lyrics for songs that have never been played. Only worth redrawing
+// while the panel showing them is actually open.
 if (window.player.onLibraryChanged) {
   window.player.onLibraryChanged(() => {
-    if (els.library && !els.library.hidden) refreshWatchedFolders();
+    if (!els.library || els.library.hidden) return;
+    refreshWatchedFolders();
+    refreshSyncedList();
   });
 }
 
