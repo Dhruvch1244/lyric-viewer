@@ -290,6 +290,43 @@ pub fn fetch_plain(track: &Track) -> Option<String> {
     best
 }
 
+/// Raw LRCLIB free-text search, unscored and unfiltered — every candidate the
+/// service returns, plain-only and instrumental entries included.
+///
+/// `fetch_synced`/`fetch_plain` above pick ONE winner automatically and are
+/// meant to run silently in the background; this is the other half, for a
+/// person to search by hand when the automatic pick is wrong or missing
+/// (LRCLIB matched nothing, or matched a cover/remix under the same title).
+/// A human looking at trackName/artistName/album can tell those apart in a
+/// way a scoring function tuned for the common case cannot.
+pub fn search(query: &str) -> Option<Vec<Value>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let resp = ureq::get(LRCLIB_SEARCH)
+        .set("User-Agent", USER_AGENT)
+        .query("q", query)
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .ok()?;
+    let results: Value = resp.into_json().ok()?;
+    Some(results.as_array()?.clone())
+}
+
+/// Fetch one LRCLIB entry by its numeric id — what a search result is chosen
+/// *into*: the search response already carries this shape, so this only
+/// exists as a second round trip in case the candidate list a search panel is
+/// holding has gone stale by the time something in it is picked.
+pub fn get_by_id(id: i64) -> Option<Value> {
+    let resp = ureq::get(&format!("https://lrclib.net/api/get/{id}"))
+        .set("User-Agent", USER_AGENT)
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .ok()?;
+    resp.into_json().ok()
+}
+
 /// Look up synced lyrics for a track. Returns (cues, source label) or None.
 pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
     let query = format!("{} {}", clean_title(&track.title), track.artist);

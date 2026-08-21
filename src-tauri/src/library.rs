@@ -183,6 +183,31 @@ fn diff_index(mut existing: Index, watched: &[PathBuf], found: &[PathBuf]) -> (I
     (existing, added, updated)
 }
 
+/// Global counts across the whole index, regardless of which folder each
+/// entry belongs to — what the always-on HUD indicator needs (it has no
+/// per-folder concept), where `folder_summaries` needs the same numbers
+/// broken out per watched folder for the settings panel.
+fn global_progress(index: &Index) -> (usize, usize, usize) {
+    let analyzed = index.values().filter(|e| e.analyzed).count();
+    let lyrics_synced = index.values().filter(|e| e.lyrics_synced).count();
+    (index.len(), analyzed, lyrics_synced)
+}
+
+/// Emit the current global backfill progress. Called after every scan AND
+/// after every single job completes (`mark_analyzed`/`mark_lyrics_synced`) —
+/// deliberately chatty, the same way `presync-progress` pings after every
+/// track: this is Idle-priority work with no deadline, so a slightly busy
+/// event stream costs nothing next to what it buys — the renderer's HUD
+/// indicator (JOB-ENGINE.md §7.16) can show live "N left" counts instead of
+/// looking like nothing is happening until the next 60s scan tick.
+fn emit_progress(app: &AppHandle, index: &Index) {
+    let (total, analyzed, lyrics_synced) = global_progress(index);
+    let _ = app.emit(
+        "library-changed",
+        json!({ "trackCount": total, "analyzedCount": analyzed, "lyricsSyncedCount": lyrics_synced }),
+    );
+}
+
 /// Re-scan every watched folder, diff against the persisted index, save the
 /// result, emit `library-changed` if anything moved, and queue whatever is
 /// unanalysed for the Idle-lane backfill. Used both for the periodic
@@ -198,15 +223,12 @@ pub(crate) fn rescan(app: &AppHandle, folders: &[String]) {
 
     let index = {
         let _guard = INDEX_LOCK.lock().unwrap();
-        let (index, added, updated) = diff_index(load_index(app), &watched, &found);
+        let (index, _added, _updated) = diff_index(load_index(app), &watched, &found);
         save_index(app, &index);
-        let _ = app.emit(
-            "library-changed",
-            json!({ "trackCount": index.len(), "added": added, "updated": updated }),
-        );
         index
     };
 
+    emit_progress(app, &index);
     queue_backfill(app, &index);
 }
 
@@ -238,15 +260,23 @@ fn queue_backfill(app: &AppHandle, index: &Index) {
 /// moved on since this job started (size/mtime no longer match `expect`): the
 /// file changed again mid-analysis, so this job's result is already stale and
 /// the next scan will queue a fresh one rather than wrongly marking it done.
+///
+/// Emits progress OUTSIDE the lock — `app.emit` is IPC, not something that
+/// should run while another job on another thread is waiting on this mutex
+/// for a plain JSON read/write.
 fn mark_analyzed(app: &AppHandle, path: &str, expect: &LibraryEntry) {
-    let _guard = INDEX_LOCK.lock().unwrap();
-    let mut index = load_index(app);
-    if let Some(entry) = index.get_mut(path) {
-        if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
-            entry.analyzed = true;
-            save_index(app, &index);
+    let index = {
+        let _guard = INDEX_LOCK.lock().unwrap();
+        let mut index = load_index(app);
+        if let Some(entry) = index.get_mut(path) {
+            if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
+                entry.analyzed = true;
+                save_index(app, &index);
+            }
         }
-    }
+        index
+    };
+    emit_progress(app, &index);
 }
 
 /// Same shape as `mark_analyzed`, for the lyrics lookup. Set regardless of
@@ -254,14 +284,18 @@ fn mark_analyzed(app: &AppHandle, path: &str, expect: &LibraryEntry) {
 /// answer (LRCLIB/NetEase/Kugou don't have this song under this guessed
 /// title), not a reason to re-hit those services on every scan tick forever.
 fn mark_lyrics_synced(app: &AppHandle, path: &str, expect: &LibraryEntry) {
-    let _guard = INDEX_LOCK.lock().unwrap();
-    let mut index = load_index(app);
-    if let Some(entry) = index.get_mut(path) {
-        if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
-            entry.lyrics_synced = true;
-            save_index(app, &index);
+    let index = {
+        let _guard = INDEX_LOCK.lock().unwrap();
+        let mut index = load_index(app);
+        if let Some(entry) = index.get_mut(path) {
+            if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
+                entry.lyrics_synced = true;
+                save_index(app, &index);
+            }
         }
-    }
+        index
+    };
+    emit_progress(app, &index);
 }
 
 /// A watched file's guessed title, the same way `playback::local_item` guesses

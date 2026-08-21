@@ -81,6 +81,13 @@ const els = {
   posterStatus: document.getElementById('poster-status'),
   posterAuto: document.getElementById('poster-auto'),
   posterClose: document.getElementById('poster-close'),
+  lyricSearchBtn: document.getElementById('btn-lyrics-search'),
+  lyricSearch: document.getElementById('lyrics-search'),
+  lyricSearchInput: document.getElementById('lyricsearch-input'),
+  lyricSearchRun: document.getElementById('lyricsearch-run'),
+  lyricSearchStatus: document.getElementById('lyricsearch-status'),
+  lyricSearchList: document.getElementById('lyricsearch-list'),
+  lyricSearchClose: document.getElementById('lyricsearch-close'),
   welcome: document.getElementById('welcome'),
   welcomeClose: document.getElementById('welcome-close'),
   whatsnew: document.getElementById('whatsnew'),
@@ -5119,11 +5126,15 @@ window.player.onLyrics((payload) => {
   // primary — fold any extra collaborators in so each gets a dancer.
   if (payload.source && payload.source.artistName) maybeEnrichArtists(payload.source.artistName);
 
-  manualLyricsActive = Boolean(payload.source && payload.source.name === 'manual');
+  // Both a manual .lrc import and a hand-picked search result are the same
+  // thing from here on — someone overrode the automatic match — so either
+  // source name puts the Import chip into its "revert to automatic" state.
+  const sourceName = payload.source && payload.source.name;
+  manualLyricsActive = sourceName === 'manual' || sourceName === 'search';
   if (els.importLyricsBtn) {
     els.importLyricsBtn.setAttribute('aria-pressed', String(manualLyricsActive));
     els.importLyricsBtn.title = manualLyricsActive
-      ? 'Imported .lrc active — click to go back to automatic lyrics'
+      ? 'A manual lyric override is active — click to go back to automatic lyrics'
       : 'Import a .lrc file for this song';
   }
 
@@ -5516,7 +5527,7 @@ if (window.player.onWallpaperPointer) {
   A MutationObserver on the panels' `hidden` attribute keeps it in step no
   matter which of the many open/close paths fired, without hooking each one.
 */
-const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync]
+const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch]
   .filter(Boolean);
 
 function anyPanelOpen() {
@@ -6360,6 +6371,153 @@ if (els.importLyricsBtn) {
   });
 }
 
+/*
+  Manual lyrics search — the third escape hatch alongside "import a .lrc
+  file" above and the cover-art picker's near-miss grid. Same reason all
+  three exist: an automatic match can fail two ways — nothing found, or
+  something found with total confidence and no way to tell it's wrong
+  (a cover, a remix, an unrelated song sharing a title) — and a person
+  reading real trackName/artistName/album text can catch what a scorer
+  can't. Free-text, not tied to the currently-playing track's guessed
+  title/artist: the whole point is to let a search go somewhere the
+  automatic guess didn't.
+*/
+
+function closeLyricSearch() {
+  if (els.lyricSearch) els.lyricSearch.hidden = true;
+  if (els.lyricSearchBtn) els.lyricSearchBtn.setAttribute('aria-pressed', 'false');
+}
+
+function openLyricSearch() {
+  if (!els.lyricSearch) return;
+  els.lyricSearch.hidden = false;
+  document.body.classList.add('show-cursor');
+  if (els.lyricSearchBtn) els.lyricSearchBtn.setAttribute('aria-pressed', 'true');
+  // Pre-fill with what's actually playing — the common case is "the auto
+  // match for THIS song is wrong," not an unrelated lookup.
+  if (els.lyricSearchInput && !els.lyricSearchInput.value && currentTrack) {
+    els.lyricSearchInput.value = [currentTrack.artist, currentTrack.title].filter(Boolean).join(' ');
+  }
+  if (els.lyricSearchInput) els.lyricSearchInput.focus();
+}
+
+async function runLyricSearch() {
+  if (!els.lyricSearchList || !els.lyricSearchStatus) return;
+  const query = (els.lyricSearchInput && els.lyricSearchInput.value || '').trim();
+  if (!query) {
+    els.lyricSearchStatus.textContent = 'type a song title to search';
+    return;
+  }
+  els.lyricSearchList.replaceChildren();
+  els.lyricSearchStatus.textContent = 'searching…';
+
+  // Captured so a query typed while an older search is still in flight can't
+  // paint its results in after a newer one already replaced them.
+  const asked = query;
+  let res;
+  try {
+    res = await window.player.searchLyrics(asked);
+  } catch (err) {
+    els.lyricSearchStatus.textContent = (err && err.message) || 'search failed';
+    return;
+  }
+  if (els.lyricSearchInput.value.trim() !== asked || els.lyricSearch.hidden) return;
+
+  if (!res || res.status !== 'ok') {
+    els.lyricSearchStatus.textContent = (res && res.message) || 'search failed';
+    return;
+  }
+  const list = res.candidates || [];
+  if (list.length === 0) {
+    els.lyricSearchStatus.textContent = 'nothing found for that search';
+    return;
+  }
+  const usable = list.filter((c) => c.hasSynced).length;
+  els.lyricSearchStatus.textContent = usable
+    ? `${list.length} found, ${usable} with timing · click one to use it`
+    : `${list.length} found, none with timing`;
+  els.lyricSearchList.replaceChildren(...list.map(lyricSearchRow));
+}
+
+/**
+ * One result row.
+ * @param {{id: number, title: string, artist: string, album: string, durationMs: number,
+ *          instrumental: boolean, hasSynced: boolean, hasPlain: boolean}} c
+ * @returns {HTMLElement}
+ */
+function lyricSearchRow(c) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'lyricsearch__row';
+
+  const mins = Number.isFinite(c.durationMs) ? Math.floor(c.durationMs / 60000) : null;
+  const secs = Number.isFinite(c.durationMs) ? String(Math.round((c.durationMs % 60000) / 1000)).padStart(2, '0') : null;
+  const dur = mins !== null ? ` · ${mins}:${secs}` : '';
+
+  if (!c.hasSynced) {
+    row.disabled = true;
+    row.title = c.hasPlain
+      ? 'LRCLIB has this song, but only without timestamps — can’t be used yet'
+      : c.instrumental
+        ? 'Marked instrumental on LRCLIB'
+        : 'No lyrics at all on LRCLIB for this entry';
+  } else {
+    row.title = `Use "${c.title}" — ${c.artist}`;
+    row.addEventListener('click', async () => {
+      if (!currentTrack) { els.lyricSearchStatus.textContent = 'nothing playing to apply this to'; return; }
+      els.lyricSearchStatus.textContent = 'applying…';
+      const result = await window.player.chooseLyricsCandidate(currentTrack, c.id);
+      if (result && result.status === 'ok') {
+        els.lyricSearchStatus.textContent = `applied — ${result.lines} line${result.lines === 1 ? '' : 's'}`;
+        closeLyricSearch();
+      } else {
+        els.lyricSearchStatus.textContent = (result && result.message) || 'could not use that result';
+      }
+    });
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'lyricsearch__meta';
+  const song = document.createElement('div');
+  song.className = 'lyricsearch__song';
+  song.textContent = c.title || 'Unknown title';
+  const artist = document.createElement('div');
+  artist.className = 'lyricsearch__artist';
+  artist.textContent = `${c.artist || 'Unknown artist'}${c.album ? ' · ' + c.album : ''}${dur}`;
+  meta.append(song, artist);
+
+  const badges = document.createElement('div');
+  badges.className = 'lyricsearch__badges';
+  const synced = document.createElement('span');
+  synced.className = `lyricsearch__badge${c.hasSynced ? ' lyricsearch__badge--on' : ''}`;
+  synced.textContent = 'timed';
+  synced.title = c.hasSynced ? 'has line-by-line timestamps' : 'no timestamps';
+  badges.appendChild(synced);
+  if (c.instrumental) {
+    const inst = document.createElement('span');
+    inst.className = 'lyricsearch__badge';
+    inst.textContent = 'instrumental';
+    badges.appendChild(inst);
+  }
+
+  row.append(meta, badges);
+  return row;
+}
+
+if (els.lyricSearchBtn) {
+  els.lyricSearchBtn.addEventListener('click', () => {
+    if (els.lyricSearch && els.lyricSearch.hidden) openLyricSearch(); else closeLyricSearch();
+  });
+}
+if (els.lyricSearchClose) els.lyricSearchClose.addEventListener('click', closeLyricSearch);
+if (els.lyricSearchRun) els.lyricSearchRun.addEventListener('click', runLyricSearch);
+if (els.lyricSearchInput) {
+  els.lyricSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') runLyricSearch();
+    else if (e.key === 'Escape') closeLyricSearch();
+  });
+}
+
 
 function openLibrary() {
   if (!els.library) return;
@@ -6455,12 +6613,39 @@ if (els.libraryWatchFolder) {
     else if (result && result.status === 'error') setStatus(result.message || 'could not watch that folder');
   });
 }
-// Counts move as the Idle-lane backfill works through a newly-added folder —
-// and so does the main grid's "lyrics" badge, as warm_lyrics_cache lands real
-// synced lyrics for songs that have never been played. Only worth redrawing
-// while the panel showing them is actually open.
+/*
+  Idle-lane backfill visibility (JOB-ENGINE.md §7.16). Everything the backend
+  runs for a watched folder — audio DSP and lyrics lookups — happens on
+  background threads with nothing on screen saying so, which reads as "stuck"
+  even though it's genuinely running (often several files at once, across
+  the CPU and I/O lanes). Piggybacks on the SAME `jobs` map + `#work` HUD
+  chip + tray tooltip that whisper.js/presync already use for exactly this —
+  "two things running at once both stay visible" was already true, the
+  library backfill just never told it anything.
+*/
+function updateLibraryBackfillJob(payload) {
+  const total = payload && payload.trackCount || 0;
+  const analyzed = payload && payload.analyzedCount || 0;
+  const lyricsSynced = payload && payload.lyricsSyncedCount || 0;
+  const audioLeft = Math.max(0, total - analyzed);
+  const lyricsLeft = Math.max(0, total - lyricsSynced);
+  if (audioLeft === 0 && lyricsLeft === 0) {
+    setJob('library-backfill', null);
+    return;
+  }
+  const parts = [];
+  if (lyricsLeft) parts.push(`${lyricsLeft} lyrics`);
+  if (audioLeft) parts.push(`${audioLeft} audio`);
+  setJob('library-backfill', `syncing library — ${parts.join(', ')} left`);
+}
+
 if (window.player.onLibraryChanged) {
-  window.player.onLibraryChanged(() => {
+  window.player.onLibraryChanged((payload) => {
+    updateLibraryBackfillJob(payload);
+    // Counts move as the backfill works through a newly-added folder — and so
+    // does the main grid's "lyrics" badge, as warm_lyrics_cache lands real
+    // synced lyrics for songs that have never been played. Only worth
+    // redrawing while the panel showing them is actually open.
     if (!els.library || els.library.hidden) return;
     refreshWatchedFolders();
     refreshSyncedList();

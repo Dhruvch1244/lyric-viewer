@@ -1988,6 +1988,139 @@ body.engine-milkdrop .stage::before {
   text-overflow: ellipsis;
 }
 
+/* Manual lyrics search — same panel shell as .poster, a row list instead of a
+   grid since a search result reads better as text (title/artist/album/badges)
+   than as a tile. */
+.lyricsearch {
+  position: fixed;
+  top: 8vh;
+  bottom: 14vh;
+  right: 3vw;
+  z-index: 20;
+  width: min(30rem, 50vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.1rem 1.2rem;
+  background: var(--chrome-surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: 14px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px -12px rgba(17, 17, 17, 0.18);
+}
+
+.lyricsearch[hidden] { display: none; }
+
+.lyricsearch__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.lyricsearch__title {
+  font-family: var(--chrome-serif);
+  font-weight: 400;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--chrome-ink);
+}
+
+.lyricsearch__input {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--chrome-ink);
+  background: var(--chrome-card);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--chrome-radius-pill);
+  padding: 0.45rem 0.9rem;
+}
+
+.lyricsearch__input::placeholder { color: var(--chrome-ink-faint); }
+
+.lyricsearch__status {
+  width: 100%;
+  order: 3;
+  font-size: 0.74rem;
+  color: var(--chrome-ink-dim);
+}
+
+.lyricsearch__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.lyricsearch__row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+  font: inherit;
+  color: var(--chrome-ink);
+  background: var(--chrome-card);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--chrome-radius);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.lyricsearch__row:hover,
+.lyricsearch__row:focus-visible {
+  background: var(--chrome-surface-solid);
+  border-color: var(--chrome-ink-faint);
+  outline: none;
+}
+
+/* A plain-lyrics-only result: shown (so "does LRCLIB have this at all" has an
+   answer) but not clickable — nothing here would line up against the clock. */
+.lyricsearch__row[disabled] { cursor: default; opacity: 0.55; }
+.lyricsearch__row[disabled]:hover { background: var(--chrome-card); border-color: var(--chrome-border); }
+
+.lyricsearch__meta { min-width: 0; flex: 1; }
+
+.lyricsearch__song {
+  font-weight: 600;
+  font-size: 0.86rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lyricsearch__artist {
+  font-size: 0.76rem;
+  color: var(--chrome-ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lyricsearch__badges {
+  flex: none;
+  display: flex;
+  gap: 0.3rem;
+  font-size: 0.66rem;
+  color: var(--chrome-ink-faint);
+}
+
+.lyricsearch__badge {
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--chrome-radius-pill);
+  border: 1px solid var(--chrome-border);
+}
+
+.lyricsearch__badge--on {
+  color: var(--chrome-green-ink);
+  background: var(--chrome-green-bg);
+  border-color: transparent;
+}
+
 .library {
   position: fixed;
   inset: 6vh 6vw;

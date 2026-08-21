@@ -1006,7 +1006,9 @@ pub(crate) fn import_lyrics(track: Value, app: AppHandle) -> Value {
     json!({ "status": "ok", "lines": lines })
 }
 
-/// Forget an imported `.lrc` and go back to the automatic sources.
+/// Forget an imported `.lrc` (or a hand-picked search result — same cache
+/// file, `clear_manual_lyrics` doesn't need to know which put it there) and
+/// go back to the automatic sources.
 #[tauri::command]
 pub(crate) fn clear_manual_lyrics(track: Value, app: AppHandle) {
     let t = track_from_value(&track);
@@ -1015,6 +1017,94 @@ pub(crate) fn clear_manual_lyrics(track: Value, app: AppHandle) {
         let _ = std::fs::remove_file(path);
     }
     resolve_lyrics(app.clone(), t.title, t.artist, t.duration_ms);
+}
+
+/// Free-text search against LRCLIB, for the manual lyrics-search panel — a
+/// second escape hatch alongside `import_lyrics`'s "pick a .lrc file" for
+/// exactly the same two situations: automatic lookup found nothing, or it
+/// found the wrong song (a cover, a remix, a same-titled different track).
+///
+/// Unscored and unfiltered, unlike `resolve_lyrics`'s automatic path — this
+/// is a person reading trackName/artistName/album and deciding for
+/// themselves, so nothing here should quietly reject a candidate the way the
+/// automatic scorer does. `hasSynced`/`hasPlain` let the panel show which
+/// results actually have timing before anything is picked, without shipping
+/// every candidate's full lyric text just to answer that.
+#[tauri::command]
+pub(crate) fn search_lyrics(query: String) -> Value {
+    let Some(results) = crate::lyrics::search(&query) else {
+        return json!({ "status": "error", "message": "search failed — check your connection" });
+    };
+    let candidates: Vec<Value> = results
+        .iter()
+        .map(|c| {
+            json!({
+                "id": c.get("id"),
+                "title": c.get("trackName"),
+                "artist": c.get("artistName"),
+                "album": c.get("albumName"),
+                "durationMs": c.get("duration").and_then(|d| d.as_f64()).map(|d| (d * 1000.0).round()),
+                "instrumental": c.get("instrumental").and_then(|v| v.as_bool()).unwrap_or(false),
+                "hasSynced": c.get("syncedLyrics").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false),
+                "hasPlain": c.get("plainLyrics").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false),
+            })
+        })
+        .collect();
+    json!({ "status": "ok", "candidates": candidates })
+}
+
+/// Apply one hand-picked search result to whichever track the renderer says
+/// is current — NOT necessarily the title/artist LRCLIB reported for the
+/// candidate. That is deliberate: the whole reason this exists is to let a
+/// person correct a WRONG automatic match, so the fix has to land under the
+/// track that is actually playing, the same way `import_lyrics` does.
+///
+/// Synced-only for now: this app's whole rendering path is built on
+/// timestamped `Cue`s, and a plain-only pick would have nothing to line up
+/// against the running clock. The panel still shows plain-only results (see
+/// `search_lyrics`'s `hasPlain`) so a person can at least confirm LRCLIB has
+/// the song, even though picking one here does nothing yet.
+#[tauri::command]
+pub(crate) fn choose_lyrics_candidate(track: Value, id: i64, app: AppHandle) -> Value {
+    let t = track_from_value(&track);
+    if t.title.is_empty() {
+        return json!({ "status": "error", "message": "no track playing" });
+    }
+    let Some(entry) = crate::lyrics::get_by_id(id) else {
+        return json!({ "status": "error", "message": "could not reach LRCLIB" });
+    };
+    let Some(synced) = entry.get("syncedLyrics").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+        return json!({ "status": "error", "message": "that result has no time-stamps" });
+    };
+    let cues = crate::lyrics::parse_lrc(synced);
+    if cues.is_empty() {
+        return json!({ "status": "error", "message": "that result's timestamps didn't parse" });
+    }
+
+    let key = track_key(&t.artist, &t.title);
+    let lines = cues.len();
+    let payload = json!({
+        "title": t.title, "artist": t.artist,
+        "cues": cues,
+        "cuesDevanagari": Value::Null, "cuesEnglish": Value::Null,
+        "source": {
+            "name": "search",
+            "id": id,
+            "trackName": entry.get("trackName"),
+            "artistName": entry.get("artistName"),
+        },
+        "status": "ok", "indic": false, "hasWordTimings": false,
+    });
+    if let Some(cache_path) = lyrics_cache_path(&app, &key) {
+        let _ = std::fs::write(&cache_path, serde_json::to_string(&payload).unwrap_or_default());
+    }
+    let mut out = payload;
+    out["track"] = json!({ "title": t.title, "artist": t.artist });
+    out["origin"] = json!("manual");
+    out["transliterationAvailable"] = json!(crate::llm::is_available());
+    out["translationAvailable"] = json!(crate::llm::is_available());
+    let _ = app.emit("lyrics", out);
+    json!({ "status": "ok", "lines": lines })
 }
 
 /// Translate the current track's cached lyrics to English (LLM). Returns the

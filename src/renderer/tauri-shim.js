@@ -149,6 +149,8 @@
     clearArtworkChoice: (track) => call('clear_artwork_choice', { track }),
     importLyrics: (track) => call('import_lyrics', { track }, { status: 'error', message: 'unavailable' }),
     clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
+    searchLyrics: (query) => call('search_lyrics', { query }, { status: 'error', message: 'unavailable' }),
+    chooseLyricsCandidate: (track, id) => call('choose_lyrics_candidate', { track, id }, { status: 'error', message: 'unavailable' }),
 
     presyncList: (text) => call('presync_list', { text }),
     precomputeTracks: (tracks) => call('precompute_tracks', { tracks }, { status: 'error' }),

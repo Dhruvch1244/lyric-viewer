@@ -217,6 +217,8 @@ pub fn run() {
             commands::artwork_cmds::clear_artwork_choice,
             commands::lyrics_cmds::import_lyrics,
             commands::lyrics_cmds::clear_manual_lyrics,
+            commands::lyrics_cmds::search_lyrics,
+            commands::lyrics_cmds::choose_lyrics_candidate,
             commands::misc::resync_smtc,
             commands::playback::open_local_files,
             commands::playback::open_local_folder,
