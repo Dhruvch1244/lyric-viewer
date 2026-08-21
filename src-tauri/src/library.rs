@@ -396,7 +396,7 @@ mod tests {
     fn a_new_file_is_reported_as_added() {
         let dir = scratch_dir("added");
         let path = write_file(&dir, "a.mp3", "hello");
-        let (index, added, updated) = diff_index(Index::new(), &[dir.clone()], &[path.clone()]);
+        let (index, added, updated) = diff_index(Index::new(), std::slice::from_ref(&dir), std::slice::from_ref(&path));
         assert_eq!(added, 1);
         assert_eq!(updated, 0);
         assert!(index.contains_key(&path.to_string_lossy().to_string()));
@@ -410,7 +410,7 @@ mod tests {
         let mut existing = Index::new();
         existing.insert(path.to_string_lossy().to_string(), entry);
 
-        let (_, added, updated) = diff_index(existing, &[dir.clone()], &[path.clone()]);
+        let (_, added, updated) = diff_index(existing, std::slice::from_ref(&dir), std::slice::from_ref(&path));
         assert_eq!((added, updated), (0, 0));
     }
 
@@ -421,7 +421,7 @@ mod tests {
         let mut existing = Index::new();
         existing.insert(path.to_string_lossy().to_string(), LibraryEntry { size: 999, modified_ms: 1, analyzed: true });
 
-        let (index, added, updated) = diff_index(existing, &[dir.clone()], &[path.clone()]);
+        let (index, added, updated) = diff_index(existing, std::slice::from_ref(&dir), std::slice::from_ref(&path));
         assert_eq!((added, updated), (0, 1));
         let entry = index.get(&path.to_string_lossy().to_string()).unwrap();
         assert_eq!(entry.size, 5);
@@ -437,7 +437,7 @@ mod tests {
         entry.analyzed = true;
         existing.insert(path.to_string_lossy().to_string(), entry);
 
-        let (index, added, updated) = diff_index(existing, &[dir.clone()], &[path.clone()]);
+        let (index, added, updated) = diff_index(existing, std::slice::from_ref(&dir), std::slice::from_ref(&path));
         assert_eq!((added, updated), (0, 0));
         assert!(index.get(&path.to_string_lossy().to_string()).unwrap().analyzed);
     }
@@ -449,7 +449,7 @@ mod tests {
         let mut existing = Index::new();
         existing.insert(gone.to_string_lossy().to_string(), LibraryEntry { size: 1, modified_ms: 1, analyzed: false });
 
-        let (index, added, updated) = diff_index(existing, &[dir.clone()], &[]);
+        let (index, added, updated) = diff_index(existing, std::slice::from_ref(&dir), &[]);
         assert!(index.is_empty());
         assert_eq!((added, updated), (0, 0));
     }
