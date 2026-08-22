@@ -2,6 +2,40 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.42.0 — 2026-08-23
+
+The controls stop being a guessing game.
+
+- **The bar is five controls instead of nineteen.** It carried nineteen
+  unlabelled icons in one undifferentiated row, on top of a visualiser,
+  discoverable only by hovering each in turn. Lyrics, audio, preset, Display
+  and Library stay out, along with the sync nudge; everything else moved into
+  a **More** button next to them.
+  - Inside More they are **grouped and labelled** — Words, Look, Library &
+    setup — which is what actually makes an icon legible. That costs nothing
+    in a popover and would have cost a lot along the bar.
+  - Click outside or press Escape to close, and focus returns to the button
+    rather than being dropped. Toggles inside stay open so you can flip more
+    than one; anything that opens a panel closes it.
+- **The 🔑 panel is now a Settings panel, and says so.** It held nine controls
+  and only two were keys — the rest were transcription language, vocal
+  isolation, launch-on-startup, crash logging and reporting. Its tooltip still
+  read "Set HuggingFace API key", which is why nobody would ever have found
+  "launch on Windows startup" in there.
+  - Titled Settings, marked with a gear, and grouped into AI provider /
+    Finding the right song / Transcription / Startup / Diagnostics.
+  - Short explanations where a control cannot speak for itself: which
+    providers the AI key feeds and that keys never leave the machine, what
+    AcoustID is actually for, that transcription only ever runs on songs with
+    no synced lyrics anywhere.
+  - Corrected the vocal-isolation setting's description, which promised
+    something it no longer does: since 0.41.0 the app isolates vocals by
+    itself whenever a mix has no detectable voice, so that toggle now only
+    forces it on the fallback path — and now says exactly that.
+  - Fixed toggles and Save buttons stretching the full width of the panel,
+    which made every control read as a banner.
+- No functional changes to playback, lyrics or transcription.
+
 ## 0.41.0 — 2026-08-22
 
 Songs that could never be auto-transcribed now can be, and every
