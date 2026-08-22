@@ -258,11 +258,16 @@ impl Whisper {
             }
             tokens.push(next);
 
-            if is_repeating(&tokens) {
+            if let Some(overrun) = repetition_overrun(&tokens) {
                 // Whisper's failure mode on music is a loop. Truncating back
                 // to before the repetition keeps the good part of the line
                 // rather than emitting "yeah yeah yeah yeah" forty times.
-                tokens.truncate(tokens.len().saturating_sub(REPEAT_WINDOW));
+                //
+                // The amount comes from the detected period rather than a
+                // fixed window, so a long looping phrase drops its repeats and
+                // keeps one copy — the line was sung once; the rest is the
+                // model talking to itself.
+                tokens.truncate(tokens.len().saturating_sub(overrun));
                 for rows in attention_rows.iter_mut() {
                     rows.truncate(tokens.len() * ENCODER_FRAMES);
                 }
@@ -461,24 +466,68 @@ struct Decoded {
     attention: dtw::Attention,
 }
 
-/// Tokens compared when looking for a repetition loop.
+/// Tokens compared when looking for a *short* repetition loop.
 const REPEAT_WINDOW: usize = 12;
+/// Longest phrase treated as a possible loop. A sung line is rarely more
+/// tokens than this, and looking further costs decode time on every step.
+const MAX_REPEAT_PERIOD: usize = 24;
+/// How many identical consecutive repeats make a long phrase a loop rather
+/// than a chorus. See `repetition_overrun` for why this is the whole design.
+const MIN_LONG_CYCLES: usize = 4;
 
-/// Whether the tail of `tokens` is a short phrase repeating.
+/// How many trailing tokens to discard, if the tail has gone into a loop.
 ///
 /// Whisper loops on music — a held note or a repeated hook makes it emit the
-/// same few tokens forever. Checked for periods up to 4 because that covers
-/// the shapes that actually occur ("la la la", "yeah yeah"); longer genuine
-/// repetition in a chorus is real lyric content and must survive.
-fn is_repeating(tokens: &[u32]) -> bool {
-    if tokens.len() < REPEAT_WINDOW {
-        return false;
+/// same tokens forever. There are two shapes and they need different rules.
+///
+/// **Short periods (1–4 tokens)** are the classic "la la la" / "yeah yeah",
+/// caught by requiring a whole [`REPEAT_WINDOW`] of them.
+///
+/// **Long periods** were not caught at all until a real run found one: on an
+/// EDM track the decoder emitted *"You say to me all the time, say to me all
+/// the time"* about twenty times with degenerate timestamps, and that window
+/// alone took 119s of the 139s transcription. The period was around a dozen
+/// tokens — three times the old ceiling of 4 — so nothing looked for it.
+///
+/// The reason the ceiling was low is real, though, and the fix has to respect
+/// it: **a chorus genuinely repeats**. "All the time, all the time" is lyric
+/// content, and truncating it would be worse than the bug. What separates the
+/// two is not whether a phrase repeats but *how many times consecutively and
+/// identically* — a chorus gives two or three, a decoder loop gives twenty.
+/// So long periods are allowed, at the price of needing [`MIN_LONG_CYCLES`]
+/// exact repeats before they count.
+///
+/// Returns how much to drop, which keeps one copy of the phrase: the line was
+/// really sung once, and only the repeats are the model's invention.
+fn repetition_overrun(tokens: &[u32]) -> Option<usize> {
+    // Short, high-frequency loops.
+    if tokens.len() >= REPEAT_WINDOW {
+        let tail = &tokens[tokens.len() - REPEAT_WINDOW..];
+        if (1..=4).any(|period| tail.iter().skip(period).zip(tail.iter()).all(|(a, b)| a == b)) {
+            return Some(REPEAT_WINDOW);
+        }
     }
-    let tail = &tokens[tokens.len() - REPEAT_WINDOW..];
-    (1..=4).any(|period| {
-        // Every element must equal the one a period earlier.
-        tail.iter().skip(period).zip(tail.iter()).all(|(a, b)| a == b)
-    })
+
+    // Long phrases, which have to earn it with repetition count instead.
+    for period in 5..=MAX_REPEAT_PERIOD {
+        let needed = period * MIN_LONG_CYCLES;
+        if tokens.len() < needed {
+            break; // every longer period needs even more; nothing left to find
+        }
+        let tail = &tokens[tokens.len() - needed..];
+        if tail.iter().skip(period).zip(tail.iter()).all(|(a, b)| a == b) {
+            return Some(period * (MIN_LONG_CYCLES - 1));
+        }
+    }
+    None
+}
+
+/// Whether the tail of `tokens` has gone into a loop. The decoder wants the
+/// amount to discard, not a yes/no, so this exists only to keep the tests
+/// about detection readable.
+#[cfg(test)]
+fn is_repeating(tokens: &[u32]) -> bool {
+    repetition_overrun(tokens).is_some()
 }
 
 fn argmax(logits: &[f32]) -> u32 {
@@ -787,6 +836,76 @@ mod tests {
     fn too_few_tokens_cannot_be_a_loop() {
         assert!(!is_repeating(&[1, 1, 1]));
         assert!(!is_repeating(&[]));
+    }
+
+    #[test]
+    fn a_long_phrase_looping_is_detected() {
+        // The measured failure this rule exists for: on a real EDM track the
+        // decoder emitted "You say to me all the time, say to me all the time"
+        // roughly twenty times, and that one window took 119s of a 139s
+        // transcription. Twelve tokens is three times the old period ceiling,
+        // so nothing was looking for it.
+        let line: Vec<u32> = (200..212).collect(); // a 12-token sung line
+        let mut tokens = vec![1u32, 2, 3, 4, 5];
+        for _ in 0..20 {
+            tokens.extend_from_slice(&line);
+        }
+        assert!(is_repeating(&tokens), "a twelve-token loop was not caught");
+    }
+
+    #[test]
+    fn a_chorus_repeating_a_couple_of_times_survives() {
+        // The reason the ceiling was low in the first place, and the thing the
+        // fix must not break: a line sung two or three times is lyric content,
+        // not a decoder loop. Truncating it would be worse than the bug.
+        let line: Vec<u32> = (300..312).collect();
+        for repeats in 2..MIN_LONG_CYCLES {
+            let mut tokens = vec![1u32, 2, 3, 4, 5, 6, 7];
+            for _ in 0..repeats {
+                tokens.extend_from_slice(&line);
+            }
+            assert!(!is_repeating(&tokens), "a chorus sung {repeats} times was mistaken for a loop");
+        }
+    }
+
+    #[test]
+    fn a_detected_loop_keeps_one_copy_of_the_phrase() {
+        // Dropping the whole run would delete a line that really was sung.
+        let line: Vec<u32> = (400..412).collect();
+        let head = vec![1u32, 2, 3];
+        let mut tokens = head.clone();
+        for _ in 0..MIN_LONG_CYCLES {
+            tokens.extend_from_slice(&line);
+        }
+        let overrun = repetition_overrun(&tokens).expect("should have been caught");
+        let kept = tokens.len() - overrun;
+        assert_eq!(kept, head.len() + line.len(), "exactly one copy of the line should survive");
+        assert_eq!(&tokens[..kept][head.len()..], &line[..]);
+    }
+
+    #[test]
+    fn a_long_period_needs_more_evidence_than_a_short_one() {
+        // A 2-token phrase repeating 6 times is a loop; a 12-token phrase
+        // repeating twice is a chorus. Same "it repeated", different verdict,
+        // which is the whole point of the split.
+        let mut short = vec![9u32];
+        for _ in 0..6 {
+            short.extend_from_slice(&[7, 8]);
+        }
+        assert!(is_repeating(&short));
+
+        let long: Vec<u32> = (500..512).collect();
+        let mut twice = vec![9u32];
+        twice.extend_from_slice(&long);
+        twice.extend_from_slice(&long);
+        assert!(!is_repeating(&twice));
+    }
+
+    #[test]
+    fn ordinary_long_text_is_still_not_a_loop() {
+        // Long enough to reach the new rule's window, with no repetition.
+        let tokens: Vec<u32> = (100..200).collect();
+        assert!(!is_repeating(&tokens));
     }
 
     #[test]

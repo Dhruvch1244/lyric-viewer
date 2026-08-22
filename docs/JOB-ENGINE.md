@@ -292,12 +292,24 @@ analysis, beat map, and structure already on disk.
 >    5-minute song is a few minutes of isolation rather than fifteen. Whisper
 >    got ~4x faster too; it had been paying the same tax on every transcription
 >    this app has ever run.
-> 2. **Whisper's repetition guard does not catch phrase-level looping.** The
->    last window returned "You say to me all the time" ~20 times with
->    degenerate timestamps and took 119s against 2–9s for the others.
->    `is_repeating` catches single tokens and short phrases; this is longer
->    than its window. Pre-existing, not caused by isolation — isolation just
->    reaches code that had never run on this kind of material.
+> 2. ~~**Whisper's repetition guard does not catch phrase-level looping.**~~
+>    **Fixed.** The last window returned "You say to me all the time" ~20 times
+>    with degenerate timestamps and took 119s against 2–9s for the others.
+>    `is_repeating` only checked periods of 1–4 tokens; the looping phrase was
+>    about twelve, so nothing was looking for it.
+>
+>    The low ceiling had a real reason, and the fix had to respect it: **a
+>    chorus genuinely repeats**, and truncating one would be worse than the
+>    bug. What separates them is not *whether* a phrase repeats but how many
+>    times consecutively and identically — a chorus gives two or three, a
+>    decoder loop gives twenty. Long periods (up to 24 tokens) are now allowed
+>    at the price of needing four exact repeats, and the truncation keeps one
+>    copy of the line rather than dropping the run wholesale.
+>
+>    **Same track, same audio: that window went from 31 cues in 119s to 1 cue
+>    in 3.9s; the whole transcription from 34.2s to 10.5s; 36 cues to 6, all
+>    of them real.** The surviving line is `"You say to me all the time, say to
+>    me all the time"` — exactly what was sung, once.
 >
 > The plan that follows is kept for its reasoning, which held up.
 
