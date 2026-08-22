@@ -5495,6 +5495,67 @@ function openModeMenu() {
   if (els.modeBtn) els.modeBtn.setAttribute('aria-expanded', 'true');
 }
 
+/*
+  The More popover (PERF-UX.md U1).
+
+  The chip bar carried nineteen unlabelled icons in one row on top of a
+  visualiser. Five stay out — lyrics, audio, preset, display mode, library —
+  plus the sync pair; everything else lives in here, grouped and labelled,
+  because vertical space inside a popover is free in a way space along the bar
+  is not.
+
+  Follows the mode-menu's interaction contract (click outside, Escape,
+  aria-expanded) and adds the one thing that menu is missing: focus returns to
+  the trigger on close, so dismissing with Escape does not drop the caret on
+  <body>.
+*/
+const moreBtn = document.getElementById('btn-more');
+const moreMenu = document.getElementById('more-menu');
+
+function closeMoreMenu(restoreFocus) {
+  if (!moreMenu || moreMenu.hidden) return;
+  moreMenu.hidden = true;
+  moreMenu.classList.remove('more-menu--flip-right');
+  if (moreBtn) {
+    moreBtn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) moreBtn.focus();
+  }
+}
+
+function openMoreMenu() {
+  if (!moreMenu) return;
+  moreMenu.hidden = false;
+  if (moreBtn) moreBtn.setAttribute('aria-expanded', 'true');
+  // Keep it on screen. The trigger sits wherever the bar's contents put it,
+  // and in bar mode the window is a fraction of the width it is in fullscreen.
+  moreMenu.classList.remove('more-menu--flip-right');
+  const box = moreMenu.getBoundingClientRect();
+  if (box.right > window.innerWidth - 8) moreMenu.classList.add('more-menu--flip-right');
+}
+
+if (moreBtn && moreMenu) {
+  moreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (moreMenu.hidden) openMoreMenu(); else closeMoreMenu(false);
+  });
+  moreMenu.addEventListener('click', (e) => {
+    // A toggle inside is still a toggle: flipping sprites or Lite should not
+    // dismiss the menu, since those get flipped more than once in a row.
+    e.stopPropagation();
+    // ...but the ones that open a panel (Settings, pre-sync, cover art) would
+    // otherwise leave this popover sitting on top of what they opened. Checked
+    // after the handlers have run rather than by listing the buttons, so a
+    // control added to the menu later gets the right behaviour for free.
+    setTimeout(() => {
+      if (anyPanelOpen()) closeMoreMenu(false);
+    }, 0);
+  });
+  document.addEventListener('click', () => closeMoreMenu(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !moreMenu.hidden) closeMoreMenu(true);
+  });
+}
+
 function closeModeMenu() {
   if (!modeMenu) return;
   modeMenu.hidden = true;
@@ -5751,8 +5812,13 @@ if (window.player.onWallpaperPointer) {
   A MutationObserver on the panels' `hidden` attribute keeps it in step no
   matter which of the many open/close paths fired, without hooking each one.
 */
-const WALLPAPER_PANELS = [els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent]
-  .filter(Boolean);
+// moreMenu is in here too: in wallpaper mode the window sits behind the
+// desktop icons, and a panel only becomes clickable once this reports one is
+// open. Leaving the More popover out would render it and let nothing in it be
+// pressed — the exact bug 0.22.0 hit with the other panels.
+const WALLPAPER_PANELS = [
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, moreMenu,
+].filter(Boolean);
 
 function anyPanelOpen() {
   return WALLPAPER_PANELS.some((el) => !el.hidden);

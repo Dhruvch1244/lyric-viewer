@@ -1629,6 +1629,82 @@ body.keybox-open .hud {
   gap: 1.2rem;
 }
 
+/* Divider between clusters of chips. Faint on purpose: it is there to break a
+   row into readable runs, not to draw attention to itself over the visuals. */
+.hud__sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.15rem 0.1rem;
+  background: var(--chrome-border-soft);
+  flex: 0 0 auto;
+}
+
+/* Anchor for the More popover. */
+.hud__more {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Everything that no longer sits on the bar.
+   Opens UPWARD — the HUD is pinned to the bottom of the screen, so a menu
+   growing downward would leave the app. */
+.more-menu {
+  position: absolute;
+  bottom: calc(100% + 0.55rem);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  background: var(--chrome-surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--chrome-radius);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+  /* Without an intrinsic width the popover shrink-wraps to its NARROWEST
+     content, and every row then wraps to one chip per line — a tall thin
+     column instead of a menu. max-content sizes it to the widest row and lets
+     the others flow across. */
+  width: max-content;
+  max-width: min(32rem, 80vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.more-menu[hidden] {
+  display: none;
+}
+
+/* Near the right-hand edge the menu would otherwise run off-screen. */
+.more-menu--flip-right {
+  left: auto;
+  right: 0;
+}
+
+.more-menu__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.more-menu__label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-faint);
+}
+
+.more-menu__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .chip {
   font-family: var(--font-ui);
   font-size: 0.78rem;
