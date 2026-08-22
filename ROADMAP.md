@@ -11,6 +11,17 @@ undone — a real decision, not neglect), or left unmarked if it's still open.
 The competitive analysis in sections 1-2 holds up fine; it's the plan and gap
 list in sections 3-5 that needed the pass.
 
+**Status note (2026-08-22):** this document's own items are still accurate as
+of the check below — nothing here has reversed. Two adjacent, more granular
+efforts finished the same day, tracked in `docs/JOB-ENGINE.md` rather than
+here since they belong to that doc's phase numbering, not this one's: AcoustID
+(JOB-ENGINE §5.1/§7.11) went from wired-but-never-called to verified against
+the live service with a real key, and speaker diarization for featured artists
+(JOB-ENGINE §5.8) — mentioned nowhere in this file, since it's one level more
+granular than the phases below — went from "late phase, or never" to a real,
+tested backend (an actual pretrained ONNX model found, downloaded, and run
+end to end, not assumed), still short one live caller. See that doc for both.
+
 ---
 
 ## 1. The positioning decision

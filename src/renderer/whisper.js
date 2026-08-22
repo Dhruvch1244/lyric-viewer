@@ -91,8 +91,13 @@
         dtype: 'q8', // quantised — smaller download, fine for lyrics
         device: 'wasm',
         progress_callback: (p) => {
+          // 'downloading-model' on purpose, not 'downloading' — the renderer's
+          // onTranscribeProgress lookup key is 'downloading-model' (the native
+          // sidecar's stage name); a mismatched name here silently drops every
+          // progress event, which is exactly the bug already fixed once on
+          // that path (see renderer.js's onTranscribeProgress comment).
           if (onProgress && p && p.status === 'progress') {
-            onProgress({ stage: 'downloading', pct: Math.round(p.progress || 0) });
+            onProgress({ stage: 'downloading-model', file: model, pct: Math.round(p.progress || 0) });
           }
         },
       });

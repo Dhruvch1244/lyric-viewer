@@ -26,7 +26,12 @@ use serde::{Deserialize, Serialize};
 /// the version it was built with in `Response::Ready`, and the host refuses to
 /// use a sidecar that disagrees — a stale binary left behind by a partial
 /// upgrade otherwise fails much later and far less legibly.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// 2: added `Request::Diarize` / `Response::Diarized` / `Stage::Diarizing`
+/// (speaker diarization) — additive, but a v1 sidecar has no arm for the new
+/// request variants, so a stale binary left over from a partial upgrade
+/// should be refused rather than sent a request it cannot decode.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Frames larger than this are treated as corruption rather than honoured.
 /// Without a ceiling, a garbled length prefix asks the reader to allocate up
@@ -78,6 +83,22 @@ pub enum Stage {
     DetectingSpeech,
     /// Running Whisper over those spans.
     Transcribing,
+    /// Running the speaker-embedding model over the clip (diarize.rs).
+    Diarizing,
+}
+
+/// One contiguous stretch of a clip attributed to the same speaker cluster.
+/// `speaker` is a cluster index local to this one diarization run (0, 1, 2…
+/// in the order each voice was first heard) — not a stable identity across
+/// songs or even across two runs of the same song, since clustering is
+/// unsupervised and has no name to give a cluster beyond its order of
+/// appearance. Matching a cluster to an actual artist name is the caller's
+/// job (see `attribute.rs`, host side).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeakerSpan {
+    pub start_ms: u32,
+    pub end_ms: u32,
+    pub speaker: u32,
 }
 
 /// Host → sidecar.
@@ -99,6 +120,17 @@ pub enum Request {
         /// file, which is the useful comparison when diagnosing a bad result.
         vad: bool,
     },
+    /// Speaker diarization (`diarize.rs`) — who is singing, from the audio
+    /// rather than guessed from lyric text. No `language`/`vad`: the model
+    /// only ever sees whichever fixed window it is handed.
+    Diarize {
+        job_id: u64,
+        /// Same shape as `Transcribe::pcm_path` — memory-mapped, host-owned.
+        pcm_path: String,
+        sample_rate: u32,
+        /// Directory holding the speaker-embedding ONNX model.
+        model_dir: String,
+    },
     /// Cooperative — the sidecar checks between spans, so this stops the next
     /// one starting rather than interrupting the model mid-run.
     Cancel { job_id: u64 },
@@ -111,6 +143,7 @@ pub enum Response {
     Ready { version: u16, runtime: String },
     Progress { job_id: u64, stage: Stage, pct: u8 },
     Result { job_id: u64, cues: Vec<Cue> },
+    Diarized { job_id: u64, spans: Vec<SpeakerSpan> },
     Error { job_id: u64, message: String },
     /// Answer to `Shutdown`, so the host can wait for a clean exit instead of
     /// killing the process and hoping nothing was mid-write.
@@ -130,6 +163,7 @@ impl Framed for Request {
             Request::Transcribe { .. } => 1,
             Request::Cancel { .. } => 2,
             Request::Shutdown => 3,
+            Request::Diarize { .. } => 4,
         }
     }
 }
@@ -141,6 +175,7 @@ pub mod response_kind {
     pub const RESULT: u8 = 2;
     pub const ERROR: u8 = 3;
     pub const BYE: u8 = 4;
+    pub const DIARIZED: u8 = 5;
 }
 
 impl Framed for Response {
@@ -151,6 +186,7 @@ impl Framed for Response {
             Response::Result { .. } => response_kind::RESULT,
             Response::Error { .. } => response_kind::ERROR,
             Response::Bye => response_kind::BYE,
+            Response::Diarized { .. } => response_kind::DIARIZED,
         }
     }
 }
@@ -317,6 +353,37 @@ mod tests {
         buf.push(0);
         let err = read_raw_frame(&mut buf.as_slice()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_diarize_request_survives_a_round_trip() {
+        let req = Request::Diarize {
+            job_id: 7,
+            pcm_path: "C:\\tmp\\song.pcm".into(),
+            sample_rate: 16_000,
+            model_dir: "C:\\models".into(),
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &req).unwrap();
+        let back: Request = read_frame(&mut buf.as_slice()).unwrap().unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn a_diarized_response_survives_a_round_trip() {
+        let resp = Response::Diarized {
+            job_id: 7,
+            spans: vec![
+                SpeakerSpan { start_ms: 0, end_ms: 1500, speaker: 0 },
+                SpeakerSpan { start_ms: 1500, end_ms: 3200, speaker: 1 },
+            ],
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &resp).unwrap();
+        let back: Response = read_frame(&mut buf.as_slice()).unwrap().unwrap();
+        assert_eq!(back, resp);
+        let (kind, _) = read_raw_frame(&mut buf.as_slice()).unwrap().unwrap();
+        assert_eq!(kind, response_kind::DIARIZED);
     }
 
     #[test]

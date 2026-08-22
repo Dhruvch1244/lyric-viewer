@@ -488,7 +488,7 @@ fn run_native_transcription(
 
         let progress_app = app.clone();
         let progress_track = track.clone();
-        let ensured = crate::models::ensure(
+        let ensured = crate::models::ensure_speech(
             &models_dir,
             |file, pct| {
                 let _ = progress_app.emit(
@@ -607,6 +607,128 @@ fn identify_from_audio(app: &AppHandle, track: &Value, pcm: &[f32]) -> Option<cr
         Err(e) => {
             log::warn!("acoustid lookup failed: {e}");
             None
+        }
+    }
+}
+
+/* -------------------------------------------------- diarization --- */
+
+/// Diarize a local audio file: who is singing, from the audio itself
+/// (ROADMAP.md §5.8, `sidecar/src/diarize.rs`) rather than guessed from
+/// lyric text (`attribute.rs`). Not yet called automatically by anything —
+/// see `attribute::refine_with_diarization`'s doc comment for why an
+/// already-synced song has no audio in hand at the point attribution runs
+/// today. Callable by hand (or from a future UI action) against any local
+/// file in the meantime; the result is cached the same way mood/attribution
+/// are, so a second call on the same track is instant.
+///
+/// Returns immediately; the result arrives as a `diarized` event.
+#[tauri::command]
+pub(crate) fn diarize_local_file(app: AppHandle, track: Value, path: String) -> Value {
+    if !crate::inference::available() {
+        return json!({ "status": "unavailable", "message": "inference sidecar not installed" });
+    }
+    let t = track_from_value(&track);
+    let key = track_key(&t.artist, &t.title);
+    let queued = jobs::submit(DiarizeJob { app, track, path, key }, Priority::Now);
+    json!({ "status": if queued { "queued" } else { "already-running" } })
+}
+
+/// The Inference-lane job behind `diarize_local_file`. Same lane as
+/// transcription (concurrency 1) — both load an ONNX graph into a spawned
+/// sidecar process, and running two at once would double an already
+/// significant memory footprint for no throughput gain.
+struct DiarizeJob {
+    app: AppHandle,
+    track: Value,
+    path: String,
+    key: String,
+}
+
+impl Runnable for DiarizeJob {
+    fn lane(&self) -> Lane {
+        Lane::Inference
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("diarize:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let DiarizeJob { app, track, path, key } = *self;
+        let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "decoding" }));
+        let Some((samples, rate)) = crate::analysis::decode_to_mono(&path) else {
+            let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "error", "message": "cannot decode file" }));
+            return;
+        };
+        if cancel.cancelled() {
+            return;
+        }
+        let pcm = crate::inference::resample_to_16k(&samples, rate);
+        drop(samples);
+
+        let Some(models_dir) = crate::inference::diarization_model_dir(&app) else {
+            let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "error", "message": "no model directory" }));
+            return;
+        };
+        let missing = crate::models::missing_diarization_files(&models_dir);
+        if !crate::model_consent::allow(&app, &missing) {
+            let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "model-declined" }));
+            return;
+        }
+        let progress_app = app.clone();
+        let progress_track = track.clone();
+        let ensured = crate::models::ensure_diarization(
+            &models_dir,
+            |file, pct| {
+                let _ = progress_app.emit(
+                    "diarize-progress",
+                    json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
+                );
+            },
+            &|| cancel.cancelled(),
+        );
+        if let Err(message) = ensured {
+            if message != "cancelled" {
+                log::warn!("diarization model download failed: {message}");
+                let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "error", "message": message }));
+            }
+            return;
+        }
+        if cancel.cancelled() {
+            return;
+        }
+
+        let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+        let progress_app = app.clone();
+        let progress_track = track.clone();
+        let result = crate::inference::diarize(&app, job_id, &pcm, cancel, move |pct| {
+            let _ = progress_app.emit("diarize-progress", json!({ "track": progress_track, "stage": "diarizing", "pct": pct }));
+        });
+
+        match result {
+            Ok(spans) => {
+                let spans_val: Vec<Value> =
+                    spans.iter().map(|s| json!({ "startMs": s.start_ms, "endMs": s.end_ms, "speaker": s.speaker })).collect();
+                if let Some(path) = lyrics_cache_path(&app, &key) {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
+                            cached["diarization"] = json!(spans_val);
+                            let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+                        }
+                    }
+                }
+                let _ = app.emit("diarized", json!({ "track": track, "spans": spans_val }));
+            }
+            Err(message) => {
+                if message != "cancelled" {
+                    let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "error", "message": message }));
+                }
+            }
         }
     }
 }
@@ -752,7 +874,7 @@ impl Runnable for ResumeTranscribeJob {
                 let _ = std::fs::remove_file(&job.pcm_path);
                 return;
             }
-            let ensured = crate::models::ensure(&models_dir, |_, _| {}, &|| cancel.cancelled());
+            let ensured = crate::models::ensure_speech(&models_dir, |_, _| {}, &|| cancel.cancelled());
             if let Err(message) = ensured {
                 if message != "cancelled" {
                     log::warn!("resumed transcription for {} could not fetch models: {message}", job.track_key);

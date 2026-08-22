@@ -231,6 +231,8 @@ pub fn run() {
             commands::lyrics_cmds::report_transcribe_progress,
             commands::lyrics_cmds::finalize_transcription,
             commands::lyrics_cmds::answer_model_consent,
+            commands::lyrics_cmds::diarize_local_file,
+            model_consent::get_model_consent_status,
             commands::library_cmds::add_library_folder,
             commands::library_cmds::remove_library_folder,
             commands::library_cmds::get_library_folders,

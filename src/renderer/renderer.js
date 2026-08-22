@@ -4916,22 +4916,62 @@ function closeModelConsent() {
   if (els.modelConsentBackdrop) els.modelConsentBackdrop.hidden = true;
 }
 
-window.player.onModelConsentNeeded((data) => {
+/**
+ * Show the ask panel. `data.totalBytes` is only known for the native
+ * sidecar's fixed, SHA-pinned model set (models.rs); the WebView/WASM path
+ * (ensureModelConsent, below) downloads via transformers.js's own HTTP cache
+ * with no size known ahead of time, so a falsy total falls back to copy that
+ * names the download without inventing a number for it.
+ * @param {{files?: Array<{name:string,size:number}>, totalBytes?: number}} [data]
+ */
+function openModelConsentPanel(data) {
   if (!els.modelConsent) return;
   const files = (data && data.files) || [];
-  const total = humanBytes(data && data.totalBytes);
+  const total = data && data.totalBytes ? humanBytes(data.totalBytes) : null;
   if (els.modelConsentBody) {
-    els.modelConsentBody.textContent =
-      `Auto-transcribing an unsynced song needs a one-time ${total} download ` +
-      `(Whisper + a voice detector, ${files.length} file${files.length === 1 ? '' : 's'}). ` +
-      `Cached after this — every song after the first uses it instantly, no more asking.`;
+    els.modelConsentBody.textContent = total
+      ? `Auto-transcribing an unsynced song needs a one-time ${total} download ` +
+        `(Whisper + a voice detector, ${files.length} file${files.length === 1 ? '' : 's'}). ` +
+        `Cached after this — every song after the first uses it instantly, no more asking.`
+      : `Auto-transcribing an unsynced song needs a one-time model download ` +
+        `(Whisper + a voice detector). Cached after this — every song after the ` +
+        `first uses it instantly, no more asking.`;
   }
   if (els.modelConsentAsk) els.modelConsentAsk.hidden = false;
   if (els.modelConsentLog) els.modelConsentLog.replaceChildren();
   if (els.modelConsentLog) els.modelConsentLog.hidden = true;
   if (els.modelConsentBackdrop) els.modelConsentBackdrop.hidden = false;
   els.modelConsent.hidden = false;
-});
+}
+
+window.player.onModelConsentNeeded(openModelConsentPanel);
+
+/**
+ * A pending resolver for a consent request opened locally (ensureModelConsent
+ * below), as opposed to one driven by the backend's `model-consent-needed`
+ * event. Only one prompt is ever on screen at a time, so one slot is enough.
+ * @type {((consent: boolean) => void) | null}
+ */
+let pendingLocalConsent = null;
+
+/**
+ * Ask about (or silently honour a prior answer on) the one-time model
+ * download, for a caller with no Rust-side `model_consent::allow` blocking on
+ * the answer — the WebView/WASM fallback (schedulePreload's warm-up, and
+ * tauri-shim.js's transcribeAudio for the actual download). Persists through
+ * the same `answerModelConsent` call the backend-driven prompt uses, so
+ * either path answering "don't ask again" is honoured by both from then on.
+ * @returns {Promise<boolean>}
+ */
+async function ensureModelConsent() {
+  const status = await window.player.getModelConsentStatus().catch(() => null);
+  if (status && status.decided) return status.consented;
+  if (pendingLocalConsent) return false; // a prompt is already up; don't stack a second wait
+  openModelConsentPanel(null);
+  return new Promise((resolve) => {
+    pendingLocalConsent = resolve;
+  });
+}
 
 /**
  * One file's row in the download log — created on its first progress event,
@@ -4968,23 +5008,34 @@ function updateModelDownloadProgress(file, pct) {
   row.classList.toggle('modelconsent__file--done', pct >= 100);
 }
 
+/** Resolve (once) whatever local prompt is pending, if any. */
+function resolvePendingLocalConsent(consent) {
+  if (!pendingLocalConsent) return;
+  const resolve = pendingLocalConsent;
+  pendingLocalConsent = null;
+  resolve(consent);
+}
+
 if (els.modelConsentYes) {
   els.modelConsentYes.addEventListener('click', () => {
     if (els.modelConsentAsk) els.modelConsentAsk.hidden = true;
     if (els.modelConsentLog) els.modelConsentLog.hidden = false;
     window.player.answerModelConsent(true, true);
+    resolvePendingLocalConsent(true);
   });
 }
 if (els.modelConsentLater) {
   els.modelConsentLater.addEventListener('click', () => {
     window.player.answerModelConsent(false, false);
     closeModelConsent();
+    resolvePendingLocalConsent(false);
   });
 }
 if (els.modelConsentNever) {
   els.modelConsentNever.addEventListener('click', () => {
     window.player.answerModelConsent(false, true);
     closeModelConsent();
+    resolvePendingLocalConsent(false);
   });
 }
 if (els.modelConsentBackdrop) {
@@ -4994,6 +5045,7 @@ if (els.modelConsentBackdrop) {
     if (els.modelConsentAsk && !els.modelConsentAsk.hidden) {
       window.player.answerModelConsent(false, false);
       closeModelConsent();
+      resolvePendingLocalConsent(false);
     }
   });
 }
@@ -5011,10 +5063,21 @@ window.player.getTranscribeConfig().then((cfg) => {
   costs anything once per install — and only downloads a model for a feature
   that's actually on, so turning transcription or vocal isolation off keeps
   their models out of the picture entirely.
+
+  Gated on an already-consented answer, not merely scheduled — unlike the
+  native sidecar (which asks before models.rs downloads anything), this used
+  to fire unconditionally, so a fresh install silently fetched ~82MB in the
+  background with no prompt ever shown. It stays silent here on purpose even
+  when undecided: proactively asking before the user has ever tried
+  transcription would be nagging out of nowhere. ensureModelConsent (used by
+  tauri-shim.js's transcribeAudio) is the real ask, at the point a download is
+  actually needed; once that is answered yes, the NEXT startup's warm-up runs.
 */
 function schedulePreload() {
   const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 4000));
-  idle(() => {
+  idle(async () => {
+    const status = await window.player.getModelConsentStatus().catch(() => null);
+    if (!status || !status.consented) return;
     if (transcribeCfg.enabled && window.Whisper && window.Whisper.preload) {
       window.Whisper.preload(transcribeCfg.model || undefined).catch(() => {});
     }

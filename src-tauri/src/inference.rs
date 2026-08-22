@@ -17,7 +17,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
-use inference_protocol::{read_frame, write_frame, Cue, Request, Response, Stage, PROTOCOL_VERSION};
+use inference_protocol::{read_frame, write_frame, Cue, Request, Response, SpeakerSpan, Stage, PROTOCOL_VERSION};
 use tauri::{AppHandle, Manager};
 
 use crate::jobs::CancelToken;
@@ -248,6 +248,7 @@ fn run_sidecar(
             Ok(Some(Response::Result { cues, .. })) => break Ok(cues),
             Ok(Some(Response::Error { message, .. })) => break Err(message),
             Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
+            Ok(Some(Response::Diarized { .. })) => break Err("sidecar answered a transcription with a diarization result".into()),
             Ok(None) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
             Err(e) => break Err(format!("sidecar response stream broke: {e}")),
         }
@@ -256,6 +257,105 @@ fn run_sidecar(
     // Ask for a clean exit so the process is not killed mid-write. `Session`'s
     // Drop still kills it if this does not land, so a wedged sidecar cannot
     // outlive the job either way.
+    let _ = write_frame(&mut w, &Request::Shutdown);
+    let _ = w.flush();
+    let _ = session.child.wait();
+
+    outcome
+}
+
+/// Where the diarization model lives — separate from `model_dir` above so
+/// its own, independent download (`models::ensure_diarization`) never shares
+/// a directory listing with the mandatory speech models, even though both
+/// happen to sit under the same app config directory today.
+pub(crate) fn diarization_model_dir(app: &AppHandle) -> Option<PathBuf> {
+    model_dir(app)
+}
+
+/// Run one diarization pass over freshly-decoded, already-16kHz samples.
+/// Blocking, same as `transcribe` — belongs on the Inference lane.
+pub(crate) fn diarize(
+    app: &AppHandle,
+    job_id: u64,
+    samples: &[f32],
+    cancel: &CancelToken,
+    mut progress: impl FnMut(u8),
+) -> Result<Vec<SpeakerSpan>, String> {
+    let pcm_path = write_pcm(job_id, samples)?;
+    let exe = sidecar_path()?;
+    let models = diarization_model_dir(app).ok_or("no config directory for models")?;
+
+    let mut cmd = Command::new(&exe);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        let _ = std::fs::remove_file(&pcm_path);
+        format!("cannot start the inference sidecar at {}: {e}", exe.display())
+    })?;
+
+    let stdin = child.stdin.take().ok_or("sidecar has no stdin")?;
+    let stdout = child.stdout.take().ok_or("sidecar has no stdout")?;
+    let stderr = child.stderr.take();
+    let log = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut se) = stderr {
+            let _ = se.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    let mut session = Session { child, pcm_path };
+    let mut w = BufWriter::new(stdin);
+    let mut r = BufReader::new(stdout);
+
+    write_frame(&mut w, &Request::Hello { version: PROTOCOL_VERSION }).map_err(|e| format!("cannot greet the sidecar: {e}"))?;
+    match read_frame::<_, Response>(&mut r) {
+        Ok(Some(Response::Ready { version, runtime })) => {
+            if version != PROTOCOL_VERSION {
+                return Err(format!("sidecar speaks protocol {version}, this build speaks {PROTOCOL_VERSION} — reinstall"));
+            }
+            log::info!("inference sidecar ready: {runtime}");
+        }
+        Ok(Some(other)) => return Err(format!("sidecar answered the handshake with {other:?}")),
+        Ok(None) => return Err(format!("sidecar exited during the handshake; log: {}", log.join().unwrap_or_default())),
+        Err(e) => return Err(format!("sidecar handshake failed: {e}")),
+    }
+
+    write_frame(
+        &mut w,
+        &Request::Diarize {
+            job_id,
+            pcm_path: session.pcm_path.to_string_lossy().into_owned(),
+            sample_rate: SAMPLE_RATE,
+            model_dir: models.to_string_lossy().into_owned(),
+        },
+    )
+    .map_err(|e| format!("cannot send the diarization request: {e}"))?;
+
+    let mut cancelled_sent = false;
+    let outcome = loop {
+        if cancel.cancelled() && !cancelled_sent {
+            let _ = write_frame(&mut w, &Request::Cancel { job_id });
+            cancelled_sent = true;
+        }
+        match read_frame::<_, Response>(&mut r) {
+            Ok(Some(Response::Progress { pct, .. })) => progress(pct),
+            Ok(Some(Response::Diarized { spans, .. })) => break Ok(spans),
+            Ok(Some(Response::Error { message, .. })) => break Err(message),
+            Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
+            Ok(Some(Response::Result { .. })) => break Err("sidecar answered a diarization with a transcription result".into()),
+            Ok(None) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
+            Err(e) => break Err(format!("sidecar response stream broke: {e}")),
+        }
+    };
+
     let _ = write_frame(&mut w, &Request::Shutdown);
     let _ = w.flush();
     let _ = session.child.wait();

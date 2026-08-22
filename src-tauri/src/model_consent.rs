@@ -102,6 +102,19 @@ pub(crate) fn answer(app: &AppHandle, consent: bool, remember: bool) {
     }
 }
 
+/// Read-only status for callers that have no `PENDING` sender to block on —
+/// namely the WebView/WASM fallback path (`whisper.js`/`demucs.js`), which
+/// downloads its own models independently of `models.rs` and so never goes
+/// through `allow` above. The renderer uses this to decide whether its
+/// proactive cache warm-up may run silently (already consented), must stay
+/// quiet (already declined), or needs to ask for real at the point a
+/// transcription is actually attempted (never decided).
+#[tauri::command]
+pub(crate) fn get_model_consent_status(app: AppHandle) -> serde_json::Value {
+    let c = load(&app);
+    json!({ "decided": c.decided, "consented": c.consented })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

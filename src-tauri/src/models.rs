@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 /// One artefact, pinned to an exact revision, with the SHA-256 and byte size
 /// measured from a real download so a mismatch cannot be silently "close
 /// enough".
-struct ModelFile {
+pub(crate) struct ModelFile {
     name: &'static str,
     url: &'static str,
     sha256: &'static str,
@@ -87,10 +87,32 @@ const FILES: &[ModelFile] = &[
     },
 ];
 
+/// Speaker diarization's model (`diarize.rs`, sidecar), kept as its own list
+/// rather than folded into `FILES`: diarization is a separate, optional,
+/// exploratory capability (ROADMAP.md §5.8), not part of transcription, and
+/// bundling its ~25MB into the download the existing consent prompt already
+/// describes ("Whisper + a voice detector") would make that prompt wrong for
+/// everyone who only ever wants synced lyrics.
+///
+/// `Alkd/speaker-embedding-onnx` — an ONNX export of the ResNet34 backbone
+/// from `pyannote/wespeaker-voxceleb-resnet34-LM`, the same model pyannote's
+/// own diarization pipeline uses. Picked over the SpeechBrain ECAPA-TDNN
+/// alternative considered alongside it because its required feature
+/// front end (Kaldi fbank) is fully specified inline on the model card, with
+/// no opaque auxiliary binary to reverse-engineer. Downloaded and run
+/// end-to-end (`sidecar/src/diarize.rs`'s `#[ignore]`d live test) before
+/// being pinned here — real SHA-256, not copied from the card.
+const DIARIZATION_FILES: &[ModelFile] = &[ModelFile {
+    name: "speaker-embedding-resnet34.onnx",
+    url: "https://huggingface.co/Alkd/speaker-embedding-onnx/resolve/edf8e8c67f02ad879326f49af2bd17d56612e88c/model.onnx",
+    sha256: "fe9ad5d8200b998ab627916b27e792f03f72b514867f8f60c79fff98fda6e395",
+    size: 26_542_869,
+}];
+
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Make sure every model file is present and correctly sized, downloading
-/// (and verifying) whatever is missing.
+/// Make sure every model file in `files` is present and correctly sized,
+/// downloading (and verifying) whatever is missing.
 ///
 /// Called on the Inference lane, right before a transcription — the lane is
 /// already concurrency-1 and already blocks for the length of a whole decode,
@@ -102,11 +124,12 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300
 /// completion for a song that is no longer playing.
 pub(crate) fn ensure(
     model_dir: &Path,
+    files: &[ModelFile],
     mut on_progress: impl FnMut(&str, u8),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     std::fs::create_dir_all(model_dir).map_err(|e| format!("cannot create {}: {e}", model_dir.display()))?;
-    for file in FILES {
+    for file in files {
         let path = model_dir.join(file.name);
         if already_present(&path, file) {
             continue;
@@ -116,6 +139,26 @@ pub(crate) fn ensure(
     Ok(())
 }
 
+/// The speech-transcription model set (Whisper + Silero VAD) — the existing,
+/// already-shipped download the model-consent prompt describes.
+pub(crate) fn ensure_speech(
+    model_dir: &Path,
+    on_progress: impl FnMut(&str, u8),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    ensure(model_dir, FILES, on_progress, cancelled)
+}
+
+/// The diarization model, downloaded (and consented to) independently of
+/// the speech models above — see `DIARIZATION_FILES`'s doc comment.
+pub(crate) fn ensure_diarization(
+    model_dir: &Path,
+    on_progress: impl FnMut(&str, u8),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    ensure(model_dir, DIARIZATION_FILES, on_progress, cancelled)
+}
+
 /// Cheap presence check: exists, and is the exact size a correct download
 /// produces. Not a hash check — that only runs once, right after a download,
 /// which is what keeps `ensure` fast enough to call unconditionally.
@@ -123,12 +166,21 @@ fn already_present(path: &Path, file: &ModelFile) -> bool {
     std::fs::metadata(path).map(|m| m.len() == file.size).unwrap_or(false)
 }
 
-/// (name, size) of every file `ensure` would actually have to download right
-/// now. Empty on a machine that already has everything — which is what lets
-/// `model_consent::allow` skip the prompt entirely on every transcription
-/// after the first, rather than only skipping the download itself.
+/// (name, size) of every file in `files` that `ensure` would actually have to
+/// download right now. Empty on a machine that already has everything —
+/// which is what lets `model_consent::allow` skip the prompt entirely on
+/// every transcription after the first, rather than only skipping the
+/// download itself.
+fn missing(model_dir: &Path, files: &[ModelFile]) -> Vec<(&'static str, u64)> {
+    files.iter().filter(|f| !already_present(&model_dir.join(f.name), f)).map(|f| (f.name, f.size)).collect()
+}
+
 pub(crate) fn missing_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
-    FILES.iter().filter(|f| !already_present(&model_dir.join(f.name), f)).map(|f| (f.name, f.size)).collect()
+    missing(model_dir, FILES)
+}
+
+pub(crate) fn missing_diarization_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
+    missing(model_dir, DIARIZATION_FILES)
 }
 
 /// Stream one file to disk via a `.part` temp path, verify it, then rename
@@ -203,20 +255,31 @@ fn progress_pct(read: u64, total: u64) -> u8 {
 mod tests {
     use super::*;
 
+    /// Both model sets share every shape invariant below (well-formed hash,
+    /// real size, unique name, a pinned non-branch URL) — checked together so
+    /// adding a third list later cannot forget to extend these.
+    fn all_lists() -> Vec<&'static [ModelFile]> {
+        vec![FILES, DIARIZATION_FILES]
+    }
+
     #[test]
     fn every_entry_has_a_well_formed_sha256() {
-        for f in FILES {
-            assert_eq!(f.sha256.len(), 64, "{} sha256 is not 64 hex chars: {}", f.name, f.sha256);
-            assert!(f.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{} sha256 has a non-hex char", f.name);
+        for list in all_lists() {
+            for f in list {
+                assert_eq!(f.sha256.len(), 64, "{} sha256 is not 64 hex chars: {}", f.name, f.sha256);
+                assert!(f.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{} sha256 has a non-hex char", f.name);
+            }
         }
     }
 
     #[test]
     fn every_entry_has_a_real_size_and_a_unique_name() {
-        let mut names = std::collections::HashSet::new();
-        for f in FILES {
-            assert!(f.size > 0, "{} has a zero size", f.name);
-            assert!(names.insert(f.name), "duplicate model file name: {}", f.name);
+        for list in all_lists() {
+            let mut names = std::collections::HashSet::new();
+            for f in list {
+                assert!(f.size > 0, "{} has a zero size", f.name);
+                assert!(names.insert(f.name), "duplicate model file name: {}", f.name);
+            }
         }
     }
 
@@ -225,12 +288,41 @@ mod tests {
         // A file fetched from `main`/`master` instead of the pinned commit
         // could silently change under this app; this is the check that would
         // catch a copy-paste of the wrong URL into the table.
-        for f in FILES {
-            let pinned = f.url.contains("608c49e61301901684bc36cac8f74b95ff6b5a8e")
-                || f.url.contains("bfdc0193023f121ea5b3cc7b176dbed570a68a59");
-            assert!(pinned, "{} is not fetched from a pinned revision: {}", f.name, f.url);
-            assert!(!f.url.contains("/main/") && !f.url.contains("/master/"), "{} names a moving branch: {}", f.name, f.url);
+        for list in all_lists() {
+            for f in list {
+                let pinned = f.url.contains("608c49e61301901684bc36cac8f74b95ff6b5a8e")
+                    || f.url.contains("bfdc0193023f121ea5b3cc7b176dbed570a68a59")
+                    || f.url.contains("edf8e8c67f02ad879326f49af2bd17d56612e88c");
+                assert!(pinned, "{} is not fetched from a pinned revision: {}", f.name, f.url);
+                assert!(!f.url.contains("/main/") && !f.url.contains("/master/"), "{} names a moving branch: {}", f.name, f.url);
+            }
         }
+    }
+
+    #[test]
+    fn the_diarization_model_is_independent_of_the_speech_models() {
+        // Bundling it into FILES would make the existing model-consent
+        // prompt's "Whisper + a voice detector" copy wrong for everyone.
+        assert!(!FILES.iter().any(|f| DIARIZATION_FILES.iter().any(|d| d.name == f.name)));
+    }
+
+    #[test]
+    fn missing_diarization_files_lists_the_one_file_when_absent() {
+        let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-diarize", std::process::id()));
+        let missing = missing_diarization_files(&dir);
+        assert_eq!(missing.len(), DIARIZATION_FILES.len());
+        assert_eq!(missing[0].0, DIARIZATION_FILES[0].name);
+    }
+
+    #[test]
+    fn missing_diarization_files_is_empty_once_present() {
+        let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-diarize2", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in DIARIZATION_FILES {
+            std::fs::write(dir.join(f.name), vec![0u8; f.size as usize]).unwrap();
+        }
+        assert!(missing_diarization_files(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -293,6 +385,7 @@ mod tests {
         let mut seen_files = std::collections::HashSet::new();
         let result = ensure(
             &dir,
+            FILES,
             |file, pct| {
                 seen_files.insert(file.to_string());
                 if pct == 100 {
@@ -314,7 +407,7 @@ mod tests {
 
         // Run again: everything should now be the fast, already-present path.
         let mut calls = 0;
-        ensure(&dir, |_, _| calls += 1, &|| false).unwrap();
+        ensure(&dir, FILES, |_, _| calls += 1, &|| false).unwrap();
         assert_eq!(calls, 0, "a re-run re-downloaded files that were already verified");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -332,7 +425,7 @@ mod tests {
             std::fs::write(dir.join(f.name), vec![0u8; f.size as usize]).unwrap();
         }
         let mut calls = 0;
-        let result = ensure(&dir, |_, _| calls += 1, &|| false);
+        let result = ensure(&dir, FILES, |_, _| calls += 1, &|| false);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(calls, 0, "progress was reported for files that were already present");
         let _ = std::fs::remove_dir_all(&dir);

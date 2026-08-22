@@ -1,6 +1,56 @@
 # Next steps
 
-Current as of **v0.22.0**. Written to be picked up cold — each item says what
+**Read this section first — everything below "Current as of v0.22.0" predates
+the Electron→Tauri rewrite (0.25.0–0.30.0) and is historical record, not
+current state.** Wallpaper mode, MilkDrop, the render loop and most named
+bugs below were rewritten or superseded since; kept rather than deleted
+because the *lessons* at the top (verify end to end, ask the system what
+happened, profile before optimising) are still exactly right, even where the
+specific bug they came from is gone. Treat file-and-line references below as
+Electron-era unless a section explicitly says otherwise.
+
+## Current as of v0.39.0 + 2026-08-22
+
+The Tauri rewrite, the job engine (0.37.0), and library indexing (0.38.0)
+landed since the section below was written — see `docs/JOB-ENGINE.md` for the
+authoritative phase-by-phase status, and `ROADMAP.md` for the competitive
+positioning. This section is the cold-start pickup list for what's real,
+unresolved work right now:
+
+1. **Diarization (JOB-ENGINE.md §5.8) — backend built and verified, not wired
+   to a caller.** The hard, novel part is done: a real pretrained
+   speaker-embedding ONNX model was found, downloaded, and run end-to-end
+   (`sidecar/src/fbank.rs`, `sidecar/src/diarize.rs`, pinned in `models.rs`
+   with a real SHA-256), a full protocol/host/Tauri-command path exists
+   (`diarize_local_file`), and `attribute::refine_with_diarization` is ready
+   to blend its clusters into the existing LLM-based per-line attribution.
+   **First move:** decide how to get raw audio to attribution for an
+   already-synced song — today `resolve_attribution` fires off lyric text
+   alone, before playback, so only songs that also need transcription ever
+   have audio in hand at that point. Call `diarize_local_file` by hand on any
+   local file in the meantime to see it work.
+2. **AcoustID is now verified live (2026-08-22)** — a real key was entered
+   and `acoustid::tests::a_real_lookup_answers` passed against the real
+   service. **Still open:** that proves the request/response shape, not that
+   a real recording's fingerprint returns a *correct* match — the full
+   loopback-capture → fingerprint → AcoustID → MusicBrainz chain has never
+   been watched complete against a real song playing in a browser tab.
+3. **The WASM/WebView Whisper fallback's model download is now consent-gated**
+   (closed 2026-08-22) — it used to fetch silently regardless of what the
+   native-sidecar consent flow answered. `ensureModelConsent` in renderer.js
+   is the real gate now, at the point `tauri-shim.js`'s `transcribeAudio`
+   would actually download something; the passive startup warm-up
+   (`schedulePreload`) stays silent until a real "yes" is on record, so it
+   never nags before the feature has been used once.
+4. Everything else queued as of 0.39.0 is either shipped or an open,
+   already-scoped item — see `docs/JOB-ENGINE.md`'s own "Not done" markers
+   (§5.8 above is the only phase not fully landed) rather than duplicating
+   that tracking here.
+
+---
+
+Everything from here down is the **Electron-era** file, current as of
+**v0.22.0**. Written to be picked up cold — each item says what
 is missing, why it was left, and what the first move is.
 
 > **0.22.0's lesson: a feature can be "verified" and still ship broken if the

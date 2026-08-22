@@ -1,6 +1,6 @@
 # The Job Engine — offline compute backend
 
-**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built and wired** (§7.11) but has never called AcoustID: it needs a free key, and until one is entered `acoustid::available()` is false and the app behaves exactly as before. **Phase 6 is complete**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug), key detection (§7.13), structure segmentation (§7.14) and loudness normalisation (§7.15). Phase 7 — library indexing and diarization — is the only one not started.
+**Status:** Phase 1 landed except the SQLite journal, which moved into Phase 3 and is done (§7.1, §7.7). Phase 2 landed except the local-folder `Idle` backfill, which moved to Phase 7 (§7.2). **Phase 3 is complete**: the sidecar transport (§7.3), the log-mel front end (§7.4), Silero VAD (§7.5), the Whisper encoder/decoder + DTW word alignment (§7.6), model downloading + crash-safe transcription (§7.7), and native SMTC loopback recording (§7.10) are all in — a fresh install can transcribe either a local file or a song heard over SMTC end to end, and survive a crash mid-transcription without losing the work. Deleting `whisper.js` was the one item dropped rather than done, deliberately: §7.10 explains why the WebView path stays as the vocal-isolation fallback. Phase 4 closed — profiled, and the fixes it proposed were rejected on the measurements (§7.9). **Phase 5 is built, wired, and now called for real** (§7.11): a free key was entered 2026-08-22 and the live AcoustID round trip passed. **Phase 6 is complete**: offline beat tracking (§7.12, closing the measured 138 → 174 BPM tempo bug), key detection (§7.13), structure segmentation (§7.14) and loudness normalisation (§7.15). **Phase 7's library indexing half is done (§7.16); its diarization half (§5.8) is built and tested against the real pinned model 2026-08-22 but not yet wired to a live caller** — see §5.8 for exactly what's missing and why.
 **Branch:** `feat/job-engine`
 
 A local, async compute service inside the Tauri process, plus an isolated
@@ -252,12 +252,57 @@ drive the visuals with equal force. The `ebur128` crate does this directly.
 pre-analyse it in the `Idle` lane, so every local file starts with full
 analysis, beat map, and structure already on disk.
 
-### 5.8 Speaker diarization for featured artists — **exploratory**
+### 5.8 Speaker diarization for featured artists — **backend built, not wired to a caller**
 
-`attribute.rs` currently guesses per-line artist attribution from *text* via an
-LLM. Audio diarization (speaker embeddings + clustering) actually knows who is
-rapping. On-brand for the duo/feature-heavy library this app targets, but the
-models are larger and the payoff is unproven. Late phase, or never.
+`attribute.rs` guesses per-line artist attribution from *text* via an LLM.
+Audio diarization (speaker embeddings + clustering) actually knows who is
+singing. This was "late phase, or never" as written — done sooner than that,
+2026-08-22, once a viable model was found and verified rather than assumed.
+
+**The model problem this section worried about was real.** Unlike Whisper
+(`onnx-community`'s authoritative export), no first-party ONNX speaker-
+embedding export exists — only small, zero-download community re-uploads.
+Two candidates were inspected: a SpeechBrain ECAPA-TDNN export (needs an
+opaque auxiliary binary to reproduce its exact feature preprocessing) and an
+export of the ResNet34 backbone from `pyannote/wespeaker-voxceleb-resnet34-LM`
+— the same model pyannote's own diarization pipeline uses — whose Kaldi-fbank
+recipe is fully specified inline on the card. The second was picked, actually
+downloaded, and run end-to-end before being pinned (`models.rs`'s
+`DIARIZATION_FILES`, real SHA-256, not copied from the card).
+
+**What's built and tested:**
+- `sidecar/src/fbank.rs` — the Kaldi-fbank front end the model requires
+  (frame/hop, hamming window, `round_to_power_of_two`, preemphasis, per-
+  utterance mean subtraction), unit-tested for shape and framing correctness.
+- `sidecar/src/diarize.rs` — loads the pinned ONNX model, embeds fixed
+  windows of audio, greedy single-pass clustering by cosine similarity
+  (capped at `MAX_SPEAKERS`, mirroring `attribute.rs::MAX_ARTISTS`).
+  `diarize_real_model_produces_sane_embeddings` (`#[ignore]`d, needs the real
+  model on disk) ran the actual pinned model: deterministic output, and a
+  same-signal pair scored a clearly higher cosine similarity than a
+  different-signal pair — real evidence the graph and front end agree with
+  each other, not proof this separates two real singing voices in a mix.
+- `inference-protocol`: `Request::Diarize` / `Response::Diarized` /
+  `Stage::Diarizing` / `SpeakerSpan`, protocol version bumped to 2.
+- Host: `inference::diarize` (mirrors `inference::transcribe`), a
+  `diarize_local_file` Tauri command on its own Inference-lane job, gated by
+  the existing `model_consent` flow against its own independent model file
+  (`models::ensure_diarization`) — kept separate from the Whisper/VAD set so
+  the existing consent prompt's "Whisper + a voice detector" copy stays
+  accurate for everyone who never touches this feature.
+- `attribute::refine_with_diarization` — fills LLM-unresolved (`-1`) lines
+  from the majority vote of already-attributed lines sharing that line's
+  diarization cluster. Pure and unit-tested; never overwrites a confident
+  answer.
+
+**Not done: nothing calls any of this automatically yet.** `resolve_attribution`
+fires off lyric text alone, at the point lyrics are fetched — before playback,
+before any audio exists. Diarization needs raw audio, which today only exists
+in this pipeline when a song needs transcription (no synced lyrics found).
+Wiring diarization into the common case (an already-synced song) needs audio
+capture to happen for attribution's sake too, not only transcription's — a
+real, scoped next step, not a stub. `diarize_local_file` is callable by hand
+in the meantime against any local file.
 
 ---
 
@@ -343,9 +388,9 @@ never calls the command, keeps working unchanged.
 | **2** ✅ | Speculative precompute on `Next`/`Idle`. Generalises the existing `presync` path from paste-a-list to automatic. | Low | **Yes — songs start instantly** |
 | **3** ✅ | Inference sidecar: `ort`, mmap PCM transfer, framed stdio, **Silero VAD + Whisper** (word-level, DTW-aligned), models download and verify themselves, SQLite journal, **native loopback recording** so SMTC playback reaches the same pipeline (§7.3–7.7, §7.10). Demucs is the one thing still only in the WebView, which is why `whisper.js` stays. | Medium — new binary, model loading, new IPC protocol | Yes — faster, no stutter, fewer hallucinations |
 | **4** ✅ | Binary / derived audio IPC. **Profiled; both fixes rejected** — the cost was 0.038% of a core, not 1.5–5%, and Tauri's binary channel is slower than its eval-based `emit` at this size. Shipped instead: a waveform demand gate, 2179 → 804 B/frame. See §6 and §7.9. | Low, unproven value | No |
-| **5** 🔶 | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built and wired end to end** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). Unverified against the live AcoustID service, which needs a free key nobody has registered yet; the MusicBrainz half *is* verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
+| **5** ✅ | Fingerprinting → AcoustID (5.1). Fixes browser metadata. **Built, wired, and now called for real** — `fingerprint.rs`, `acoustid.rs`, `musicbrainz.rs`, hooked into the transcription path (§7.11). A key was entered 2026-08-22 and the live round trip passed; both halves are now verified live. | Medium — new network dependency, needs an AcoustID API key | **Yes — correct lyrics on YouTube** |
 | **6** ✅ | DSP suite: **beat tracking (5.3) done** — Ellis DP tracker, one global tempo, real beat positions (§7.12). **Key (5.5) done** — chroma + Krumhansl-Schmuckler, tempo chip and palette tint (§7.13). **Structure (5.4) done** — Foote novelty over the same chroma, feeding the heat map's existing section naming (§7.14). **Loudness (5.6) done** — EBU R128 integrated loudness driving a per-track gain on the live envelope (§7.15). Pure Rust, incremental. | Low each | Yes — visuals |
-| **7** 🔶 | Library indexing (5.7) — **done (§7.16):** persisted watch-folder list, background rescan, and Idle-lane pre-analysis (beat map, key, structure, loudness) of everything it finds. **Not done:** diarization (5.8, gated on 3 and 6 landing well — they have). | Medium / high | Yes — a watched folder survives a restart and pre-analyses itself in the background |
+| **7** 🔶 | Library indexing (5.7) — **done (§7.16):** persisted watch-folder list, background rescan, and Idle-lane pre-analysis (beat map, key, structure, loudness) of everything it finds. Diarization (5.8) — **backend built and verified against the real pinned model 2026-08-22; not wired to a live caller** (see §5.8). | Medium / high | Yes — a watched folder survives a restart and pre-analyses itself in the background |
 
 Phase 1 is worth doing on its own merits even if nothing after it ships — it is
 a strict improvement over five uncoordinated threads.
@@ -880,15 +925,18 @@ lowers every score behind a perfectly successful HTTP 200. **MusicBrainz is
 verified against the live service** (`a_real_recording_resolves`, `#[ignore]`d
 — it returns `Queen / Bohemian Rhapsody / 355s`).
 
-**AcoustID itself has never been called.** It needs a free application key
-from acoustid.org, entered in the 🔑 panel as `ACOUSTID_API_KEY`; without one
-`available()` is false and none of this code runs, so the app behaves exactly
-as it did before. `acoustid::tests::a_real_lookup_answers` is the one-command
-proof once a key exists — it deliberately fingerprints synthetic audio that
-matches nothing, so it tests that the request is *accepted* and the response
-parses without depending on any particular song being in the index. Until that
-has been run, treat this phase as plausible rather than proven; it is the same
-standing rule the rest of this document applies.
+**AcoustID has now been called for real (2026-08-22).** A free application key
+was entered — `ACOUSTID_API_KEY` in `keys.json`, same mechanism the 🔑 panel
+writes — and `acoustid::tests::a_real_lookup_answers` passed against the live
+service: it deliberately fingerprints synthetic audio that matches nothing, so
+a pass proves the request is *accepted* and the response parses, without
+depending on any particular song being in the index. `available()` is true on
+this install from the next launch onward. **Still open:** that test proves the
+request/response shape works, not that a real recording's fingerprint returns
+a correct, confident match — nobody has run the full loopback-capture →
+fingerprint → AcoustID → MusicBrainz chain against a real song playing through
+a browser tab yet. Treat *that* end-to-end path as the remaining plausible-not-
+proven piece, not the API call itself.
 
 ### 7.12 Phase 6, part 1: the beat grid, and the tempo bug it closes
 
@@ -1164,8 +1212,11 @@ nothing is pre-analysed until the moment it's actually played.
   an "analysed/found" count, and a remove control, refreshed on
   `library-changed` while the panel is open.
 
-**Not done:** diarization (5.8) remains unstarted and still exploratory per
-§5.8's own description — Phase 7's only remaining piece.
+**Not done:** diarization (5.8) — the backend (fbank front end, ONNX embedding,
+clustering, the IPC/host wiring, a callable Tauri command) is built and
+verified against the real pinned model; what's missing is a live caller, since
+attribution's own trigger point runs before any audio exists for most songs.
+See §5.8 for the exact gap. Phase 7's only remaining piece.
 
 ---
 
@@ -1186,7 +1237,7 @@ this app:
 | ~~chromaprint-next bit-identical, ~4% faster than C~~ | **Not adopted.** §7.11 shipped `rusty-chromaprint` instead: `chromaprint-next` is at 0.1.0 and its docs.rs build 404s, while `rusty-chromaprint` 0.3.0 carries the `FingerprintCompressor` AcoustID requires. Both are pure Rust, which was the actual requirement. |
 | The fingerprint survives a time shift | **Measured** on this app — `fingerprint::tests::the_fingerprint_follows_the_content_not_the_clock` matches a clip against a copy of itself offset by 2 s. |
 | A MusicBrainz recording MBID resolves to a canonical credit | **Measured** against the live service (`musicbrainz::tests::a_real_recording_resolves`). |
-| An AcoustID lookup returns anything at all | **Never run.** No key has been registered — see §7.11. |
+| An AcoustID lookup returns anything at all | **Run for real, 2026-08-22** — `acoustid::tests::a_real_lookup_answers` passed against the live service with a real key. Proves the request/response shape; a real song's fingerprint returning a *correct* match is still unconfirmed — see §7.11. |
 | ~~Audio IPC costs 1.5–5% of the main thread~~ | **Withdrawn.** Was an extrapolation from a published `JSON.parse` benchmark; measurement put it at 0.038% of one core — see §6. |
 | Audio IPC costs 0.38 ms per second of main thread | **Measured** on V8 (node 24), 200k iterations, median of 7 runs, unique script per frame. Excludes WebView2's out-of-process `ExecuteScript` overhead, which is not measurable from a node harness. |
 | Tauri `Channel` raw frames are slower than `emit` at this size | **Measured** (0.0030 vs 0.0023 ms/frame) and **read from source** (`channel.rs`: a JSON number array under 1 KB, a `fetch` round trip over it). |

@@ -144,6 +144,15 @@
     reportJobs: (payload) => call('report_jobs', { payload }),
     reportClientError: (message) => call('report_client_error', { message }),
     answerModelConsent: (consent, remember) => call('answer_model_consent', { consent, remember }),
+    getModelConsentStatus: () => call('get_model_consent_status', {}, { decided: false, consented: false }),
+    /* Speaker diarization (ROADMAP.md §5.8) — not called from anywhere in the
+       renderer yet; no UI surfaces "who is singing" from audio today. Exposed
+       so it is callable (devtools, or a future panel) without a backend
+       round trip to add later. Progress: 'diarize-progress' events; result:
+       a 'diarized' event carrying {track, spans}. */
+    diarizeLocalFile: (track, path) => call('diarize_local_file', { track, path }, { status: 'error', message: 'unavailable' }),
+    onDiarizeProgress: (cb) => on('diarize-progress', cb),
+    onDiarized: (cb) => on('diarized', cb),
     openCrashLog: () => call('open_crash_log', {}, { status: 'error', message: 'unavailable' }),
     setCrashReporting: (enabled) => call('set_crash_reporting', { enabled }),
     artworkCandidates: (track) => call('artwork_candidates', { track }, { candidates: [] }),
@@ -193,6 +202,16 @@
         if (!window.Whisper) {
           await report({ stage: 'error', message: 'speech engine unavailable' });
           return { status: 'error' };
+        }
+        // Unlike the native sidecar (gated by model_consent::allow before its
+        // own download), this path fetches its own models independently and
+        // had no gate at all — the renderer's ensureModelConsent asks (or
+        // silently honours an already-decided answer) before either model
+        // downloads anything. Defensive window check: a harness that loads
+        // this shim without renderer.js would otherwise throw here.
+        if (window.ensureModelConsent && !(await window.ensureModelConsent())) {
+          await report({ stage: 'model-declined' });
+          return { status: 'declined' };
         }
         await report({ stage: 'starting' });
         let pcm = payload.pcm;

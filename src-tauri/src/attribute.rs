@@ -151,6 +151,64 @@ pub fn attribute_lines(cue_texts: &[String], title: &str, artist: &str) -> Optio
     Some((lineup, smooth_runs(singers, 2)))
 }
 
+/// Fill in lines the LLM left at -1 (unknown/shared) using the audio's own
+/// diarization clusters (ROADMAP.md §5.8, `sidecar/src/diarize.rs`) — the
+/// text-based guess above knows the lineup's NAMES but not who is actually
+/// singing; diarization knows who is singing but only as anonymous cluster
+/// numbers. Combined: for each unresolved line, look at which artist indices
+/// the LLM already assigned to OTHER lines sharing this line's diarization
+/// cluster, and take the majority; a cluster with no confidently-attributed
+/// line anywhere in it is left at -1, same as before.
+///
+/// `line_cluster` is one diarization cluster id per line — the caller's job
+/// to derive from `SpeakerSpan`s and each cue's time range (whichever cluster
+/// covers most of the line), since that mapping needs the cue timings this
+/// function does not take. `None` for a line diarization said nothing about
+/// (e.g. shorter than one embedding window).
+///
+/// Not yet wired to a live caller: diarization needs raw audio, and today
+/// only songs that need transcription (no synced lyrics found) ever have
+/// audio in hand at the point attribution runs (`resolve_attribution`
+/// fires off lyric text alone, before playback). Wiring this in for an
+/// already-synced song needs that capture to happen for attribution's sake
+/// too, not only transcription's — a real next step, not a stub.
+// Not yet called from anywhere — see the doc comment above for why. Same
+// shape as genius.rs's module-level allow: kept ready, not deleted, because
+// deleting it would lose the (tested) hard part before the easy wiring step
+// exists to use it.
+#[allow(dead_code)]
+pub fn refine_with_diarization(singers: &[i64], line_cluster: &[Option<u32>]) -> Vec<i64> {
+    if singers.len() != line_cluster.len() {
+        return singers.to_vec(); // shapes disagree; refuse rather than guess
+    }
+
+    // One majority vote per cluster, from lines the LLM already resolved.
+    let mut votes: std::collections::HashMap<u32, std::collections::HashMap<i64, u32>> = std::collections::HashMap::new();
+    for (&singer, &cluster) in singers.iter().zip(line_cluster) {
+        if singer < 0 {
+            continue;
+        }
+        if let Some(c) = cluster {
+            *votes.entry(c).or_default().entry(singer).or_default() += 1;
+        }
+    }
+    let majority: std::collections::HashMap<u32, i64> = votes
+        .into_iter()
+        .filter_map(|(cluster, counts)| counts.into_iter().max_by_key(|(_, n)| *n).map(|(singer, _)| (cluster, singer)))
+        .collect();
+
+    singers
+        .iter()
+        .zip(line_cluster)
+        .map(|(&singer, &cluster)| {
+            if singer >= 0 {
+                return singer;
+            }
+            cluster.and_then(|c| majority.get(&c).copied()).unwrap_or(-1)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +229,52 @@ mod tests {
         // artist_count 2 → 5 and "x" become -1.
         assert_eq!(normalise_singers(5, &v, 2), Some(vec![0, 1, -1, -1, -1]));
         assert_eq!(normalise_singers(4, &v, 2), None); // length mismatch
+    }
+
+    #[test]
+    fn refine_fills_an_unknown_line_from_its_clusters_majority() {
+        // Lines 0,1 confidently attributed to artist 0, both in cluster 5.
+        // Line 2 is unknown but shares cluster 5 — should inherit artist 0.
+        let singers = vec![0, 0, -1];
+        let clusters = vec![Some(5), Some(5), Some(5)];
+        assert_eq!(refine_with_diarization(&singers, &clusters), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn refine_never_overwrites_an_already_confident_line() {
+        let singers = vec![0, 1];
+        let clusters = vec![Some(9), Some(9)]; // same cluster, disagreeing labels
+        assert_eq!(refine_with_diarization(&singers, &clusters), vec![0, 1], "existing LLM answers must not be overwritten");
+    }
+
+    #[test]
+    fn refine_leaves_a_cluster_with_no_confident_line_at_unknown() {
+        let singers = vec![-1, -1];
+        let clusters = vec![Some(1), Some(1)];
+        assert_eq!(refine_with_diarization(&singers, &clusters), vec![-1, -1]);
+    }
+
+    #[test]
+    fn refine_leaves_a_line_with_no_cluster_at_unknown() {
+        let singers = vec![0, -1];
+        let clusters = vec![Some(1), None];
+        assert_eq!(refine_with_diarization(&singers, &clusters), vec![0, -1]);
+    }
+
+    #[test]
+    fn refine_takes_the_majority_when_a_clusters_known_lines_disagree() {
+        // Cluster 2 has two lines attributed to artist 0 and one to artist 1;
+        // the unknown line should inherit the majority, 0.
+        let singers = vec![0, 0, 1, -1];
+        let clusters = vec![Some(2), Some(2), Some(2), Some(2)];
+        assert_eq!(refine_with_diarization(&singers, &clusters)[3], 0);
+    }
+
+    #[test]
+    fn refine_refuses_mismatched_lengths_rather_than_guessing() {
+        let singers = vec![0, -1];
+        let clusters = vec![Some(1)];
+        assert_eq!(refine_with_diarization(&singers, &clusters), singers);
     }
 
     #[test]

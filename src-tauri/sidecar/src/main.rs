@@ -16,7 +16,9 @@
 //! there that is not a frame corrupts the stream, so all logging goes to
 //! stderr, which the host drains separately.
 
+mod diarize;
 mod dtw;
+mod fbank;
 mod mel;
 mod pcm;
 mod priority;
@@ -28,17 +30,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use inference_protocol::{read_frame, write_frame, Cue, Request, Response, Span, Stage, PROTOCOL_VERSION};
+use inference_protocol::{read_frame, write_frame, Cue, Request, Response, SpeakerSpan, Span, Stage, PROTOCOL_VERSION};
 
-/// Everything the worker needs for one transcription.
-struct Job {
-    job_id: u64,
-    pcm_path: String,
-    sample_rate: u32,
-    model_dir: String,
-    language: Option<String>,
-    vad: bool,
-    cancel: Arc<AtomicBool>,
+/// Everything the worker needs for one job. Two variants rather than two
+/// channels: both need the same "concurrency 1 on a dedicated worker thread"
+/// property (a second ONNX graph loaded at once roughly doubles an already
+/// large footprint), and one channel is the simplest way to guarantee it.
+enum Job {
+    Transcribe {
+        job_id: u64,
+        pcm_path: String,
+        sample_rate: u32,
+        model_dir: String,
+        language: Option<String>,
+        vad: bool,
+        cancel: Arc<AtomicBool>,
+    },
+    Diarize {
+        job_id: u64,
+        pcm_path: String,
+        sample_rate: u32,
+        model_dir: String,
+        cancel: Arc<AtomicBool>,
+    },
 }
 
 /// stdout, shared: the reader thread answers `Hello` and `Shutdown` while the
@@ -108,7 +122,16 @@ fn main() {
             Request::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad } => {
                 let cancel = Arc::new(AtomicBool::new(false));
                 *current.lock().unwrap() = Some((job_id, Arc::clone(&cancel)));
-                let job = Job { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel };
+                let job = Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel };
+                if tx.send(job).is_err() {
+                    send(&out, &Response::Error { job_id, message: "inference worker is gone".into() });
+                    break;
+                }
+            }
+            Request::Diarize { job_id, pcm_path, sample_rate, model_dir } => {
+                let cancel = Arc::new(AtomicBool::new(false));
+                *current.lock().unwrap() = Some((job_id, Arc::clone(&cancel)));
+                let job = Job::Diarize { job_id, pcm_path, sample_rate, model_dir, cancel };
                 if tx.send(job).is_err() {
                     send(&out, &Response::Error { job_id, message: "inference worker is gone".into() });
                     break;
@@ -148,8 +171,27 @@ fn runtime_description() -> String {
 }
 
 fn run_job(job: Job, out: &Out) {
-    let Job { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel } = job;
+    match job {
+        Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel } => {
+            run_transcribe_job(job_id, pcm_path, sample_rate, model_dir, language, vad, cancel, out)
+        }
+        Job::Diarize { job_id, pcm_path, sample_rate, model_dir, cancel } => {
+            run_diarize_job(job_id, pcm_path, sample_rate, model_dir, cancel, out)
+        }
+    }
+}
 
+#[allow(clippy::too_many_arguments)]
+fn run_transcribe_job(
+    job_id: u64,
+    pcm_path: String,
+    sample_rate: u32,
+    model_dir: String,
+    language: Option<String>,
+    vad: bool,
+    cancel: Arc<AtomicBool>,
+    out: &Out,
+) {
     if sample_rate != pcm::REQUIRED_SAMPLE_RATE {
         send(
             out,
@@ -209,6 +251,65 @@ fn run_job(job: Job, out: &Out) {
         Ok(cues) => {
             eprintln!("[sidecar] job {job_id}: {} cue(s)", cues.len());
             send(out, &Response::Result { job_id, cues });
+        }
+        Err(message) => send(out, &Response::Error { job_id, message }),
+    }
+}
+
+/// Speaker diarization: embed the whole clip in overlapping windows and
+/// cluster them (`diarize.rs`). Much simpler than transcription — no VAD
+/// pass, no language, no decoder loop — because the model only ever sees
+/// whichever window it is handed; the "song" structure lives entirely in how
+/// those windows get clustered afterwards.
+fn run_diarize_job(job_id: u64, pcm_path: String, sample_rate: u32, model_dir: String, cancel: Arc<AtomicBool>, out: &Out) {
+    if sample_rate != pcm::REQUIRED_SAMPLE_RATE {
+        send(
+            out,
+            &Response::Error {
+                job_id,
+                message: format!("PCM is {sample_rate} Hz; this expects {} Hz (the host resamples)", pcm::REQUIRED_SAMPLE_RATE),
+            },
+        );
+        return;
+    }
+
+    let audio = match pcm::Pcm::open(std::path::Path::new(&pcm_path)) {
+        Ok(a) => a,
+        Err(e) => {
+            send(out, &Response::Error { job_id, message: e });
+            return;
+        }
+    };
+    let samples = audio.samples();
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    eprintln!("[sidecar] job {job_id}: diarizing {} samples ({} ms), peak {peak:.4}", audio.len(), audio.duration_ms(sample_rate));
+    if peak < 1e-4 {
+        send(out, &Response::Error { job_id, message: format!("audio is silent (peak {peak:.6}) — nothing to diarize") });
+        return;
+    }
+    if cancel.load(Ordering::SeqCst) {
+        send(out, &Response::Error { job_id, message: "cancelled".into() });
+        return;
+    }
+
+    send(out, &Response::Progress { job_id, stage: Stage::LoadingModel, pct: 0 });
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mut model = match diarize::Diarizer::load(std::path::Path::new(&model_dir), threads) {
+        Ok(m) => m,
+        Err(message) => {
+            send(out, &Response::Error { job_id, message });
+            return;
+        }
+    };
+
+    send(out, &Response::Progress { job_id, stage: Stage::Diarizing, pct: 0 });
+    let started = std::time::Instant::now();
+    match model.diarize(&samples, &|| cancel.load(Ordering::SeqCst)) {
+        Ok(spans) => {
+            eprintln!("[sidecar] job {job_id}: {} speaker span(s) in {:?}", spans.len(), started.elapsed());
+            let spans =
+                spans.into_iter().map(|s| SpeakerSpan { start_ms: s.start_ms, end_ms: s.end_ms, speaker: s.speaker }).collect();
+            send(out, &Response::Diarized { job_id, spans });
         }
         Err(message) => send(out, &Response::Error { job_id, message }),
     }
