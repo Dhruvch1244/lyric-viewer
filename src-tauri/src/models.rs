@@ -124,6 +124,25 @@ const DIARIZATION_FILES: &[ModelFile] = &[
     SILERO_VAD,
 ];
 
+/// Vocal isolation's model (`sidecar/src/demucs.rs`), its own set for the same
+/// reason diarization's is: this is 165MB — **twice the entire speech set** —
+/// and it must not hide behind a prompt whose copy says "Whisper + a voice
+/// detector". It is also fetched only on demand, by a transcription that has
+/// already failed without it, so most installs never see it at all.
+///
+/// `StemSplitio/htdemucs-ft-vocals-onnx`, the model `src/renderer/demucs.js`
+/// already names. Downloaded and run end to end before pinning: the SHA below
+/// is computed from the actual file, and `demucs_fp16_loads_and_runs_one_segment`
+/// confirms this exact artefact loads under the sidecar's ORT.
+const ISOLATION_FILES: &[ModelFile] = &[ModelFile {
+    // Local name deliberately drops `_fp16weights`: it is what the graph *is*,
+    // not how it was quantised, and `Demucs::MODEL_FILE` has to match.
+    name: "htdemucs_ft_vocals.onnx",
+    url: "https://huggingface.co/StemSplitio/htdemucs-ft-vocals-onnx/resolve/2ef0d757d3e226d0da85fb8c71514f464fcabdd0/htdemucs_ft_vocals_fp16weights.onnx",
+    sha256: "0cbe651f535415c9d26a7bb614f7d322dd5a080fa0298f2e50f478030a994dce",
+    size: 165_612_636,
+}];
+
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Make sure every model file in `files` is present and correctly sized,
@@ -174,6 +193,15 @@ pub(crate) fn ensure_diarization(
     ensure(model_dir, DIARIZATION_FILES, on_progress, cancelled)
 }
 
+/// The vocal-isolation model — see `ISOLATION_FILES`.
+pub(crate) fn ensure_isolation(
+    model_dir: &Path,
+    on_progress: impl FnMut(&str, u8),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    ensure(model_dir, ISOLATION_FILES, on_progress, cancelled)
+}
+
 /// Cheap presence check: exists, and is the exact size a correct download
 /// produces. Not a hash check — that only runs once, right after a download,
 /// which is what keeps `ensure` fast enough to call unconditionally.
@@ -196,6 +224,10 @@ pub(crate) fn missing_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
 
 pub(crate) fn missing_diarization_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
     missing(model_dir, DIARIZATION_FILES)
+}
+
+pub(crate) fn missing_isolation_files(model_dir: &Path) -> Vec<(&'static str, u64)> {
+    missing(model_dir, ISOLATION_FILES)
 }
 
 /// Stream one file to disk via a `.part` temp path, verify it, then rename
@@ -274,7 +306,7 @@ mod tests {
     /// real size, unique name, a pinned non-branch URL) — checked together so
     /// adding a third list later cannot forget to extend these.
     fn all_lists() -> Vec<&'static [ModelFile]> {
-        vec![FILES, DIARIZATION_FILES]
+        vec![FILES, DIARIZATION_FILES, ISOLATION_FILES]
     }
 
     #[test]
@@ -307,7 +339,8 @@ mod tests {
             for f in list {
                 let pinned = f.url.contains("608c49e61301901684bc36cac8f74b95ff6b5a8e")
                     || f.url.contains("bfdc0193023f121ea5b3cc7b176dbed570a68a59")
-                    || f.url.contains("edf8e8c67f02ad879326f49af2bd17d56612e88c");
+                    || f.url.contains("edf8e8c67f02ad879326f49af2bd17d56612e88c")
+                    || f.url.contains("2ef0d757d3e226d0da85fb8c71514f464fcabdd0");
                 assert!(pinned, "{} is not fetched from a pinned revision: {}", f.name, f.url);
                 assert!(!f.url.contains("/main/") && !f.url.contains("/master/"), "{} names a moving branch: {}", f.name, f.url);
             }
@@ -333,6 +366,30 @@ mod tests {
         assert_eq!(speech.url, diarization.url);
         assert_eq!(speech.sha256, diarization.sha256);
         assert_eq!(speech.size, diarization.size);
+    }
+
+    #[test]
+    fn the_isolation_model_stands_alone_and_matches_the_sidecar() {
+        // Its 165MB is twice the whole speech set, so it must not ride along
+        // with a prompt that describes Whisper. And the local filename is the
+        // contract with Demucs::MODEL_FILE — a mismatch means the sidecar
+        // downloads it and then cannot find it.
+        assert_eq!(ISOLATION_FILES.len(), 1);
+        assert_eq!(ISOLATION_FILES[0].name, "htdemucs_ft_vocals.onnx");
+        assert!(!FILES.iter().any(|f| f.name == ISOLATION_FILES[0].name));
+        assert!(!DIARIZATION_FILES.iter().any(|f| f.name == ISOLATION_FILES[0].name));
+        assert!(
+            ISOLATION_FILES[0].size > FILES.iter().map(|f| f.size).sum::<u64>(),
+            "if this stops being the biggest download in the app, revisit the consent copy"
+        );
+    }
+
+    #[test]
+    fn missing_isolation_files_lists_the_model_when_absent() {
+        let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-isolation", std::process::id()));
+        let missing = missing_isolation_files(&dir);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0, ISOLATION_FILES[0].name);
     }
 
     #[test]

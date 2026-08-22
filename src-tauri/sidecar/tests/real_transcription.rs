@@ -66,6 +66,7 @@ fn real_speech_is_transcribed_with_word_timing() {
             model_dir,
             language: Some("en".into()),
             vad: true,
+            isolate: false,
         },
     )
     .unwrap();

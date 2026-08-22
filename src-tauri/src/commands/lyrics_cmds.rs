@@ -481,7 +481,7 @@ fn run_native_transcription(
     // instantly if a decision (or nothing missing) is already on record.
     if let Some(models_dir) = crate::inference::model_dir(&app) {
         let missing = crate::models::missing_files(&models_dir);
-        if !crate::model_consent::allow(&app, &missing) {
+        if !crate::model_consent::allow(&app, crate::model_consent::PURPOSE_SPEECH, &missing) {
             let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "model-declined" }));
             return;
         }
@@ -518,6 +518,8 @@ fn run_native_transcription(
 
     let progress_track = track.clone();
     let progress_app = app.clone();
+    // Kept back for the isolation retry below, which needs the same hint.
+    let language_for_retry = language.clone();
     let result = crate::inference::transcribe(&app, job_id, &pcm, language, cancel, move |stage, pct| {
         let _ = progress_app.emit(
             "transcribe-progress",
@@ -531,8 +533,26 @@ fn run_native_transcription(
         }
     }
 
+    // The sidecar found no voice in the mix. That is not a dead end any more:
+    // vocal isolation is the measured fix (0% voiced → 72% on an EDM track,
+    // see sidecar/src/vad.rs), and this is where it gets offered — the model
+    // is a 165MB download, and asking about that is a host job.
+    let result = match result {
+        Ok(crate::inference::Outcome::NeedsIsolation) => {
+            match retry_with_isolation(&app, &track, &pcm, language_for_retry, cancel) {
+                Some(outcome) => outcome,
+                None => return, // declined, cancelled, or already reported
+            }
+        }
+        other => other,
+    };
+
     match result {
-        Ok(cues) => {
+        Ok(crate::inference::Outcome::NeedsIsolation) => {
+            // Only reachable if the retry itself asked again, which it cannot.
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
+        }
+        Ok(crate::inference::Outcome::Cues(cues)) => {
             let cues = crate::inference::to_lyric_cues(cues);
             if cues.is_empty() {
                 let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "empty" }));
@@ -611,6 +631,80 @@ fn identify_from_audio(app: &AppHandle, track: &Value, pcm: &[f32]) -> Option<cr
     }
 }
 
+/// Second attempt at a transcription, with the vocal separated from the mix.
+///
+/// Reached only when the first attempt answered `NeedsIsolation` — the VAD
+/// found no voice in the mix, which on a sung track over dense production says
+/// more about Silero than about the audio (`sidecar/src/vad.rs` has the
+/// numbers: 0% voiced becomes 72% once the vocal is separated).
+///
+/// Everything expensive is gated behind a real decision. The model is 165MB —
+/// twice the whole speech set — so it gets its own consent purpose rather than
+/// riding in on one the user answered about Whisper. Declining is remembered,
+/// and costs nothing on any future track.
+///
+/// Returns `None` when there is nothing more to do and the caller should stop:
+/// declined, cancelled, or already reported to the renderer.
+fn retry_with_isolation(
+    app: &AppHandle,
+    track: &Value,
+    pcm: &[f32],
+    language: Option<String>,
+    cancel: &CancelToken,
+) -> Option<Result<crate::inference::Outcome, String>> {
+    let models_dir = crate::inference::model_dir(app)?;
+    let missing = crate::models::missing_isolation_files(&models_dir);
+
+    if !crate::model_consent::allow(app, crate::model_consent::PURPOSE_ISOLATION, &missing) {
+        // Say what was lost, not just that something was declined.
+        let _ = app.emit(
+            "transcribe-progress",
+            json!({
+                "track": track,
+                "stage": "error",
+                "message": "could not pick out a voice in this track, and vocal isolation was declined"
+            }),
+        );
+        return None;
+    }
+
+    let progress_app = app.clone();
+    let progress_track = track.clone();
+    let ensured = crate::models::ensure_isolation(
+        &models_dir,
+        |file, pct| {
+            let _ = progress_app.emit(
+                "transcribe-progress",
+                json!({ "track": progress_track, "stage": "downloading-model", "file": file, "pct": pct }),
+            );
+        },
+        &|| cancel.cancelled(),
+    );
+    if let Err(message) = ensured {
+        if message != "cancelled" {
+            log::warn!("vocal isolation model download failed: {message}");
+            let _ = app.emit("transcribe-progress", json!({ "track": track, "stage": "error", "message": message }));
+        }
+        return None;
+    }
+    if cancel.cancelled() {
+        return None;
+    }
+
+    // A fresh job id, because the first sidecar owned (and deleted) the PCM
+    // file keyed to the old one. `transcribe_isolated` writes a new one.
+    let job_id = INFERENCE_JOB_ID.fetch_add(1, Ordering::SeqCst);
+    let progress_app = app.clone();
+    let progress_track = track.clone();
+    log::info!("retrying transcription with vocal isolation");
+    Some(crate::inference::transcribe_isolated(app, job_id, pcm, language, cancel, move |stage, pct| {
+        let _ = progress_app.emit(
+            "transcribe-progress",
+            json!({ "track": progress_track, "stage": format!("{stage:?}").to_lowercase(), "pct": pct }),
+        );
+    }))
+}
+
 /* -------------------------------------------------- diarization --- */
 
 /// Diarize a local audio file: who is singing, from the audio itself
@@ -676,7 +770,7 @@ impl Runnable for DiarizeJob {
             return;
         };
         let missing = crate::models::missing_diarization_files(&models_dir);
-        if !crate::model_consent::allow(&app, &missing) {
+        if !crate::model_consent::allow(&app, crate::model_consent::PURPOSE_DIARIZATION, &missing) {
             let _ = app.emit("diarize-progress", json!({ "track": track, "stage": "model-declined" }));
             return;
         }
@@ -870,7 +964,7 @@ impl Runnable for ResumeTranscribeJob {
 
         if let Some(models_dir) = crate::inference::model_dir(&app) {
             let missing = crate::models::missing_files(&models_dir);
-            if !crate::model_consent::allow(&app, &missing) {
+            if !crate::model_consent::allow(&app, crate::model_consent::PURPOSE_SPEECH, &missing) {
                 let _ = std::fs::remove_file(&job.pcm_path);
                 return;
             }
@@ -888,7 +982,15 @@ impl Runnable for ResumeTranscribeJob {
         let result = crate::inference::transcribe_existing_pcm(&app, job_id, pcm_path, job.language.clone(), cancel, |_, _| {});
 
         match result {
-            Ok(cues) => {
+            Ok(crate::inference::Outcome::NeedsIsolation) => {
+                // Deliberately not retried here. A resumed job runs at startup
+                // with no song on screen and nobody watching, so prompting for
+                // a 165MB download out of nowhere would be the wrong moment —
+                // and its answer would attach to a track the user is not
+                // playing. Playing the song again offers it properly.
+                log::info!("resumed transcription for {} found no voice in the mix; leaving it", job.track_key);
+            }
+            Ok(crate::inference::Outcome::Cues(cues)) => {
                 let cues = crate::inference::to_lyric_cues(cues);
                 if cues.is_empty() {
                     log::info!("resumed transcription for {} produced no cues", job.track_key);

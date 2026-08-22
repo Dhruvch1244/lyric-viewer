@@ -80,6 +80,7 @@ fn transcribe(job_id: u64, path: &std::path::Path) -> Request {
         model_dir: std::env::temp_dir().to_string_lossy().into_owned(),
         language: Some("en".into()),
         vad: true,
+        isolate: false,
     }
 }
 
@@ -181,6 +182,7 @@ fn a_bad_sample_rate_is_refused_before_the_file_is_touched() {
         model_dir: String::new(),
         language: None,
         vad: false,
+        isolate: false,
     });
     match s.recv() {
         Response::Error { job_id, message } => {

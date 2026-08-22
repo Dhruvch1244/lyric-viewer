@@ -4818,6 +4818,12 @@ window.player.onTranscribeProgress((data) => {
   // in the UI. 'model-declined' fires when the model-consent modal
   // (onModelConsentNeeded, below) is answered no.
   const WORK = {
+    // 'isolatingvocals' is Stage::IsolatingVocals lowercased by the backend's
+    // `format!("{stage:?}")`, same as every other stage name here. It only
+    // fires on the retry after the speech detector found nothing in the mix,
+    // and it is minutes of work on a long track — going silent for that long
+    // is what makes an app look hung.
+    isolatingvocals: 'separating the vocals',
     'downloading-model': 'downloading speech model', transcribing: 'transcribing',
     identifying: 'identifying the song', identified: null,
     aligning: 'aligning words', aligned: null, 'align-weak': null,
@@ -4847,6 +4853,14 @@ window.player.onTranscribeProgress((data) => {
       break;
     case 'starting':
       setStatus('transcribing the last song…');
+      break;
+    case 'isolatingvocals':
+      // Says why it is doing something slow that was not asked for.
+      setStatus(
+        typeof data.pct === 'number'
+          ? `separating the vocals — ${data.pct}%`
+          : 'no voice found in the mix — separating the vocals…'
+      );
       break;
     case 'relanguage':
       setStatus('sounds Hindi — re-transcribing properly…');
@@ -4929,13 +4943,33 @@ function openModelConsentPanel(data) {
   const files = (data && data.files) || [];
   const total = data && data.totalBytes ? humanBytes(data.totalBytes) : null;
   if (els.modelConsentBody) {
-    els.modelConsentBody.textContent = total
-      ? `Auto-transcribing an unsynced song needs a one-time ${total} download ` +
-        `(Whisper + a voice detector, ${files.length} file${files.length === 1 ? '' : 's'}). ` +
-        `Cached after this — every song after the first uses it instantly, no more asking.`
-      : `Auto-transcribing an unsynced song needs a one-time model download ` +
-        `(Whisper + a voice detector). Cached after this — every song after the ` +
-        `first uses it instantly, no more asking.`;
+    /*
+      The copy has to match what is actually being fetched. There are three
+      purposes now and their sizes are not comparable — the speech set is
+      ~82MB, vocal isolation alone is 165MB — so a single "Whisper + a voice
+      detector" sentence would be a lie for two of them. The backend sends
+      `purpose`; older events without one are speech, which is what the only
+      prompt that existed before this meant.
+    */
+    const purpose = (data && data.purpose) || 'speech';
+    const size = total ? ` ${total}` : '';
+    const count = files.length ? ` (${files.length} file${files.length === 1 ? '' : 's'})` : '';
+    const body = {
+      speech:
+        `Auto-transcribing an unsynced song needs a one-time${size} download ` +
+        `(Whisper + a voice detector)${count}. Cached after this — every song ` +
+        `after the first uses it instantly, no more asking.`,
+      isolation:
+        `No voice could be picked out of this track's mix — that is common for ` +
+        `singing over dense production, and separating the vocal first fixes it. ` +
+        `That needs a one-time${size} download${count}, and it is a big one. ` +
+        `Kept after this, and only ever used on songs the normal pass cannot read.`,
+      diarization:
+        `Working out which artist sings which line from the audio needs a ` +
+        `one-time${size} download${count}. Experimental — it does not yet work ` +
+        `well on dense mixes.`,
+    };
+    els.modelConsentBody.textContent = body[purpose] || body.speech;
   }
   if (els.modelConsentAsk) els.modelConsentAsk.hidden = false;
   if (els.modelConsentLog) els.modelConsentLog.replaceChildren();

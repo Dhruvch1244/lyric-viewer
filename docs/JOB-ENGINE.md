@@ -252,7 +252,40 @@ drive the visuals with equal force. The `ebur128` crate does this directly.
 pre-analyse it in the `Idle` lane, so every local file starts with full
 analysis, beat map, and structure already on disk.
 
-### 5.10 Demucs in the sidecar — **planned, not started**
+### 5.10 Demucs in the sidecar — **built and verified end to end**
+
+> **Done 2026-08-22.** `sidecar/src/demucs.rs`, protocol v3
+> (`Request::Transcribe::isolate`, `Response::NeedsIsolation`,
+> `Stage::IsolatingVocals`), `ISOLATION_FILES` with per-purpose consent, and
+> the retry in `run_native_transcription`. `tests/real_isolation.rs` drives the
+> real binary through both attempts.
+>
+> **The proof:** on the EDM excerpt the first attempt answers `NeedsIsolation`
+> (the VAD hears nothing in the mix), the second isolates and finds **72%
+> voiced — exactly the predicted figure** — and Whisper returns **36 cues of
+> real lyrics** for a track that previously produced none. *"Had everything I
+> ever wanted"*, *"You say to me all the time"* — that is the song.
+>
+> **Two things the run exposed, both recorded in the source rather than
+> smoothed over:**
+>
+> 1. **Isolation ran at ~3.1x realtime (377s for 120s), not the 0.6x
+>    measured.** That is 5x slower than the same model through
+>    `onnxruntime-node` on this machine and 4x slower than this module's own
+>    single-segment smoke test. The fast measurements both used *synthetic*
+>    input; denormal floats from real near-silent audio are the leading
+>    hypothesis and are cheap to check. Unexplained, so it is written down as
+>    unexplained — see `demucs.rs`.
+> 2. **Whisper's repetition guard does not catch phrase-level looping.** The
+>    last window returned "You say to me all the time" ~20 times with
+>    degenerate timestamps and took 119s against 2–9s for the others.
+>    `is_repeating` catches single tokens and short phrases; this is longer
+>    than its window. Pre-existing, not caused by isolation — isolation just
+>    reaches code that had never run on this kind of material.
+>
+> The plan that follows is kept for its reasoning, which held up.
+
+### 5.10a The original plan
 
 The fix §5.9 proves: vocal isolation ahead of the VAD takes an EDM track from
 **0% voiced to 72%**. Everything below is settled by measurement already done;

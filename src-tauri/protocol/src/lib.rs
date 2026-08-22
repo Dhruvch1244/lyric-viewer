@@ -31,7 +31,11 @@ use serde::{Deserialize, Serialize};
 /// (speaker diarization) — additive, but a v1 sidecar has no arm for the new
 /// request variants, so a stale binary left over from a partial upgrade
 /// should be refused rather than sent a request it cannot decode.
-pub const PROTOCOL_VERSION: u16 = 2;
+///
+/// 3: added `Stage::IsolatingVocals`. Adding a variant is additive going one
+/// way only — a v2 host cannot decode a discriminant it has never heard of,
+/// and progress frames are exactly what it would meet it in.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Frames larger than this are treated as corruption rather than honoured.
 /// Without a ceiling, a garbled length prefix asks the reader to allocate up
@@ -85,6 +89,10 @@ pub enum Stage {
     Transcribing,
     /// Running the speaker-embedding model over the clip (diarize.rs).
     Diarizing,
+    /// Separating the vocal from the mix before transcribing (demucs.rs).
+    /// Only ever reached after the VAD found nothing in the mix, and worth
+    /// naming because it is minutes of work on a long track.
+    IsolatingVocals,
 }
 
 /// One contiguous stretch of a clip attributed to the same speaker cluster.
@@ -119,6 +127,16 @@ pub enum Request {
         /// Run the VAD pass first. Off makes the sidecar transcribe the whole
         /// file, which is the useful comparison when diagnosing a bad result.
         vad: bool,
+        /// Separate the vocal from the mix before doing anything else.
+        ///
+        /// Never set on a first attempt. The sidecar answers
+        /// [`Response::NeedsIsolation`] when the VAD finds nothing in the mix,
+        /// and the host re-sends with this on — *after* asking about a 165MB
+        /// download, which is a decision only the host can make. Costs ~0.6x
+        /// realtime, and buys nothing where the VAD already worked, so it is
+        /// strictly a retry.
+        #[serde(default)]
+        isolate: bool,
     },
     /// Speaker diarization (`diarize.rs`) — who is singing, from the audio
     /// rather than guessed from lyric text. No `language`/`vad`: the model
@@ -144,6 +162,14 @@ pub enum Response {
     Progress { job_id: u64, stage: Stage, pct: u8 },
     Result { job_id: u64, cues: Vec<Cue> },
     Diarized { job_id: u64, spans: Vec<SpeakerSpan> },
+    /// The VAD found no voice in the mix, and vocal isolation is the known
+    /// remedy (measured: 0% voiced → 72% on an EDM track — see `vad.rs`).
+    ///
+    /// A distinct answer rather than an error because it is not a failure and
+    /// there is something specific to do about it. The sidecar cannot act on
+    /// it alone: the model is a 165MB download the user has to agree to, and
+    /// consent lives on the host.
+    NeedsIsolation { job_id: u64 },
     Error { job_id: u64, message: String },
     /// Answer to `Shutdown`, so the host can wait for a clean exit instead of
     /// killing the process and hoping nothing was mid-write.
@@ -176,6 +202,7 @@ pub mod response_kind {
     pub const ERROR: u8 = 3;
     pub const BYE: u8 = 4;
     pub const DIARIZED: u8 = 5;
+    pub const NEEDS_ISOLATION: u8 = 6;
 }
 
 impl Framed for Response {
@@ -187,6 +214,7 @@ impl Framed for Response {
             Response::Error { .. } => response_kind::ERROR,
             Response::Bye => response_kind::BYE,
             Response::Diarized { .. } => response_kind::DIARIZED,
+            Response::NeedsIsolation { .. } => response_kind::NEEDS_ISOLATION,
         }
     }
 }
@@ -265,6 +293,7 @@ mod tests {
             sample_rate: 16_000,
             model_dir: "C:\\models".into(),
             language: Some("en".into()),
+            isolate: false,
             vad: true,
         }
     }
@@ -353,6 +382,28 @@ mod tests {
         buf.push(0);
         let err = read_raw_frame(&mut buf.as_slice()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn the_isolation_retry_survives_a_round_trip() {
+        let req = Request::Transcribe {
+            job_id: 9,
+            pcm_path: "C:\\tmp\\song.pcm".into(),
+            sample_rate: 16_000,
+            model_dir: "C:\\models".into(),
+            language: None,
+            vad: true,
+            isolate: true,
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &req).unwrap();
+        assert_eq!(read_frame::<_, Request>(&mut buf.as_slice()).unwrap().unwrap(), req);
+
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &Response::NeedsIsolation { job_id: 9 }).unwrap();
+        let (kind, payload) = read_raw_frame(&mut buf.as_slice()).unwrap().unwrap();
+        assert_eq!(kind, response_kind::NEEDS_ISOLATION, "the host routes on this without decoding");
+        assert_eq!(decode::<Response>(&payload).unwrap(), Response::NeedsIsolation { job_id: 9 });
     }
 
     #[test]

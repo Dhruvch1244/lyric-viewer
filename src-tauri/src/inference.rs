@@ -128,9 +128,35 @@ pub(crate) fn transcribe(
     language: Option<String>,
     cancel: &CancelToken,
     progress: impl FnMut(Stage, u8),
-) -> Result<Vec<Cue>, String> {
+) -> Result<Outcome, String> {
     let pcm_path = write_pcm(job_id, samples)?;
-    run_sidecar(app, job_id, pcm_path, language, cancel, progress)
+    run_sidecar(app, job_id, pcm_path, language, false, cancel, progress)
+}
+
+/// What a transcription attempt produced.
+///
+/// `NeedsIsolation` is not a failure — the sidecar found no voice in the mix
+/// and vocal isolation is the measured remedy (0% voiced → 72% on an EDM
+/// track; see `sidecar/src/vad.rs`). It comes back to the host rather than
+/// being handled in the sidecar because acting on it means asking about a
+/// 165MB download, and consent lives here.
+pub(crate) enum Outcome {
+    Cues(Vec<Cue>),
+    NeedsIsolation,
+}
+
+/// Re-run a transcription with vocal isolation first. Only ever called after
+/// `Outcome::NeedsIsolation` and after the model is present and consented to.
+pub(crate) fn transcribe_isolated(
+    app: &AppHandle,
+    job_id: u64,
+    samples: &[f32],
+    language: Option<String>,
+    cancel: &CancelToken,
+    progress: impl FnMut(Stage, u8),
+) -> Result<Outcome, String> {
+    let pcm_path = write_pcm(job_id, samples)?;
+    run_sidecar(app, job_id, pcm_path, language, true, cancel, progress)
 }
 
 /// Run one transcription against a PCM file that already exists on disk —
@@ -149,11 +175,11 @@ pub(crate) fn transcribe_existing_pcm(
     language: Option<String>,
     cancel: &CancelToken,
     progress: impl FnMut(Stage, u8),
-) -> Result<Vec<Cue>, String> {
+) -> Result<Outcome, String> {
     if !pcm_path.is_file() {
         return Err(format!("journalled PCM file is gone: {}", pcm_path.display()));
     }
-    run_sidecar(app, job_id, pcm_path, language, cancel, progress)
+    run_sidecar(app, job_id, pcm_path, language, false, cancel, progress)
 }
 
 /// The shared sidecar dance: spawn, handshake, request, drain responses,
@@ -164,9 +190,10 @@ fn run_sidecar(
     job_id: u64,
     pcm_path: PathBuf,
     language: Option<String>,
+    isolate: bool,
     cancel: &CancelToken,
     mut progress: impl FnMut(Stage, u8),
-) -> Result<Vec<Cue>, String> {
+) -> Result<Outcome, String> {
     let exe = sidecar_path()?;
     let models = model_dir(app).ok_or("no config directory for models")?;
 
@@ -231,6 +258,7 @@ fn run_sidecar(
             model_dir: models.to_string_lossy().into_owned(),
             language,
             vad: true,
+            isolate,
         },
     )
     .map_err(|e| format!("cannot send the transcription request: {e}"))?;
@@ -245,7 +273,8 @@ fn run_sidecar(
         }
         match read_frame::<_, Response>(&mut r) {
             Ok(Some(Response::Progress { stage, pct, .. })) => progress(stage, pct),
-            Ok(Some(Response::Result { cues, .. })) => break Ok(cues),
+            Ok(Some(Response::Result { cues, .. })) => break Ok(Outcome::Cues(cues)),
+            Ok(Some(Response::NeedsIsolation { .. })) => break Ok(Outcome::NeedsIsolation),
             Ok(Some(Response::Error { message, .. })) => break Err(message),
             Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
             Ok(Some(Response::Diarized { .. })) => break Err("sidecar answered a transcription with a diarization result".into()),
@@ -350,7 +379,9 @@ pub(crate) fn diarize(
             Ok(Some(Response::Diarized { spans, .. })) => break Ok(spans),
             Ok(Some(Response::Error { message, .. })) => break Err(message),
             Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
-            Ok(Some(Response::Result { .. })) => break Err("sidecar answered a diarization with a transcription result".into()),
+            Ok(Some(Response::Result { .. })) | Ok(Some(Response::NeedsIsolation { .. })) => {
+                break Err("sidecar answered a diarization with a transcription result".into())
+            }
             Ok(None) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
             Err(e) => break Err(format!("sidecar response stream broke: {e}")),
         }

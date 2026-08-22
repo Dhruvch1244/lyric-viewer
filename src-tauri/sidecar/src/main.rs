@@ -16,6 +16,7 @@
 //! there that is not a frame corrupts the stream, so all logging goes to
 //! stderr, which the host drains separately.
 
+mod demucs;
 mod diarize;
 mod dtw;
 mod fbank;
@@ -44,6 +45,7 @@ enum Job {
         model_dir: String,
         language: Option<String>,
         vad: bool,
+        isolate: bool,
         cancel: Arc<AtomicBool>,
     },
     Diarize {
@@ -119,10 +121,10 @@ fn main() {
                 }
                 send(&out, &Response::Ready { version: PROTOCOL_VERSION, runtime: runtime_description() });
             }
-            Request::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad } => {
+            Request::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, isolate } => {
                 let cancel = Arc::new(AtomicBool::new(false));
                 *current.lock().unwrap() = Some((job_id, Arc::clone(&cancel)));
-                let job = Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel };
+                let job = Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, isolate, cancel };
                 if tx.send(job).is_err() {
                     send(&out, &Response::Error { job_id, message: "inference worker is gone".into() });
                     break;
@@ -172,8 +174,8 @@ fn runtime_description() -> String {
 
 fn run_job(job: Job, out: &Out) {
     match job {
-        Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, cancel } => {
-            run_transcribe_job(job_id, pcm_path, sample_rate, model_dir, language, vad, cancel, out)
+        Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, isolate, cancel } => {
+            run_transcribe_job(job_id, pcm_path, sample_rate, model_dir, language, vad, isolate, cancel, out)
         }
         Job::Diarize { job_id, pcm_path, sample_rate, model_dir, cancel } => {
             run_diarize_job(job_id, pcm_path, sample_rate, model_dir, cancel, out)
@@ -189,6 +191,7 @@ fn run_transcribe_job(
     model_dir: String,
     language: Option<String>,
     vad: bool,
+    isolate: bool,
     cancel: Arc<AtomicBool>,
     out: &Out,
 ) {
@@ -233,6 +236,26 @@ fn run_transcribe_job(
 
     send(out, &Response::Progress { job_id, stage: Stage::LoadingModel, pct: 0 });
 
+    // The retry path. `isolate` is never set on a first attempt — the host
+    // turns it on only after this function answered `NeedsIsolation` below and
+    // the user agreed to the download. Whatever comes back replaces the mix
+    // for the rest of the job: the VAD needs the isolated vocal (that is the
+    // whole point), and Whisper does better on it too.
+    //
+    // `samples` is rebound rather than shadowed inside a branch so everything
+    // downstream is oblivious to which of the two it is holding.
+    let samples: std::borrow::Cow<'_, [f32]> = if isolate {
+        match isolate_vocals(job_id, &samples, &model_dir, &cancel, out) {
+            Ok(v) => std::borrow::Cow::Owned(v),
+            Err(message) => {
+                send(out, &Response::Error { job_id, message });
+                return;
+            }
+        }
+    } else {
+        std::borrow::Cow::Borrowed(&samples[..])
+    };
+
     // Find the windows worth transcribing. Everything the model would only
     // hallucinate over is dropped here rather than filtered afterwards.
     let windows = match plan_work(job_id, &samples, &model_dir, vad, &cancel, out) {
@@ -243,19 +266,26 @@ fn run_transcribe_job(
         }
     };
     if windows.is_empty() {
-        // Do not claim the audio has no voice in it. Measured (vad.rs's module
-        // doc): Silero scores a sung hook over dense production flat zero, so
-        // "the detector found nothing" and "there is nothing to find" are not
-        // the same statement and this code cannot tell them apart. The peak
-        // check above already ruled out actual silence, so at this point there
-        // IS audio — it just does not read as speech.
+        // Measured (vad.rs's module doc): Silero scores a sung hook over dense
+        // production flat zero, so "the detector found nothing" and "there is
+        // nothing to find" are not the same statement and this code cannot
+        // tell them apart. The peak check above already ruled out silence, so
+        // there IS audio here — it just does not read as speech.
+        if !isolate {
+            // Say so, and let the host offer the one thing that fixes it.
+            // Not an error: there is a specific, measured remedy, and only
+            // the host can ask about the download it needs.
+            eprintln!("[sidecar] job {job_id}: no voice in the mix; asking the host about vocal isolation");
+            send(out, &Response::NeedsIsolation { job_id });
+            return;
+        }
+        // Already tried it. Now the silence is the honest answer.
         send(
             out,
             &Response::Error {
                 job_id,
-                message: "could not pick out a voice in this track. Sung vocals over a dense mix often \
-                          read as instrumental to the speech detector — turning on vocal isolation in \
-                          settings usually gets it"
+                message: "could not pick out a voice in this track, even after separating the vocal — \
+                          it may genuinely be instrumental"
                     .into(),
             },
         );
@@ -269,6 +299,43 @@ fn run_transcribe_job(
         }
         Err(message) => send(out, &Response::Error { job_id, message }),
     }
+}
+
+/// Separate the vocal from the mix, so the VAD has something it can hear.
+///
+/// **Loaded and dropped before Whisper is loaded at all**, which is the point
+/// of it being its own function: htdemucs is a large graph and Whisper is
+/// another, and holding both would double the peak inside a single job for no
+/// reason — nothing needs the separator once it has produced its samples. The
+/// sidecar is per-job so the OS reclaims everything on exit either way; this
+/// is about the peak *during* the job.
+fn isolate_vocals(
+    job_id: u64,
+    samples: &[f32],
+    model_dir: &str,
+    cancel: &AtomicBool,
+    out: &Out,
+) -> Result<Vec<f32>, String> {
+    send(out, &Response::Progress { job_id, stage: Stage::IsolatingVocals, pct: 0 });
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let started = std::time::Instant::now();
+
+    let vocals = {
+        let mut model = demucs::Demucs::load(std::path::Path::new(model_dir), threads)?;
+        model.isolate(
+            samples,
+            |pct| send(out, &Response::Progress { job_id, stage: Stage::IsolatingVocals, pct }),
+            &|| cancel.load(Ordering::SeqCst),
+        )?
+        // `model` is dropped here, before the caller goes anywhere near Whisper.
+    };
+
+    let peak = vocals.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    eprintln!(
+        "[sidecar] job {job_id}: isolated vocals in {:?} on {threads} thread(s), peak {peak:.4}",
+        started.elapsed()
+    );
+    Ok(vocals)
 }
 
 /// Speaker diarization: embed the whole clip in overlapping windows and
