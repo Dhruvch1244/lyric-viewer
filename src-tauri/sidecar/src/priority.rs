@@ -29,8 +29,45 @@ pub fn deprioritise() {
     }
 }
 
+/// Leave background mode, keeping `BELOW_NORMAL_PRIORITY_CLASS`.
+///
+/// Background mode is two things at once, and only one of them is wanted for
+/// a long CPU-bound stretch. It lowers **I/O and memory** priority, which is
+/// what stops a model load starving the app's own reads — genuinely valuable.
+/// It also pins every thread to the **lowest possible** scheduling priority,
+/// which for a multi-threaded ORT graph is not "polite", it is a throttle.
+///
+/// Measured, which is why this exists: see `priority_costs_throughput` in
+/// `demucs.rs`. Leaving background mode does not make the sidecar rude — the
+/// process is still BELOW_NORMAL, so the app still outranks it for CPU and
+/// the guarantee JOB-ENGINE §2.2 rests on is intact.
+#[cfg(windows)]
+pub fn end_background() {
+    use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, PROCESS_MODE_BACKGROUND_END};
+
+    unsafe {
+        let _ = SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_END);
+    }
+}
+
+/// Re-enter background mode after `end_background`.
+#[cfg(windows)]
+pub fn begin_background() {
+    use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, PROCESS_MODE_BACKGROUND_BEGIN};
+
+    unsafe {
+        let _ = SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_BEGIN);
+    }
+}
+
 #[cfg(not(windows))]
 pub fn deprioritise() {
     // The app is Windows-only (see docs); this exists so the crate still
     // builds and tests on a CI runner that is not.
 }
+
+#[cfg(not(windows))]
+pub fn end_background() {}
+
+#[cfg(not(windows))]
+pub fn begin_background() {}

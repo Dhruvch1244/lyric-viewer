@@ -18,32 +18,40 @@
 //! the live model in the measurement above, which is the verification its own
 //! header still says it is waiting for.
 //!
-//! # Cost, and an unexplained discrepancy worth knowing about
+//! # Cost, and the 11.5x that was hiding in the process priority
 //!
-//! End-to-end run of the real retry (`tests/real_isolation.rs`) on a 120s EDM
-//! excerpt: **isolation took 377s on 12 threads — about 3.1x realtime.** The
-//! VAD then found 72% voiced (exactly the predicted figure) and Whisper turned
-//! a track that produced *nothing* into 36 cues of real lyrics, so the feature
-//! does what it claims.
+//! The first end-to-end run (`tests/real_isolation.rs`, 120s EDM excerpt)
+//! isolated in **377s — about 3.1x realtime**, against 73s for the same audio
+//! through `onnxruntime-node` on the same machine. It was written up here as
+//! probably denormal floats, since the fast comparisons had used synthetic
+//! input. **That was wrong**, and one measurement disproved it: Node had run
+//! the *same real audio* and been fast, so the audio was never the variable.
 //!
-//! But 3.1x is **five times slower than the same model measured through
-//! `onnxruntime-node` on the same machine** (69s for the same 120s), and
-//! roughly four times slower than this module's own single-segment smoke test
-//! (4.7s per 7.8s segment, which would predict ~99s). Same graph, same thread
-//! count, same audio length.
+//! What the fast runs actually had in common was **normal process priority**.
+//! `priority_costs_throughput` times one identical segment in one process
+//! across three states:
 //!
-//! The difference between the fast measurements and the slow one is that both
-//! fast ones ran on *synthetic* input — a sine, and a sine-filled segment. A
-//! fixed-shape ONNX graph should not care about values, with one well-known
-//! exception: denormal floats, which real audio full of near-silence produces
-//! in abundance and which carry a large penalty on x86 unless flush-to-zero is
-//! set. That is a hypothesis, not a finding — nobody has measured it — but it
-//! is the first thing to check, and checking it is cheap.
+//! ```text
+//!   normal priority              4.46s     1.0x
+//!   BELOW_NORMAL only            5.39s     1.2x
+//!   BELOW_NORMAL + background    51.39s   11.5x
+//! ```
 //!
-//! Practical consequence today: a 5-minute song is ~15 minutes of isolation
-//! before Whisper starts. Acceptable for a below-normal background job that
-//! only ever runs on a track that would otherwise get no lyrics at all, and
-//! it is cancellable between segments. Not acceptable to leave unexplained.
+//! `PROCESS_MODE_BACKGROUND_BEGIN` pins every thread to the lowest schedulable
+//! priority. For a saturated ORT thread pool that is not politeness, it is a
+//! throttle — and it costs an order of magnitude, while the BELOW_NORMAL class
+//! that provides the actual "stay out of the app's way" guarantee costs 20%.
+//!
+//! `main.rs`'s `run_job` therefore leaves background mode for the duration of
+//! a job and restores it after. Expected cost after the fix is ~1.2x the
+//! normal-priority figure, i.e. roughly the 0.6x realtime originally measured
+//! through Node, putting a 5-minute song at a few minutes of isolation rather
+//! than fifteen.
+//!
+//! The lesson is the general one this codebase keeps re-learning: the
+//! difference between two measurements is only ever the thing you actually
+//! varied, and "same machine, same graph, same audio" left exactly one
+//! candidate once the audio was ruled out.
 
 use std::path::Path;
 
@@ -323,6 +331,69 @@ mod tests {
         assert_eq!(resample(&s, IN_RATE, IN_RATE), s);
         assert!(resample(&[], IN_RATE, MODEL_RATE).is_empty());
         assert_eq!(resample(&s, 0, MODEL_RATE), s);
+    }
+
+    /// Is background priority what costs isolation 4-5x, or is it the audio?
+    ///
+    /// The question this settles: the real sidecar isolated 120s in 377s,
+    /// while `onnxruntime-node` did the same audio in 73s and this module's
+    /// own smoke test implied ~99s. The difference blamed in the first write-up
+    /// was denormal floats from real audio — but Node ran that same real audio
+    /// and was fast, so the audio cannot be it. What the fast runs have in
+    /// common is **normal process priority**; the sidecar calls
+    /// `priority::deprioritise()`, and `PROCESS_MODE_BACKGROUND_BEGIN` pins
+    /// every thread to the lowest schedulable priority.
+    ///
+    /// Same segment, same process, three states, so nothing but priority
+    /// differs. Run it on an otherwise-idle machine:
+    ///
+    /// ```text
+    /// LYRIC_TEST_MODELS=... cargo test --release -p lyric-inference \
+    ///   --bin lyric-inference -- --ignored priority_costs_throughput --nocapture
+    /// ```
+    #[test]
+    #[ignore = "timing measurement; needs the isolation model and an idle machine"]
+    fn priority_costs_throughput() {
+        let model_dir = std::env::var("LYRIC_TEST_MODELS").expect("set LYRIC_TEST_MODELS");
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let mut d = Demucs::load(Path::new(&model_dir), threads).expect("cannot load demucs");
+
+        // Real-ish content: harmonics plus noise, not a bare sine, so this
+        // cannot be dismissed as a synthetic-input artefact.
+        let segment: Vec<f32> = (0..2 * SEGMENT_SAMPLES)
+            .map(|i| {
+                let t = (i % SEGMENT_SAMPLES) as f32 / MODEL_RATE as f32;
+                let mut s = (t * std::f32::consts::TAU * 220.0).sin() * 0.3;
+                s += (t * std::f32::consts::TAU * 440.0).sin() * 0.15;
+                s += ((i as f32 * 12.9898).sin() * 43758.547).fract() * 0.02;
+                s
+            })
+            .collect();
+
+        let time_it = |label: &str, d: &mut Demucs| {
+            let started = std::time::Instant::now();
+            d.run_segment(&segment).expect("run_segment failed");
+            let elapsed = started.elapsed();
+            println!("{label:<32} {elapsed:?}");
+            elapsed
+        };
+
+        // Warm up, so the first measurement is not paying for lazy init.
+        time_it("warm-up (discarded)", &mut d);
+
+        let normal = time_it("normal priority", &mut d);
+        crate::priority::deprioritise();
+        let background = time_it("BELOW_NORMAL + background", &mut d);
+        crate::priority::end_background();
+        let below_normal = time_it("BELOW_NORMAL only", &mut d);
+
+        println!(
+            "\nbackground is {:.1}x normal; below-normal alone is {:.1}x normal",
+            background.as_secs_f64() / normal.as_secs_f64(),
+            below_normal.as_secs_f64() / normal.as_secs_f64()
+        );
+        // Deliberately no assertion on the ratio: this is a measurement, and a
+        // busy machine would make any threshold flaky. Read the numbers.
     }
 
     /// The one thing that could sink this port: the pinned model is fp16 and

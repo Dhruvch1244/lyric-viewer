@@ -269,13 +269,29 @@ analysis, beat map, and structure already on disk.
 > **Two things the run exposed, both recorded in the source rather than
 > smoothed over:**
 >
-> 1. **Isolation ran at ~3.1x realtime (377s for 120s), not the 0.6x
->    measured.** That is 5x slower than the same model through
->    `onnxruntime-node` on this machine and 4x slower than this module's own
->    single-segment smoke test. The fast measurements both used *synthetic*
->    input; denormal floats from real near-silent audio are the leading
->    hypothesis and are cheap to check. Unexplained, so it is written down as
->    unexplained — see `demucs.rs`.
+> 1. ~~**Isolation ran at ~3.1x realtime**, blamed on denormal floats.~~
+>    **Wrong, and now fixed — it was the process priority.** `onnxruntime-node`
+>    had run the *same real audio* fast, so the audio was never the variable.
+>    Timing one identical segment across three priority states in one process:
+>
+>    | | one segment | vs normal |
+>    |---|---|---|
+>    | normal priority | 4.46s | 1.0x |
+>    | BELOW_NORMAL only | 5.39s | 1.2x |
+>    | **BELOW_NORMAL + `PROCESS_MODE_BACKGROUND_BEGIN`** | **51.39s** | **11.5x** |
+>
+>    Background mode pins every thread to the lowest schedulable priority,
+>    which for a saturated ORT thread pool is a throttle, not politeness — an
+>    order of magnitude, against 20% for the BELOW_NORMAL class that actually
+>    provides the §2.2 guarantee. `run_job` now leaves background mode for the
+>    duration of a job and restores it between jobs, so an idle sidecar stays
+>    maximally polite.
+>
+>    **Result on the same end-to-end test: isolation 377s → 99.2s, whole
+>    transcription 518s → 134s, identical 36 cues.** 0.83x realtime, so a
+>    5-minute song is a few minutes of isolation rather than fifteen. Whisper
+>    got ~4x faster too; it had been paying the same tax on every transcription
+>    this app has ever run.
 > 2. **Whisper's repetition guard does not catch phrase-level looping.** The
 >    last window returned "You say to me all the time" ~20 times with
 >    degenerate timestamps and took 119s against 2–9s for the others.

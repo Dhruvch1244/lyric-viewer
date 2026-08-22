@@ -173,6 +173,31 @@ fn runtime_description() -> String {
 }
 
 fn run_job(job: Job, out: &Out) {
+    /*
+      Leave background mode for the duration of the job, keeping
+      BELOW_NORMAL_PRIORITY_CLASS.
+
+      MEASURED, and it is not a small effect: one Demucs segment takes 4.46s
+      at normal priority, 5.39s at BELOW_NORMAL, and **51.39s under
+      PROCESS_MODE_BACKGROUND_BEGIN — 11.5x**. See
+      `demucs::tests::priority_costs_throughput`. Background mode pins every
+      thread to the lowest schedulable priority, which for a saturated ORT
+      thread pool is a throttle rather than good manners, and on a job that
+      runs for minutes it is the difference between "background work" and
+      "never finishes".
+
+      What is given up is background *I/O* priority during the model load —
+      a few seconds of reads. What is kept is the guarantee that actually
+      matters: BELOW_NORMAL means the app still outranks this process for
+      CPU, which is what JOB-ENGINE §2.2 rests on. Background mode is
+      restored between jobs, so an idle sidecar is still maximally polite.
+
+      (The first write-up of this slowdown blamed denormal floats from real
+      audio. That was wrong and the measurement above is what disproved it —
+      `onnxruntime-node` ran the same real audio fast, so the audio was never
+      the variable. Priority was.)
+    */
+    priority::end_background();
     match job {
         Job::Transcribe { job_id, pcm_path, sample_rate, model_dir, language, vad, isolate, cancel } => {
             run_transcribe_job(job_id, pcm_path, sample_rate, model_dir, language, vad, isolate, cancel, out)
@@ -181,6 +206,7 @@ fn run_job(job: Job, out: &Out) {
             run_diarize_job(job_id, pcm_path, sample_rate, model_dir, cancel, out)
         }
     }
+    priority::begin_background();
 }
 
 #[allow(clippy::too_many_arguments)]
