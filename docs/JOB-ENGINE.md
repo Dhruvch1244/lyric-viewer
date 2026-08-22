@@ -252,6 +252,91 @@ drive the visuals with equal force. The `ebur128` crate does this directly.
 pre-analyse it in the `Idle` lane, so every local file starts with full
 analysis, beat map, and structure already on disk.
 
+### 5.10 Demucs in the sidecar — **planned, not started**
+
+The fix §5.9 proves: vocal isolation ahead of the VAD takes an EDM track from
+**0% voiced to 72%**. Everything below is settled by measurement already done;
+what is left is the port. Written to be picked up cold.
+
+**The design decision that makes this cheap: run it as a RETRY, not a
+pre-pass.** Isolation gives nothing where the VAD already works (rap: p50
+0.967 → 1.000) and costs ~0.6x realtime. So it must not run on the happy path.
+Only when `voiced_spans`/`plan_work` comes back **empty** — today's dead end —
+does the job isolate and try once more. Cost on tracks that already transcribe:
+zero. Tracks that currently fail outright: a minute of CPU and they work.
+
+**Pinned artefact** (downloaded and run 2026-08-22, hash computed from the
+actual file, not the model card):
+
+```text
+repo    StemSplitio/htdemucs-ft-vocals-onnx @ 2ef0d757d3e226d0da85fb8c71514f464fcabdd0
+file    htdemucs_ft_vocals_fp16weights.onnx
+size    165_612_636
+sha256  0cbe651f535415c9d26a7bb614f7d322dd5a080fa0298f2e50f478030a994dce
+```
+
+**The model contract**, copied from `demucs.js` rather than re-derived — that
+file has now been verified end to end (§5.9), so it is the reference:
+
+```text
+input   "mix"    f32 [1, 2, 343980]     planar stereo, 7.8s @ 44100 (round(7.8*44100))
+output  "stems"  flat [4][2][343980]    sources drums,bass,other,vocals — vocals is index 3
+overlap floor(343980/4) = 85995         stride = 257985
+window  linear ramp over `overlap` samples at each end, 1.0 between
+seams   overlap-add with a weight accumulator, then divide by max(weight, 1e-8)
+mono    duplicate to both channels in; average both channels out
+rates   resample 16k → 44100 in, 44100 → 16k out (nearest-neighbour is what the app does)
+```
+
+**Steps**
+
+1. `sidecar/src/demucs.rs`, mirroring `diarize.rs`: `Demucs::load(model_dir,
+   threads)`, `isolate(&mut self, mono16k) -> Result<Vec<f32>, String>`. Pure
+   helpers (`transition_window`, segment padding, overlap-add normalisation)
+   split out so they are unit-testable with no model present — that is where
+   the off-by-one bugs live, exactly as `SpeechGate` is to `vad.rs`.
+2. `models.rs`: `ISOLATION_FILES` as a third set beside `FILES` and
+   `DIARIZATION_FILES`, plus `ensure_isolation`/`missing_isolation_files`.
+   **Its own consent entry** — 165MB is twice the entire speech set (82MB),
+   so it cannot hide behind a prompt whose copy says "Whisper + a voice
+   detector". `model_consent.rs` currently stores one decided/consented pair
+   and needs a key per purpose.
+3. `main.rs`: in `run_transcribe_job`, when `plan_work` returns no windows,
+   emit `Stage::IsolatingVocals`, ask consent, isolate, re-run the VAD on the
+   result, and continue with those spans. **Transcribe the isolated audio, not
+   the mix** — the spans are timestamps into the same timeline either way, but
+   Whisper does better on the isolated vocal too. If the VAD still finds
+   nothing, fall through to today's honest message.
+4. **Load Demucs and Whisper sequentially, never together.** htdemucs is a
+   large graph and the peak matters: isolate, keep only the `Vec<f32>`, drop
+   the session, then load Whisper. The sidecar is per-job so the OS reclaims
+   it regardless, but peak RSS inside one job is ours to control.
+5. Protocol → **v3**: adds `Stage::IsolatingVocals`. Additive, but a v2 host
+   cannot decode a new discriminant and the handshake exists to catch exactly
+   that. Renderer: add the stage to `renderer.js`'s `WORK` map so the `#work`
+   chip says "isolating vocals" instead of going silent for a minute.
+6. Diarization gets the same retry for free once `demucs.rs` exists — but per
+   §5.8 that does **not** make diarization work, so wire it only if it is free.
+
+**Risks, in order**
+
+- **fp16 under the sidecar's ORT.** It runs under `onnxruntime-node` (ORT
+  1.28) and the sidecar is `ort` 2.0.0-rc.13 against the same 1.28, so this is
+  likely fine — but it is the one thing that would sink the port, so load the
+  session and run one segment before writing anything else.
+- **165MB on top of 82MB.** Consent copy has to be honest about the total, and
+  this should stay opt-in-on-demand rather than something a fresh install
+  fetches.
+- **~0.6x realtime.** A 6-minute song is ~3.5 minutes of CPU before Whisper
+  even starts. Acceptable on the Inference lane (below-normal, concurrency 1)
+  and invisible if the `#work` chip reports it, but it must be cancellable
+  between segments like every other long job here.
+
+**How it will be verified** — the harness already exists and the numbers to
+beat are recorded: `LYRIC_TEST_PCM` through `dump_vad_probabilities` must take
+the EDM excerpt from 0% voiced to ~72%, and `real_transcription.rs` should then
+produce actual lyrics for a track that currently produces none.
+
 ### 5.9 The VAD is a speech detector, and that bounds transcription — **measured 2026-08-22**
 
 Found while building §5.8, and worth more than §5.8 is: **Silero does not
