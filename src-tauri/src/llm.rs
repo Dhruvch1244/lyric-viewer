@@ -226,6 +226,13 @@ fn call_anthropic(system: &str, user: &str, schema: &Value) -> Result<Value, Str
 /// Best-effort JSON extraction from a completion that may wrap it in prose or a
 /// ```json fence. `pub(crate)` so `localcli.rs` can reuse it for CLI output,
 /// which has the same no-structured-output problem as the chat APIs below.
+///
+/// **The error carries what was actually received**, and that is the point of
+/// it. A bare "unparseable JSON" is unactionable: the overwhelmingly common
+/// cause is not malformed JSON at all but a tool answering in prose — a usage
+/// limit, a login prompt, a refusal — and every one of those says so plainly
+/// in the text that used to be discarded. Quoting it turns "unparseable JSON"
+/// into "claude said: usage limit reached", which the user can act on.
 pub(crate) fn parse_json_loose(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
@@ -243,7 +250,48 @@ pub(crate) fn parse_json_loose(text: &str) -> Result<Value, String> {
             }
         }
     }
-    Err("unparseable JSON".into())
+    // Streaming CLIs emit one JSON value per line, sometimes after a banner.
+    // Take the last line that parses to an object — the earlier ones are
+    // progress envelopes.
+    if let Some(v) = unfenced
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+        .find(|v| v.is_object())
+    {
+        return Ok(v);
+    }
+    Err(describe_non_json(trimmed))
+}
+
+/// Turn a non-JSON reply into something worth showing a user.
+///
+/// Recognises the handful of plain-text answers a CLI actually gives instead
+/// of JSON. Anything unrecognised is quoted rather than summarised, because a
+/// message nobody anticipated is exactly the one worth seeing verbatim.
+fn describe_non_json(text: &str) -> String {
+    if text.is_empty() {
+        return "returned nothing at all (no output on stdout)".into();
+    }
+    let low = text.to_lowercase();
+    let hint = if low.contains("usage limit") || low.contains("rate limit") || low.contains("quota") {
+        Some("its usage limit is reached — try again later, or set a cloud API key in Settings")
+    } else if low.contains("not logged in") || low.contains("please log in") || low.contains("/login") || low.contains("authentication")
+    {
+        Some("it is not logged in — sign in with that tool once in a terminal, then retry")
+    } else if low.contains("command not found") || low.contains("is not recognized") {
+        Some("the command could not be run — check it is still installed and on PATH")
+    } else {
+        None
+    };
+
+    // One line, collapsed: CLI banners are often several lines of decoration
+    // around one sentence that matters.
+    let snippet: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+    match hint {
+        Some(h) => format!("answered in prose, not JSON — {h}. It said: \"{snippet}\""),
+        None => format!("answered in prose, not JSON. It said: \"{snippet}\""),
+    }
 }
 
 /// Run a structured JSON conversion on the first provider that succeeds.
@@ -301,5 +349,89 @@ pub fn convert(system: &str, user: &str, schema: &Value) -> Result<Value, String
         Err("no LLM provider configured".into())
     } else {
         Err(format!("all providers failed: {}", failures.join(" | ")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_json_parses() {
+        assert_eq!(parse_json_loose(r#"{"a":1}"#).unwrap()["a"], 1);
+    }
+
+    #[test]
+    fn a_fenced_block_parses() {
+        let v = parse_json_loose("```json\n{\"a\":2}\n```").unwrap();
+        assert_eq!(v["a"], 2);
+    }
+
+    #[test]
+    fn json_wrapped_in_prose_parses() {
+        let v = parse_json_loose("Sure! Here you go:\n{\"a\":3}\nHope that helps.").unwrap();
+        assert_eq!(v["a"], 3);
+    }
+
+    #[test]
+    fn nested_objects_survive_the_brace_scan() {
+        // first-{ to last-} has to keep the whole structure, not the inner one.
+        let v = parse_json_loose("noise {\"outer\":{\"inner\":[1,2]}} noise").unwrap();
+        assert_eq!(v["outer"]["inner"][1], 2);
+    }
+
+    #[test]
+    fn a_streaming_cli_envelope_yields_the_last_object() {
+        // Some CLIs print progress objects per line before the real answer.
+        let out = "{\"type\":\"start\"}\n{\"type\":\"progress\"}\n{\"lines\":[\"x\"]}";
+        assert_eq!(parse_json_loose(out).unwrap()["lines"][0], "x");
+    }
+
+    /* -- the failures that used to all say "unparseable JSON" -- */
+
+    #[test]
+    fn a_usage_limit_says_so_and_says_what_to_do() {
+        let e = parse_json_loose("Claude usage limit reached. Your limit will reset at 3pm.").unwrap_err();
+        assert!(e.contains("usage limit is reached"), "{e}");
+        assert!(e.contains("Settings"), "should point at the escape hatch: {e}");
+        assert!(e.contains("reset at 3pm"), "the tool's own words must survive: {e}");
+    }
+
+    #[test]
+    fn a_login_prompt_says_so() {
+        let e = parse_json_loose("You are not logged in. Run /login to continue.").unwrap_err();
+        assert!(e.contains("not logged in"), "{e}");
+    }
+
+    #[test]
+    fn a_missing_command_says_so() {
+        let e = parse_json_loose("'claude' is not recognized as an internal or external command").unwrap_err();
+        assert!(e.contains("could not be run"), "{e}");
+    }
+
+    #[test]
+    fn empty_output_is_distinguished_from_bad_output() {
+        // "printed nothing" and "printed the wrong thing" need different fixes.
+        let e = parse_json_loose("   \n  ").unwrap_err();
+        assert!(e.contains("nothing at all"), "{e}");
+    }
+
+    #[test]
+    fn an_unrecognised_reply_is_quoted_verbatim() {
+        // The whole point: a message nobody anticipated is the one worth seeing.
+        let e = parse_json_loose("I cannot help with that request.").unwrap_err();
+        assert!(e.contains("I cannot help with that request"), "{e}");
+    }
+
+    #[test]
+    fn a_long_reply_is_truncated_rather_than_flooding_the_ui() {
+        let e = parse_json_loose(&"x".repeat(5000)).unwrap_err();
+        assert!(e.len() < 400, "error was {} chars", e.len());
+    }
+
+    #[test]
+    fn multi_line_banners_collapse_to_one_line() {
+        let e = parse_json_loose("Banner\n\n   Something\n   went wrong\n").unwrap_err();
+        assert!(!e.contains('\n'), "errors go into a one-line status chip: {e:?}");
     }
 }

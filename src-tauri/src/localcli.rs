@@ -221,7 +221,11 @@ pub fn call(system: &str, user: &str, schema: &Value) -> Result<Value, String> {
     let (file, args) = (adapter.command)(model.as_deref());
     let prompt = build_prompt(system, user, schema);
     let out = run_cli(&file, &args, RUN_TIMEOUT, &prompt).map_err(|e| format!("{}: {e}", adapter.id))?;
-    crate::llm::parse_json_loose(&out)
+    // Name the tool in the parse failure too. These CLIs exit 0 while
+    // answering in prose — a usage limit, a login prompt — so "unparseable
+    // JSON" with no attribution was the least useful thing this could say
+    // about a completely explicable situation.
+    crate::llm::parse_json_loose(&out).map_err(|e| format!("{}: {e}", adapter.id))
 }
 
 /// Windows npm-global CLIs install as `.cmd`/`.ps1` shims that a direct
