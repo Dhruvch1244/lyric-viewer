@@ -302,9 +302,25 @@ fn run_diarize_job(job_id: u64, pcm_path: String, sample_rate: u32, model_dir: S
         }
     };
 
+    // Voice first. A speaker-embedding model has nothing useful to say about
+    // an instrumental bar, but it does not say nothing — it returns an
+    // unstable vector that clusters as if it were a person. See diarize.rs's
+    // module doc for the run that established this.
+    let voiced = match voiced_spans(job_id, &samples, &model_dir, &cancel, out) {
+        Ok(v) => v,
+        Err(message) => {
+            send(out, &Response::Error { job_id, message });
+            return;
+        }
+    };
+    if voiced.is_empty() {
+        send(out, &Response::Error { job_id, message: "no speech found in this audio".into() });
+        return;
+    }
+
     send(out, &Response::Progress { job_id, stage: Stage::Diarizing, pct: 0 });
     let started = std::time::Instant::now();
-    match model.diarize(&samples, &|| cancel.load(Ordering::SeqCst)) {
+    match model.diarize(&samples, &voiced, &|| cancel.load(Ordering::SeqCst)) {
         Ok(spans) => {
             eprintln!("[sidecar] job {job_id}: {} speaker span(s) in {:?}", spans.len(), started.elapsed());
             let spans =
@@ -313,6 +329,49 @@ fn run_diarize_job(job_id: u64, pcm_path: String, sample_rate: u32, model_dir: S
         }
         Err(message) => send(out, &Response::Error { job_id, message }),
     }
+}
+
+/// The voiced stretches to diarize, or the whole clip if there is no VAD model.
+///
+/// Degrades rather than fails for the same reason `plan_work` does: the
+/// detector is a quality guard, and a missing 2 MB file should make
+/// diarization worse, not impossible. It is a much bigger quality guard here
+/// than it is for transcription, though — without it the intro alone can
+/// invent four speakers — so the fallback says so in the log.
+fn voiced_spans(
+    job_id: u64,
+    samples: &[f32],
+    model_dir: &str,
+    cancel: &AtomicBool,
+    out: &Out,
+) -> Result<Vec<Span>, String> {
+    let clip_ms = (samples.len() as u64 * 1000 / pcm::REQUIRED_SAMPLE_RATE as u64) as u32;
+    let whole = vec![Span { start_ms: 0, end_ms: clip_ms }];
+
+    let mut detector = match vad::SileroVad::load(std::path::Path::new(model_dir)) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[sidecar] job {job_id}: no VAD ({e}); diarizing the whole clip — expect clusters from instrumental passages");
+            return Ok(whole);
+        }
+    };
+
+    send(out, &Response::Progress { job_id, stage: Stage::DetectingSpeech, pct: 0 });
+    let started = std::time::Instant::now();
+    let spans = detector.spans(
+        samples,
+        |pct| send(out, &Response::Progress { job_id, stage: Stage::DetectingSpeech, pct }),
+        &|| cancel.load(Ordering::SeqCst),
+    )?;
+
+    eprintln!(
+        "[sidecar] job {job_id}: VAD found {} span(s), {} ms voiced of {clip_ms} ms ({}%), in {:?}",
+        spans.len(),
+        vad::total_ms(&spans),
+        vad::total_ms(&spans) * 100 / clip_ms.max(1),
+        started.elapsed()
+    );
+    Ok(spans)
 }
 
 /// Load the model and run every window through it.
@@ -381,6 +440,24 @@ fn transcribe(
 }
 
 /// Decide which stretches of the clip to transcribe.
+///
+/// **KNOWN BUG, measured 2026-08-22: this silently refuses a whole genre.**
+/// Silero is a *speech* detector, and sung vocals over dense electronic
+/// production do not read as speech to it. On John Summit / The Chainsmokers
+/// / Ilsey — "ALL THE TIME" (180s, with a clear sung hook) it returns p50
+/// 0.000, p90 0.001, max 0.472 against its 0.5 trigger — **not one voiced
+/// window in the entire track**. Rap survives (79% voiced on a Seedhe Maut
+/// track); singing over a loud full-range master does not.
+///
+/// When that happens `spans` is empty, `plan_windows` returns nothing, and
+/// the caller answers "no speech found in this audio" — so auto-transcription
+/// is impossible for this class of song, and the message blames the audio for
+/// a limitation of the detector. Found while building diarization
+/// (`diarize.rs`, which inherits the same gate); worth more than diarization
+/// is, and not fixed here because the fix is a real decision, not a tweak:
+/// run the app's existing Demucs vocal isolation before the VAD, lower the
+/// trigger for music, or fall back to transcribing the whole clip when the
+/// VAD finds nothing rather than declaring silence.
 ///
 /// With the VAD available this is its speech spans, batched into 30 s windows.
 /// Without it — the model file is missing, or the host asked for `vad: false`

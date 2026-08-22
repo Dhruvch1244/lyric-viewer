@@ -34,3 +34,10 @@ src-tauri/icons/ios/
 # scripts/vendor-sidecar.js for tauri.conf.json's externalBin. Build output
 # with a target triple in the name, not authored source.
 src-tauri/binaries/
+
+# Local audio used for profiling and verification runs (diarization, beat
+# tracking, Whisper). Commercial music — it is somebody else's copyright, this
+# remote is public, and the files are tens of MB each. Nothing in the repo may
+# depend on a specific track being present: point tests at a path via an env
+# var (see sidecar/tests/real_transcription.rs) rather than committing audio.
+songs/

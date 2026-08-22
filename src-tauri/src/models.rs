@@ -79,13 +79,21 @@ const FILES: &[ModelFile] = &[
         sha256: "61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0",
         size: 3_832,
     },
-    ModelFile {
-        name: "silero_vad.onnx",
-        url: "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx",
-        sha256: "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
-        size: 2_327_524,
-    },
+    SILERO_VAD,
 ];
+
+/// Silero VAD, shared by transcription and diarization.
+///
+/// Pulled out as its own const because both model sets need it and pinning
+/// the same file twice invites the two copies drifting to different commits.
+/// `already_present` means whichever feature is used first pays for it and the
+/// other finds it on disk.
+const SILERO_VAD: ModelFile = ModelFile {
+    name: "silero_vad.onnx",
+    url: "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx",
+    sha256: "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+    size: 2_327_524,
+};
 
 /// Speaker diarization's model (`diarize.rs`, sidecar), kept as its own list
 /// rather than folded into `FILES`: diarization is a separate, optional,
@@ -102,12 +110,19 @@ const FILES: &[ModelFile] = &[
 /// no opaque auxiliary binary to reverse-engineer. Downloaded and run
 /// end-to-end (`sidecar/src/diarize.rs`'s `#[ignore]`d live test) before
 /// being pinned here — real SHA-256, not copied from the card.
-const DIARIZATION_FILES: &[ModelFile] = &[ModelFile {
-    name: "speaker-embedding-resnet34.onnx",
-    url: "https://huggingface.co/Alkd/speaker-embedding-onnx/resolve/edf8e8c67f02ad879326f49af2bd17d56612e88c/model.onnx",
-    sha256: "fe9ad5d8200b998ab627916b27e792f03f72b514867f8f60c79fff98fda6e395",
-    size: 26_542_869,
-}];
+/// Silero is in here as well as in `FILES`, and that is load-bearing rather
+/// than duplication: diarization runs the VAD first so it never embeds an
+/// instrumental passage (see `sidecar/src/diarize.rs`), so a user who has only
+/// ever diarized still needs it. Whichever feature runs first downloads it.
+const DIARIZATION_FILES: &[ModelFile] = &[
+    ModelFile {
+        name: "speaker-embedding-resnet34.onnx",
+        url: "https://huggingface.co/Alkd/speaker-embedding-onnx/resolve/edf8e8c67f02ad879326f49af2bd17d56612e88c/model.onnx",
+        sha256: "fe9ad5d8200b998ab627916b27e792f03f72b514867f8f60c79fff98fda6e395",
+        size: 26_542_869,
+    },
+    SILERO_VAD,
+];
 
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -300,18 +315,34 @@ mod tests {
     }
 
     #[test]
-    fn the_diarization_model_is_independent_of_the_speech_models() {
+    fn the_speaker_embedding_model_is_not_in_the_speech_set() {
         // Bundling it into FILES would make the existing model-consent
-        // prompt's "Whisper + a voice detector" copy wrong for everyone.
-        assert!(!FILES.iter().any(|f| DIARIZATION_FILES.iter().any(|d| d.name == f.name)));
+        // prompt's "Whisper + a voice detector" copy wrong for everyone who
+        // only ever wants synced lyrics. The VAD going the *other* way is
+        // deliberate (see DIARIZATION_FILES), so this checks the one
+        // direction that matters rather than blanket disjointness.
+        assert!(!FILES.iter().any(|f| f.name.contains("speaker-embedding")));
     }
 
     #[test]
-    fn missing_diarization_files_lists_the_one_file_when_absent() {
+    fn both_sets_pin_the_same_silero_build() {
+        // Two independently-written copies of this entry drifting to
+        // different commits is exactly what the SILERO_VAD const prevents.
+        let speech = FILES.iter().find(|f| f.name == SILERO_VAD.name).expect("speech set has no VAD");
+        let diarization = DIARIZATION_FILES.iter().find(|f| f.name == SILERO_VAD.name).expect("diarization set has no VAD");
+        assert_eq!(speech.url, diarization.url);
+        assert_eq!(speech.sha256, diarization.sha256);
+        assert_eq!(speech.size, diarization.size);
+    }
+
+    #[test]
+    fn missing_diarization_files_lists_everything_when_absent() {
         let dir = std::env::temp_dir().join(format!("lyric-models-test-{}-diarize", std::process::id()));
         let missing = missing_diarization_files(&dir);
         assert_eq!(missing.len(), DIARIZATION_FILES.len());
-        assert_eq!(missing[0].0, DIARIZATION_FILES[0].name);
+        // The embedding model AND the VAD it now depends on.
+        assert!(missing.iter().any(|(n, _)| n.contains("speaker-embedding")));
+        assert!(missing.iter().any(|(n, _)| *n == SILERO_VAD.name));
     }
 
     #[test]

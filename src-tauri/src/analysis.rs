@@ -226,4 +226,46 @@ mod tests {
         let peak = a.level.iter().cloned().fold(0.0_f32, f32::max);
         assert!((peak - 1.0).abs() < 0.05, "peak should be ~1.0, got {peak}");
     }
+
+    /// Fixture tool, not a test — it asserts nothing about this module.
+    ///
+    /// The sidecar's real-audio tests (`real_transcription.rs`,
+    /// `real_diarization.rs`) take raw f32 mono 16 kHz PCM, because that is
+    /// what the sidecar memory-maps; nothing in that crate can decode an mp3.
+    /// This crate already can (symphonia, via `decode_to_mono`) and already
+    /// owns the resampler the app uses, so the conversion lives here rather
+    /// than as a second decode implementation or an ffmpeg dependency.
+    ///
+    /// It is a unit test rather than an integration one only because
+    /// `analysis` is a private module — `tests/` cannot reach it.
+    ///
+    /// ```text
+    /// LYRIC_TEST_AUDIO="songs/Red - Seedhe Maut.mp3" \
+    /// LYRIC_TEST_PCM_OUT=fixture.pcm \
+    ///   cargo test -p lyric-overlay --lib -- --ignored write_pcm_fixture --nocapture
+    /// ```
+    #[test]
+    #[ignore = "fixture tool; set LYRIC_TEST_AUDIO and LYRIC_TEST_PCM_OUT"]
+    fn write_pcm_fixture() {
+        use std::io::Write;
+
+        let src = std::env::var("LYRIC_TEST_AUDIO").expect("set LYRIC_TEST_AUDIO to an audio file");
+        let out = std::env::var("LYRIC_TEST_PCM_OUT").expect("set LYRIC_TEST_PCM_OUT to the .pcm path to write");
+
+        let (samples, rate) = decode_to_mono(&src).unwrap_or_else(|| panic!("cannot decode {src}"));
+        println!("decoded {} samples at {rate} Hz ({:.1}s)", samples.len(), samples.len() as f64 / rate as f64);
+
+        let pcm = crate::inference::resample_to_16k(&samples, rate);
+        let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        println!("resampled to {} samples at 16000 Hz ({:.1}s), peak {peak:.4}", pcm.len(), pcm.len() as f64 / 16_000.0);
+        assert!(peak > 1e-4, "decoded audio is silent — wrong file, or a decode failure that returned zeros");
+
+        let file = std::fs::File::create(&out).unwrap_or_else(|e| panic!("cannot create {out}: {e}"));
+        let mut w = std::io::BufWriter::new(file);
+        for s in &pcm {
+            w.write_all(&s.to_le_bytes()).expect("cannot write PCM");
+        }
+        w.flush().expect("cannot flush PCM");
+        println!("wrote {out}");
+    }
 }
