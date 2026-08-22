@@ -283,6 +283,79 @@ global hotkeys that already work and that nobody knows about.
 
 ---
 
+### U6 — The visual-preset system is two systems wearing the same clothes
+
+Raised from real use: *"MilkDrop UX is bad."* Four separate complaints, all of
+which check out against the code.
+
+**U6a — MilkDrop always opens on the same preset.** Not a perception problem, a
+one-line bug: `milkdropDefault()` (milkdrop-panel.js) returns `pool[0]`, the
+first entry of the favourites-or-curated pool, every time. Every session that
+does not have a pin or a session choice starts on the identical look. The
+request — *"start MilkDrop with a random preset"* — is simply the intended
+behaviour, and `milkdropCyclePool()` already builds exactly the right pool to
+pick from.
+
+**U6b — There is no shuffle, and two things that look like one.** Today:
+
+- `mdp-random` ("Surprise me") — one-shot, and only inside the browser panel.
+- An automatic switch on a drop, at most every `MILKDROP_SWITCH_MS` (42s) —
+  but **only while nothing is pinned or chosen**, and with nothing on screen
+  saying it is happening.
+
+So presets do change by themselves, silently, until the moment you pick one —
+at which point they stop, silently. That is almost certainly what reads as
+broken. What is wanted is an explicit **Shuffle** toggle with visible state, so
+"it changes on drops" is a mode you turn on rather than a behaviour you infer.
+The 42s floor and the drop trigger should stay — they are what makes it feel
+designed rather than timed — but they belong *under* the toggle.
+
+**U6c — Hearting is real but unreachable from the thing you are looking at.**
+`mdpFavourites` already exists, already has a per-card heart, already has a
+"favourites" filter, and — importantly — **already drives the shuffle pool**
+(`milkdropCyclePool` prefers liked presets when there is more than one). So
+hearting is the mechanism that makes shuffle personal. But the only way to
+heart the preset currently on screen is to open the browser, find its card and
+click it there. The ask — *"heart the drop"* — is to make that one keystroke
+away from the visuals.
+
+**U6d — "Preset" means two unrelated things, and neither chip says which.**
+
+| chip | what it actually controls |
+|---|---|
+| `◈ Liquid` | this app's **own** look — swirl field + 2D layers |
+| `✳` | a **MilkDrop/Butterchurn** preset |
+| `◐ vivid` | backdrop opacity |
+
+Two different preset systems, two similar-looking chips, one of them
+unlabelled, and the word "preset" used for both. "MilkDrop 2" is internal
+vocabulary (Butterchurn is a MilkDrop 2 reimplementation) and should never
+reach the UI at all. Needs one vocabulary, applied everywhere:
+
+- **Scene** — this app's signature looks (today's `◈`). The thing that times
+  itself to lyric density and is the product's identity.
+- **MilkDrop preset** — the imported community catalogue (today's `✳`).
+- Say which engine is live on the chip, so switching between them is a visible
+  act rather than a guess.
+
+**The open design question, and it is a real one:** U1 just cut the bar from
+nineteen chips to five. Shuffle and heart are exactly the kind of controls
+that want to be one click away — and putting them on the bar walks that back.
+Three candidates, in preference order:
+
+1. **A preset cluster that only exists while MilkDrop is the live engine.**
+   Shuffle + heart + next appear beside the preset chip, and vanish entirely
+   on the swirl engine. Contextual, so it costs nothing the rest of the time.
+2. **Inside More**, next to the browser. Cheapest, and consistent with U1 —
+   but a heart you have to open a menu for is not "at hand", which was the
+   whole point.
+3. **On the preset chip itself** — click cycles, a small heart sits on its
+   corner. Densest, and the least discoverable.
+
+**First move:** U6a and U6d are unambiguous and cheap — fix the fixed-start
+bug and settle the vocabulary. U6b/U6c need the placement decision above
+before any of it is worth building.
+
 ### U5 — `renderer.js` is 7,055 lines *(sustaining)*
 
 Half of all renderer JavaScript (14,135 lines total) in one file. Not
