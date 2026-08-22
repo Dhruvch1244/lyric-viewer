@@ -282,10 +282,31 @@ Two obvious fixes were measured and **both rejected**:
 
 **Shipped behaviour changed** to stop the pipeline claiming the audio has no
 voice in it — it now says what happened and names the remedy (vocal
-isolation). A real fix is either Demucs ahead of the VAD (the app has it, but
-only in the WebView, which is one of the reasons `whisper.js` stays) or a
-*singing*-voice detector in place of a speech one. Both are real work; neither
-is scoped.
+isolation).
+
+**And the remedy is now proven.** The same EDM track was run through Demucs
+(`htdemucs_ft_vocals`, the model `demucs.js` already names) and re-measured:
+
+| | p50 | max | voiced @0.50 |
+|---|---|---|---|
+| mix | 0.000 | 0.472 | **0%** |
+| isolated vocal | **0.759** | 1.000 | **72%** |
+
+Elevated across every 10-second bucket, so that is a whole track becoming
+transcribable rather than a fragment recovered. On the rap track isolation
+takes an already-good p50 0.967 to 1.000, so it costs nothing where the VAD
+already worked.
+
+**Demucs ahead of the VAD is therefore the fix, and the blocker is placement
+rather than doubt** — Demucs lives in the WebView and the sidecar cannot reach
+it, so it needs porting to `ort`. Measured cost: 165 MB model, ~0.6x realtime
+on CPU (69s for 120s), which an Inference-lane job that already runs a Whisper
+decode can afford. **Not yet scoped as work.**
+
+That run also verified `demucs.js`'s contract end to end for the first time —
+its header still says "not yet run against the live model". Silero does not
+score 0.759 on noise, so its segmentation, overlap-add and stem indexing are
+right.
 
 ### 5.8 Speaker diarization for featured artists — **backend built, not wired to a caller**
 
@@ -348,8 +369,20 @@ the distinction is not in the embeddings. The model is VoxCeleb-trained (clean
 speech, one speaker per recording) and the same beat running under both artists
 plausibly dominates what it encodes.
 
-**Cheapest remaining test: run it on Demucs-isolated vocals.** Removing the
-instrumental is the obvious candidate for fixing this and §5.9 at once.
+**That test has now been run, and it closes the question.** Removing the
+instrumental was the obvious explanation — the same beat under both artists
+dominating the embedding — and it is wrong. Against Demucs-isolated vocals:
+
+| | adjacent median | far-apart median | forced k=2 |
+|---|---|---|---|
+| full mix | 0.650 | 0.350 | 320 : 1 |
+| isolated vocal | 0.672 | 0.304 | **154 : 1** |
+
+Marginally better separation, nowhere near enough, and the forced two-way
+split is as degenerate as it was on the mix. These two voices are not
+distinguishable in these embeddings with or without the drums. What remains is
+the model or the task itself, and either is a far larger question than §5.8 is
+worth. **Treat diarization as parked, not in progress.**
 
 **Not done: nothing calls any of this automatically yet.** `resolve_attribution`
 fires off lyric text alone, at the point lyrics are fetched — before playback,

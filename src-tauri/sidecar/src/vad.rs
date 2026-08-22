@@ -55,11 +55,39 @@
 //!    would hand Whisper 413 seconds of deadmau5 and get confident invented
 //!    lyrics back — the exact failure reason 2 above exists to prevent.
 //!
-//! What would actually fix it: separate the vocal from the mix before asking
-//! (the app already has Demucs, though only in the WebView), or use a *singing*
-//! voice detector rather than a speech one. Both are real work. Until then the
-//! honest move is to say what happened and name the remedy, which is what
-//! `main.rs` does rather than claiming the audio has no speech in it.
+//! # Separating the vocal first fixes it completely — measured, not assumed
+//!
+//! Same EDM track, same detector, the only difference being Demucs
+//! (`htdemucs_ft_vocals`, the model `demucs.js` already names) run over a
+//! 120s excerpt first:
+//!
+//! ```text
+//!                    p50     max    voiced @0.50
+//!   mix             0.000   0.472        0%
+//!   isolated vocal  0.759   1.000       72%
+//! ```
+//!
+//! Elevated across all twelve 10-second buckets, not just the intro — so this
+//! is the whole track becoming transcribable, not a fragment. On the rap track
+//! isolation takes an already-good p50 0.967 to 1.000 (3614 of 3750 windows
+//! over the trigger), so it does not cost anything where the VAD already
+//! worked.
+//!
+//! That makes **Demucs ahead of the VAD the real fix**, and no longer a guess.
+//! The obstacle is placement, not doubt: Demucs lives in the WebView
+//! (`demucs.js`) and the sidecar cannot reach it, so this needs the model
+//! ported to `ort` here. Cost measured on this machine: 165 MB model, ~0.6x
+//! realtime on CPU (69s for 120s of audio), which is affordable for a
+//! background job that already runs a Whisper decode.
+//!
+//! (That run also verified `demucs.js`'s own contract end to end for the first
+//! time — its header still says "not yet run against the live model". Silero
+//! would not score 0.759 on noise, so the segmentation, overlap-add and stem
+//! indexing in that file are right.)
+//!
+//! Until the port exists, the honest move is to say what happened and name the
+//! remedy, which is what `main.rs` does rather than claiming the audio has no
+//! speech in it.
 
 use std::path::Path;
 

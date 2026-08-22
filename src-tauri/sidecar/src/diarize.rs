@@ -62,10 +62,27 @@
 //! track cannot be auto-transcribed either. That is a shipped bug this work
 //! happened to find, and it is worth more than diarization is.
 //!
-//! Before spending more here: run the vocal isolation the app already has
-//! (Demucs, opt-in) and re-measure both. Removing the instrumental is the
-//! obvious candidate for fixing both findings at once, and it is the cheapest
-//! test remaining.
+//! **3. Isolating the vocal does not rescue it, so the instrumental was never
+//! the confound.** That was the obvious explanation for finding 1 — the same
+//! beat under both artists dominating the embedding — and it is wrong. The
+//! Seedhe Maut excerpt was run through Demucs and re-measured against clean
+//! vocals:
+//!
+//! ```text
+//!                       adjacent median   far-apart median   forced k=2
+//!   full mix                 0.650              0.350          320 : 1
+//!   isolated vocal           0.672              0.304          154 : 1
+//! ```
+//!
+//! Marginally better separation, nowhere near enough, and the forced two-way
+//! split is as degenerate as before. The distinction between these two voices
+//! is not in these embeddings whether or not the drums are there. That closes
+//! the cheap explanation; what remains is the model or the task, and either
+//! is a much larger question than this section is worth.
+//!
+//! (The same isolation run fixed the transcription VAD problem outright — 0%
+//! voiced to 72% on an EDM track. See `vad.rs`. Vocal isolation is worth real
+//! investment; it is just not worth it *for this*.)
 //!
 //! CLUSTERING is agglomerative (bottom-up, centroid linkage) over every
 //! window at once, capped at `MAX_SPEAKERS` — which mirrors
