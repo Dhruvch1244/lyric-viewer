@@ -1389,6 +1389,13 @@ body.keybox-open .hud {
   align-items: center;
   gap: 0.6rem;
   max-width: min(34rem, 60vw);
+  /* Sectioning made this tall enough to reach off-screen on a short window or
+     in bar mode, where the panel is anchored near the bottom. Cap it against
+     the viewport and let it scroll rather than letting the last section become
+     unreachable. */
+  max-height: 78vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.9rem 1rem;
   background: var(--chrome-surface);
   border: 1px solid var(--chrome-border);
@@ -1405,6 +1412,54 @@ body.keybox-open .hud {
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--chrome-ink-dim);
+}
+
+/* The panel names itself. It is reachable from one unlabelled chip among
+   nineteen, so arriving without a heading leaves you guessing what you opened. */
+.keybox__title {
+  flex-basis: 100%;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--chrome-ink);
+  letter-spacing: 0.01em;
+}
+
+/* Section break. Full-width so it always starts a new row regardless of what
+   the flex row before it was doing. */
+.keybox__section {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--chrome-border-soft);
+}
+
+.keybox__heading {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--chrome-ink-faint);
+}
+
+/* Explanatory line under a heading or control. Deliberately quiet — it is
+   there for the first read, not every read. */
+.keybox__note {
+  font-size: 0.68rem;
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--chrome-ink-faint);
+  max-width: 30rem;
+}
+
+/* A section heading already draws the rule; a control immediately after one
+   would otherwise draw a second directly beneath it. */
+.keybox__section + .keybox__local {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .keybox__input {
@@ -1437,6 +1492,10 @@ body.keybox-open .hud {
   flex-basis: 100%;
   display: flex;
   flex-direction: column;
+  /* Without this a column flex stretches its children, so every toggle and
+     Save button spanned the full panel width and read as a banner rather than
+     a control. */
+  align-items: flex-start;
   gap: 0.4rem;
   margin-top: 0.6rem;
   padding-top: 0.6rem;

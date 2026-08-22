@@ -144,7 +144,10 @@
         <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻</button>
         <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫</button>
         <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg></button>
-        <button id="btn-key" class="chip" type="button" title="Set HuggingFace API key" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.1" cy="8" r="2.6"/><path d="M7.5 8H14M10.6 8v2M13 8v1.5"/></svg></button>
+        <!-- A gear, not a key. The panel holds nine controls and only two are
+             keys; "Set HuggingFace API key" was both wrong and the reason
+             nobody found "launch on Windows startup". -->
+        <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg></button>
         <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg></button>
         <button id="btn-library" class="chip" type="button" title="Library — your songs (L)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg>Library</button>
         <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
@@ -183,24 +186,25 @@
       <!-- Collapsible API-key panel, revealed by the 🔑 chip. Lets the user
            paste a HuggingFace token to enable translation / transliteration /
            mood without editing files. -->
-      <div id="keybox" class="keybox" hidden>
+      <!-- Settings. Called the "key panel" and marked with a 🔑 until 0.42,
+           which was wrong in both directions: only two of its nine controls
+           are keys, and nobody looks for "launch on Windows startup" under a
+           key icon. Grouped into sections for the same reason — a flat list of
+           nine unrelated controls is a list, not a settings screen. -->
+      <div id="keybox" class="keybox" hidden role="dialog" aria-modal="false" aria-label="Settings">
+        <span class="keybox__title">Settings</span>
+
+        <div class="keybox__section">
+          <span class="keybox__heading">AI provider</span>
+          <span class="keybox__note">Powers translation, transliteration and mood. Tried in order:
+            Gemini, Groq, HuggingFace, Claude — set any one. Keys are stored on this machine only.</span>
+        </div>
+
         <label class="keybox__label" for="keybox-input">HuggingFace API key</label>
         <input id="keybox-input" class="keybox__input" type="password"
                placeholder="hf_…" autocomplete="off" spellcheck="false" />
         <button id="keybox-save" class="chip" type="button">Save</button>
         <span id="keybox-status" class="keybox__status" role="status"></span>
-
-        <!-- AcoustID: identifies a song from its audio when the player's own
-             metadata is a video title. Separate from the key above because it
-             is not an AI provider and gates a different feature entirely — see
-             src-tauri/src/acoustid.rs. Free key from acoustid.org/new-application. -->
-        <div class="keybox__local">
-          <label class="keybox__label" for="keybox-acoustid">AcoustID key (identify songs by sound)</label>
-          <input id="keybox-acoustid" class="keybox__input" type="password"
-                 placeholder="acoustid.org/new-application" autocomplete="off" spellcheck="false" />
-          <button id="keybox-acoustid-save" class="chip" type="button">Save</button>
-          <span id="keybox-acoustid-status" class="keybox__status" role="status"></span>
-        </div>
 
         <!-- Local AI: pick a developer CLI to use when the cloud has no key or
              is out of quota. Available here on demand, not only when a request
@@ -210,19 +214,33 @@
           <div id="keybox-cli" class="keybox__cli"></div>
         </div>
 
-        <!-- Required path to report inappropriate AI-generated output
-             (translation / transliteration / mood). Opens a prefilled email
-             and shows the address inline so a reporting path is always visible. -->
+        <div class="keybox__section">
+          <span class="keybox__heading">Finding the right song</span>
+        </div>
+
+        <!-- AcoustID: identifies a song from its audio when the player's own
+             metadata is a video title. Separate from the key above because it
+             is not an AI provider and gates a different feature entirely — see
+             src-tauri/src/acoustid.rs. Free key from acoustid.org/new-application. -->
         <div class="keybox__local">
-          <span class="keybox__label">Launch on Windows startup</span>
-          <button id="keybox-autostart" class="chip" type="button"
-                  aria-pressed="false" title="Start Lyric Overlay automatically when Windows starts">Off</button>
+          <label class="keybox__label" for="keybox-acoustid">AcoustID key — identify songs by sound</label>
+          <span class="keybox__note">For when a browser reports a video title instead of an artist.
+            Free from acoustid.org/new-application.</span>
+          <input id="keybox-acoustid" class="keybox__input" type="password"
+                 placeholder="acoustid.org/new-application" autocomplete="off" spellcheck="false" />
+          <button id="keybox-acoustid-save" class="chip" type="button">Save</button>
+          <span id="keybox-acoustid-status" class="keybox__status" role="status"></span>
+        </div>
+
+        <div class="keybox__section">
+          <span class="keybox__heading">Transcription</span>
+          <span class="keybox__note">Used only for songs with no synced lyrics anywhere.</span>
         </div>
 
         <!-- Whisper only auto-detects English; leaving language unset on a
              Hindi/Punjabi track decodes the vocals as English gibberish. -->
         <div class="keybox__local">
-          <span class="keybox__label">Transcription language (for songs with no synced lyrics)</span>
+          <span class="keybox__label">Language to expect</span>
           <select id="keybox-whisper-lang" class="chip" title="Language Whisper should expect when transcribing from audio">
             <option value="">Auto-detect (defaults to English)</option>
             <option value="english">English</option>
@@ -244,12 +262,38 @@
              standalone, but still not run end-to-end in the actual WASM
              webview path this feature ships in. A real download is a real
              cost worth stating: ~158MB, one-time, only paid if turned on. -->
+        <!-- Since 0.41.0 the main pipeline isolates vocals BY ITSELF whenever
+             the speech detector finds no voice in a mix, so this toggle is no
+             longer the way that happens — it only applies to the WebView
+             fallback path, which runs when native capture is unavailable.
+             Saying so is the honest framing; "experimental, may improve
+             accuracy" was written before any of it had been run. -->
         <div class="keybox__local">
-          <span class="keybox__label">Isolate vocals before transcribing (experimental)</span>
+          <span class="keybox__label">Always isolate vocals first (fallback path only)</span>
+          <span class="keybox__note">Not usually needed — a song the speech detector cannot hear now
+            gets this automatically, and it asks first. Turn on only to force it on the fallback
+            path. One-time 165MB download.</span>
           <button id="keybox-vocal-isolation" class="chip" type="button"
-                  aria-pressed="false" title="Try to separate vocals from the mix before Whisper transcribes — may improve accuracy on dense mixes. ~158MB one-time download; unverified end-to-end">Off</button>
+                  aria-pressed="false" title="Force vocal separation on the WebView fallback path. The main pipeline already does this on its own when a mix has no detectable voice.">Off</button>
         </div>
 
+        <div class="keybox__section">
+          <span class="keybox__heading">Startup</span>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">Launch on Windows startup</span>
+          <button id="keybox-autostart" class="chip" type="button"
+                  aria-pressed="false" title="Start Lyric Overlay automatically when Windows starts">Off</button>
+        </div>
+
+        <div class="keybox__section">
+          <span class="keybox__heading">Diagnostics</span>
+        </div>
+
+        <!-- Required path to report inappropriate AI-generated output
+             (translation / transliteration / mood). Opens a prefilled email
+             and shows the address inline so a reporting path is always visible. -->
         <div class="keybox__local">
           <span class="keybox__label">Report AI-generated content</span>
           <button id="keybox-report" class="chip" type="button"
