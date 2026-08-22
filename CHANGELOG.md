@@ -2,6 +2,58 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.41.0 — 2026-08-22
+
+Songs that could never be auto-transcribed now can be, and every
+transcription got several times faster along the way.
+
+- **Sung vocals over dense production can be transcribed at last.** A whole
+  class of song — most electronic music with a vocal hook — silently could
+  not be. The speech detector the pipeline runs first is exactly that, a
+  *speech* detector, and it scores that material flat zero: measured across a
+  180-second track with an audible hook, it found **not one voiced moment**.
+  Transcription then reported "no speech found in this audio", which blamed
+  the track for a limitation of the detector.
+  - **The fix is to separate the vocal from the mix first**, and it is
+    dramatic: the same track goes from **0% voiced to 72%**, and from *no
+    lyrics at all* to a correct transcription.
+  - **It only runs when it is needed.** Isolation costs real time and buys
+    nothing on tracks the detector already handles (rap, most pop), so it is
+    a retry rather than a step — it fires only after the normal pass finds
+    nothing. Songs that already worked are untouched and pay nothing.
+  - It needs a one-time **165MB** model, asked for separately from the speech
+    models, and only ever on a song that would otherwise get no lyrics.
+    Declining is remembered. Anyone who already allowed the speech download
+    is not asked about that again.
+- **Everything the inference process does is now several times faster.** It
+  runs at low priority to stay out of the app's way, but it was also entering
+  Windows' *background mode*, which pins every thread to the lowest possible
+  priority. Measured on one identical unit of work: **4.5s at normal
+  priority, 5.4s at low priority, and 51.4s in background mode — 11.5x.**
+  Low priority costs 20%; background mode was costing an order of magnitude.
+  It is now dropped for the duration of a job and restored between jobs.
+  - Whisper transcription is **~4x faster** as a direct result, on every song,
+    not just new ones. This had been quietly taxing every transcription the
+    app has ever run.
+- **Fixed: a looping transcription could bury a song in one repeated line.**
+  On a real track the decoder emitted the same line about twenty times with
+  broken timings, and that single 30-second window took **119 seconds**. The
+  loop guard only looked for phrases up to four tokens long; this one was
+  about twelve. Longer phrases are now caught too — while still letting a
+  chorus repeat, which is the reason the limit was low to begin with. That
+  window went to **1 line in 3.9s**, and the song from 36 lines (30 of them
+  garbage) to 6 real ones.
+- **Speaker diarization: three real bugs fixed, and then parked honestly.**
+  The first run against real music found that it clustered the instrumental
+  intro as speakers, that its speaker cap silently changed the algorithm
+  mid-song, and that its output overlapped itself. All fixed, and the
+  clustering rebuilt. It still does not work: given a duo and told to find
+  exactly two voices, it puts 320 windows in one and 1 in the other.
+  Isolating the vocals does not help either, so the instrumental was never
+  the problem. Documented as parked rather than left looking in-progress.
+- Test counts: 203 JS, 387 Rust (269 app, 105 sidecar, 13 protocol) — was
+  203 / 355 at 0.40.0.
+
 ## 0.40.0 — 2026-08-22
 
 Speaker diarization's backend lands, AcoustID goes live, and a real consent
