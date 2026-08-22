@@ -2,6 +2,42 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.40.0 — 2026-08-22
+
+Speaker diarization's backend lands, AcoustID goes live, and a real consent
+gap left open at 0.39.0 gets closed.
+
+- **Speaker diarization (§5.8) — a real, tested backend, not wired to a
+  caller yet.** No first-party ONNX export of a speaker-embedding model
+  exists the way Whisper has one — only small, unverified community
+  re-uploads. One was found, actually downloaded, and run end-to-end (a
+  deterministic embedding, correctly discriminating two different signals)
+  before being pinned with a real SHA-256, the same discipline every other
+  model in this app gets. New: a Kaldi-fbank front end (`fbank.rs`),
+  embedding + greedy clustering (`diarize.rs`), a diarization request/response
+  pair on the inference protocol (bumped to v2), a `diarize_local_file`
+  command on its own job, and `attribute::refine_with_diarization` — ready to
+  fold audio-based clusters into the existing LLM-based per-line attribution,
+  filling in lines the LLM left unresolved without ever overwriting a
+  confident answer. **Not yet automatic**: the existing attribution pass
+  fires off lyric text alone, before playback, so an already-synced song has
+  no audio in hand at that point — the concrete next step, not a stub.
+  `diarize_local_file` is callable by hand today.
+- **AcoustID went live.** A real API key was entered and the live lookup
+  round trip was run against the real service for the first time — it works.
+  Confirms the request/response shape; a real song's fingerprint returning a
+  *correct* match is the piece still unconfirmed.
+- **Fixed: the WebView/WASM Whisper fallback ignored model-download consent
+  entirely.** Flagged as a known gap at 0.39.0 — `schedulePreload`'s
+  background warm-up and the fallback's actual transcription path both
+  downloaded models with no prompt, unlike the native sidecar. A real gate
+  now sits at the point a download would actually start; the passive
+  warm-up stays silent until a real "yes" is already on record, so it never
+  asks out of nowhere.
+- Test counts: 203 JS, 355 Rust across the workspace — app 260, sidecar 83,
+  protocol 12 (was 203 / 334 at 0.39.0, sidecar+protocol not previously
+  broken out).
+
 ## 0.39.0 — 2026-08-21
 
 Asks before it downloads, and shows its work while it does.
