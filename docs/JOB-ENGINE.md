@@ -252,6 +252,41 @@ drive the visuals with equal force. The `ebur128` crate does this directly.
 pre-analyse it in the `Idle` lane, so every local file starts with full
 analysis, beat map, and structure already on disk.
 
+### 5.9 The VAD is a speech detector, and that bounds transcription — **measured 2026-08-22**
+
+Found while building §5.8, and worth more than §5.8 is: **Silero does not
+detect sung vocals over dense electronic production at all**, which means
+auto-transcription silently cannot work for that class of song. Three tracks,
+one probability per 512 samples (`vad::tests::dump_vad_probabilities`):
+
+| | p50 | max | voiced @0.50 | voiced @0.05 |
+|---|---|---|---|---|
+| rap vocals (Seedhe Maut) | **0.967** | 1.000 | 79% | 81% |
+| sung hook over EDM | 0.000 | 0.472 | 0% | 3% |
+| instrumental (deadmau5) | 0.000 | 0.314 | 0% | 0% |
+
+Silero is bimodal and very sure of itself. Rap reads as speech and the
+pipeline works beautifully on it. A sung hook scores **flat zero through every
+bar the vocal actually occupies** — on the EDM track the probability only
+leaves zero in the first 20 seconds, and the hook is not there.
+
+Two obvious fixes were measured and **both rejected**:
+
+- **Lower the trigger.** At 0.05 the sung track yields 3% of itself — useless
+  for transcription — and the floor is by then close to an instrumental
+  track's own noise.
+- **Transcribe the whole clip when the VAD finds nothing.** A sung track (max
+  0.472) is not separable from a genuinely instrumental one (max 0.314), so
+  this would hand Whisper seven minutes of deadmau5 and get confident invented
+  lyrics back — precisely the hallucination `vad.rs` exists to prevent.
+
+**Shipped behaviour changed** to stop the pipeline claiming the audio has no
+voice in it — it now says what happened and names the remedy (vocal
+isolation). A real fix is either Demucs ahead of the VAD (the app has it, but
+only in the WebView, which is one of the reasons `whisper.js` stays) or a
+*singing*-voice detector in place of a speech one. Both are real work; neither
+is scoped.
+
 ### 5.8 Speaker diarization for featured artists — **backend built, not wired to a caller**
 
 `attribute.rs` guesses per-line artist attribution from *text* via an LLM.
@@ -294,6 +329,27 @@ downloaded, and run end-to-end before being pinned (`models.rs`'s
   from the majority vote of already-attributed lines sharing that line's
   diarization cluster. Pure and unit-tested; never overwrites a confident
   answer.
+
+**UPDATE 2026-08-22 — first run against real music. The plumbing works; the
+capability does not, and that is now measured rather than suspected.** Three
+bugs were found and fixed (no VAD gate, so an instrumental intro produced four
+of six clusters; the `MAX_SPEAKERS` cap silently switching the algorithm from
+"threshold" to "force-join nearest" once full; spans overlapping, reporting
+318.8s of coverage on a 304.1s track). Greedy single-pass assignment was
+replaced with agglomerative clustering, because greedy could not recover from
+its own start. Coverage went 4.3s → 241.3s of 241.3s voiced.
+
+None of which made it *work*. On Seedhe Maut — "Red", a duo, the similarity
+distributions overlap almost entirely (same-voice median 0.650; different-voice
+median 0.350 but **max 0.655**), and **forced to exactly two clusters it
+returns 320 windows against 1**. There is no two-lobed structure in the
+embedding space, so this is not a threshold to tune or an algorithm to swap —
+the distinction is not in the embeddings. The model is VoxCeleb-trained (clean
+speech, one speaker per recording) and the same beat running under both artists
+plausibly dominates what it encodes.
+
+**Cheapest remaining test: run it on Demucs-isolated vocals.** Removing the
+instrumental is the obvious candidate for fixing this and §5.9 at once.
 
 **Not done: nothing calls any of this automatically yet.** `resolve_attribution`
 fires off lyric text alone, at the point lyrics are fetched — before playback,

@@ -243,7 +243,22 @@ fn run_transcribe_job(
         }
     };
     if windows.is_empty() {
-        send(out, &Response::Error { job_id, message: "no speech found in this audio".into() });
+        // Do not claim the audio has no voice in it. Measured (vad.rs's module
+        // doc): Silero scores a sung hook over dense production flat zero, so
+        // "the detector found nothing" and "there is nothing to find" are not
+        // the same statement and this code cannot tell them apart. The peak
+        // check above already ruled out actual silence, so at this point there
+        // IS audio — it just does not read as speech.
+        send(
+            out,
+            &Response::Error {
+                job_id,
+                message: "could not pick out a voice in this track. Sung vocals over a dense mix often \
+                          read as instrumental to the speech detector — turning on vocal isolation in \
+                          settings usually gets it"
+                    .into(),
+            },
+        );
         return;
     }
 
@@ -314,7 +329,17 @@ fn run_diarize_job(job_id: u64, pcm_path: String, sample_rate: u32, model_dir: S
         }
     };
     if voiced.is_empty() {
-        send(out, &Response::Error { job_id, message: "no speech found in this audio".into() });
+        // Same limit as transcription, same wording — see `plan_work`.
+        send(
+            out,
+            &Response::Error {
+                job_id,
+                message: "could not pick out a voice in this track. Sung vocals over a dense mix often \
+                          read as instrumental to the speech detector — turning on vocal isolation in \
+                          settings usually gets it"
+                    .into(),
+            },
+        );
         return;
     }
 
@@ -441,23 +466,27 @@ fn transcribe(
 
 /// Decide which stretches of the clip to transcribe.
 ///
-/// **KNOWN BUG, measured 2026-08-22: this silently refuses a whole genre.**
-/// Silero is a *speech* detector, and sung vocals over dense electronic
-/// production do not read as speech to it. On John Summit / The Chainsmokers
-/// / Ilsey — "ALL THE TIME" (180s, with a clear sung hook) it returns p50
-/// 0.000, p90 0.001, max 0.472 against its 0.5 trigger — **not one voiced
-/// window in the entire track**. Rap survives (79% voiced on a Seedhe Maut
-/// track); singing over a loud full-range master does not.
+/// **This cannot transcribe sung vocals over dense electronic production, and
+/// the limit is Silero's, not the audio's.** Measured across three tracks —
+/// see `vad.rs`'s module doc for the numbers. Rap scores p50 0.967 and works;
+/// a sung hook over EDM scores flat zero through every bar it occupies.
 ///
-/// When that happens `spans` is empty, `plan_windows` returns nothing, and
-/// the caller answers "no speech found in this audio" — so auto-transcription
-/// is impossible for this class of song, and the message blames the audio for
-/// a limitation of the detector. Found while building diarization
-/// (`diarize.rs`, which inherits the same gate); worth more than diarization
-/// is, and not fixed here because the fix is a real decision, not a tweak:
-/// run the app's existing Demucs vocal isolation before the VAD, lower the
-/// trigger for music, or fall back to transcribing the whole clip when the
-/// VAD finds nothing rather than declaring silence.
+/// Two candidate fixes were measured and **both rejected**:
+///
+/// - *Lower the trigger.* At 0.05 the sung track yields 3% of itself and the
+///   floor is by then close to an instrumental track's noise.
+/// - *Fall back to the whole clip when the VAD finds nothing.* A sung track
+///   (max 0.472) is not separable from a genuinely instrumental one (max
+///   0.314), so this would feed Whisper seven minutes of deadmau5 and get
+///   confident invented lyrics back — reason 2 in `vad.rs`'s own doc.
+///
+/// So the caller says what happened and names the remedy (vocal isolation)
+/// instead of reporting that the track has no speech in it. A real fix is
+/// either Demucs ahead of the VAD — the app has it, but only in the WebView —
+/// or a singing-voice detector in place of a speech one.
+///
+/// A missing VAD model is different and still downgrades to the whole clip:
+/// that is a deployment problem, not a claim about the audio.
 ///
 /// With the VAD available this is its speech spans, batched into 30 s windows.
 /// Without it — the model file is missing, or the host asked for `vad: false`

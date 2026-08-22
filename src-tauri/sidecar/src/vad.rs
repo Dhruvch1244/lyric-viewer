@@ -22,6 +22,44 @@
 //!   also tested.
 //! - [`SileroVad`] is the ONNX wrapper. It is the part that needs a model file,
 //!   and it is kept as thin as possible for exactly that reason.
+//!
+//! # It is a SPEECH detector, and that is a real limit on what this app can do
+//!
+//! Measured 2026-08-22 with `dump_vad_probabilities`, three tracks, one
+//! probability per 512 samples:
+//!
+//! ```text
+//!                              p50     max    @0.50   @0.05
+//! rap vocals (Seedhe Maut)    0.967   1.000     79%     81%
+//! sung hook over EDM          0.000   0.472      0%      3%
+//! instrumental (deadmau5)     0.000   0.314      0%      0%
+//! ```
+//!
+//! Silero is bimodal and extremely sure of itself. Rap reads as speech and
+//! works beautifully. **Sung vocals over dense electronic production read as
+//! nothing at all** — on a 180s track with an audible hook, the probability
+//! is ≥0.001 only in the first 20 seconds and flat zero across every bar the
+//! vocal actually occupies.
+//!
+//! Two consequences worth knowing before touching this:
+//!
+//! 1. **Lowering the trigger does not work.** It was the obvious fix and the
+//!    sweep above rules it out: at 0.05 the sung track yields 3% of itself,
+//!    which is useless for transcription, and by then the floor is close
+//!    enough to the instrumental track's noise to start inventing spans in
+//!    silence. [`SpeechGate::with_threshold`] exists because that sweep
+//!    needed it, not because a lower number is a fix.
+//! 2. **"No spans" cannot be read as "no vocals."** A sung track (max 0.472)
+//!    and a genuinely instrumental one (max 0.314) are not separable here, so
+//!    falling back to transcribing the whole clip when the VAD finds nothing
+//!    would hand Whisper 413 seconds of deadmau5 and get confident invented
+//!    lyrics back — the exact failure reason 2 above exists to prevent.
+//!
+//! What would actually fix it: separate the vocal from the mix before asking
+//! (the app already has Demucs, though only in the WebView), or use a *singing*
+//! voice detector rather than a speech one. Both are real work. Until then the
+//! honest move is to say what happened and name the remedy, which is what
+//! `main.rs` does rather than claiming the audio has no speech in it.
 
 use std::path::Path;
 
@@ -73,6 +111,8 @@ pub struct SpeechGate {
     total_samples: usize,
     min_speech: usize,
     min_silence: usize,
+    threshold: f32,
+    neg_threshold: f32,
     triggered: bool,
     current_start: usize,
     /// Where the current run of sub-threshold windows began, or 0 for none.
@@ -84,10 +124,20 @@ pub struct SpeechGate {
 
 impl SpeechGate {
     pub fn new(total_samples: usize) -> Self {
+        Self::with_threshold(total_samples, THRESHOLD)
+    }
+
+    /// A gate at a chosen trigger, with the hysteresis gap kept in proportion
+    /// to the default pair. Exists because Silero's 0.5 is a *speech* trigger
+    /// and sung vocals over a dense mix never reach it — see
+    /// `music_threshold` and `SileroVad::spans`.
+    pub fn with_threshold(total_samples: usize, threshold: f32) -> Self {
         Self {
             total_samples,
             min_speech: ms_to_samples(MIN_SPEECH_MS),
             min_silence: ms_to_samples(MIN_SILENCE_MS),
+            threshold,
+            neg_threshold: threshold * (NEG_THRESHOLD / THRESHOLD),
             triggered: false,
             current_start: 0,
             tentative_end: 0,
@@ -97,7 +147,7 @@ impl SpeechGate {
 
     /// Feed the probability for the window starting at `sample`.
     pub fn push(&mut self, sample: usize, probability: f32) {
-        if probability >= THRESHOLD {
+        if probability >= self.threshold {
             // Speech resumed before the silence lasted long enough to count,
             // so the span never ended.
             self.tentative_end = 0;
@@ -108,7 +158,7 @@ impl SpeechGate {
             return;
         }
 
-        if probability >= NEG_THRESHOLD || !self.triggered {
+        if probability >= self.neg_threshold || !self.triggered {
             // Between the two thresholds: neither confirms speech nor ends it.
             return;
         }
@@ -453,6 +503,34 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_trigger_keeps_its_hysteresis_gap() {
+        // with_threshold scales the release threshold with the trigger rather
+        // than leaving it at the default 0.35 — at a trigger of 0.2 a fixed
+        // 0.35 release would sit ABOVE the trigger and close every span the
+        // instant it opened.
+        let mut gate = SpeechGate::with_threshold(PER_SECOND * 4 * WINDOW_SAMPLES, 0.20);
+        for i in 0..PER_SECOND * 4 {
+            // Wavering either side of the trigger but never near zero.
+            gate.push(i * WINDOW_SAMPLES, if i % 2 == 0 { 0.25 } else { 0.16 });
+        }
+        assert_eq!(gate.finish().len(), 1, "a lowered trigger must still hold one span together");
+    }
+
+    #[test]
+    fn the_default_gate_matches_an_explicit_default_trigger() {
+        let build = |gate: &mut SpeechGate| {
+            for i in 0..PER_SECOND * 3 {
+                gate.push(i * WINDOW_SAMPLES, 0.9);
+            }
+        };
+        let mut a = SpeechGate::new(PER_SECOND * 3 * WINDOW_SAMPLES);
+        let mut b = SpeechGate::with_threshold(PER_SECOND * 3 * WINDOW_SAMPLES, THRESHOLD);
+        build(&mut a);
+        build(&mut b);
+        assert_eq!(a.finish(), b.finish(), "new() must stay a pure alias for the default trigger");
+    }
+
+    #[test]
     fn a_stab_of_noise_shorter_than_the_minimum_is_dropped() {
         // 100 ms of something voice-like in the middle of an instrumental is
         // not a lyric; it is a synth line that happens to be formant-shaped.
@@ -572,5 +650,76 @@ mod tests {
             Span { start_ms: 200_000, end_ms: 203_000 },
         ];
         assert_eq!(total_ms(&spans), 5_000);
+    }
+
+    /// Diagnostic, not a test. Dumps the raw probability distribution, a
+    /// coarse time series, and what a range of triggers would yield.
+    ///
+    /// The question it exists to answer: when Silero reports no speech in a
+    /// track that audibly has vocals, is the signal *there but under the
+    /// trigger*, or absent? Those want completely different fixes and the
+    /// span list cannot tell them apart.
+    ///
+    /// ```text
+    /// LYRIC_TEST_PCM=... LYRIC_TEST_MODELS=... \
+    ///   cargo test --release -p lyric-inference --bin lyric-inference \
+    ///   -- --ignored dump_vad --nocapture
+    /// ```
+    #[test]
+    #[ignore = "diagnostic; needs the VAD model and a PCM fixture"]
+    fn dump_vad_probabilities() {
+        let pcm_path = std::env::var("LYRIC_TEST_PCM").expect("set LYRIC_TEST_PCM");
+        let model_dir = std::env::var("LYRIC_TEST_MODELS").expect("set LYRIC_TEST_MODELS");
+
+        let bytes = std::fs::read(&pcm_path).expect("cannot read PCM");
+        let samples: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let total_ms_all = samples_to_ms(samples.len());
+        let name = pcm_path.rsplit(['\\', '/']).next().unwrap_or(pcm_path.as_str()).to_string();
+        println!("\n=== {name} ({:.1}s) ===", total_ms_all as f64 / 1000.0);
+
+        let mut vad = SileroVad::load(Path::new(&model_dir)).expect("cannot load VAD");
+        let mut probs: Vec<(usize, f32)> = Vec::new();
+        let mut at = 0usize;
+        while at + WINDOW_SAMPLES <= samples.len() {
+            probs.push((at, vad.probability(&samples[at..at + WINDOW_SAMPLES]).expect("vad failed")));
+            at += WINDOW_SAMPLES;
+        }
+
+        let mut sorted: Vec<f32> = probs.iter().map(|(_, p)| *p).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let q = |f: f64| sorted[((sorted.len() - 1) as f64 * f) as usize];
+        println!(
+            "probability: p50 {:.3}  p75 {:.3}  p90 {:.3}  p95 {:.3}  p99 {:.3}  max {:.3}",
+            q(0.5), q(0.75), q(0.90), q(0.95), q(0.99), sorted[sorted.len() - 1]
+        );
+
+        // Ten-second buckets, so a hook that the detector half-sees shows up
+        // as structure rather than being flattened into a percentile.
+        println!("peak probability per 10s bucket:");
+        let bucket = ms_to_samples(10_000);
+        let buckets = (samples.len() / bucket) + 1;
+        for b in 0..buckets {
+            let (lo, hi) = (b * bucket, (b + 1) * bucket);
+            let peak = probs.iter().filter(|(s, _)| *s >= lo && *s < hi).map(|(_, p)| *p).fold(0.0f32, f32::max);
+            if peak > 0.0 {
+                println!("  {:>4}s  {:.3} {}", b * 10, peak, "#".repeat((peak * 40.0) as usize));
+            }
+        }
+
+        println!("what each trigger would yield:");
+        for t in [0.50f32, 0.35, 0.25, 0.15, 0.10, 0.05] {
+            let mut gate = SpeechGate::with_threshold(samples.len(), t);
+            for (s, p) in &probs {
+                gate.push(*s, *p);
+            }
+            let spans = gate.finish();
+            let voiced = total_ms(&spans);
+            println!(
+                "  trigger {t:.2}: {:>3} span(s), {:>6}ms voiced ({:>3}% of track)",
+                spans.len(),
+                voiced,
+                voiced * 100 / total_ms_all.max(1)
+            );
+        }
     }
 }
