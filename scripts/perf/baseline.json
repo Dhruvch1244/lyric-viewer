@@ -1,0 +1,407 @@
+{
+  "recordedAt": "2026-08-23T10:59:27.364Z",
+  "build": "dev",
+  "machine": {
+    "cpu": "Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz",
+    "cores": 12,
+    "platform": "win32 10.0.26200"
+  },
+  "version": "0.43.0",
+  "seed": 12345,
+  "durationMs": 20000,
+  "warmupMs": 6000,
+  "scenarios": [
+    {
+      "name": "full/liquid",
+      "mode": "full",
+      "presetId": "liquid",
+      "liteMode": false,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": true,
+      "expectBackdrop": true,
+      "samples": 95,
+      "drawCostMs": {
+        "p50": 1.479,
+        "p90": 1.674
+      },
+      "frameIntervalMs": {
+        "p50": 36.62
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0.002
+        },
+        "bokeh": {
+          "p50": 0.224,
+          "p90": 0.292
+        },
+        "glows": {
+          "p50": 0.062,
+          "p90": 0.081
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0.002
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0.002
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0.003
+        }
+      },
+      "memory": {
+        "privateMb": 470.9,
+        "workingSetMb": 742.6,
+        "processes": 11
+      },
+      "heapMb": 31.3,
+      "ticks": 0
+    },
+    {
+      "name": "full/concert",
+      "mode": "full",
+      "presetId": "concert",
+      "liteMode": false,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": true,
+      "expectBackdrop": true,
+      "samples": 95,
+      "drawCostMs": {
+        "p50": 2.086,
+        "p90": 2.212
+      },
+      "frameIntervalMs": {
+        "p50": 39.397
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0.001,
+          "p90": 0.008
+        },
+        "bokeh": {
+          "p50": 0.233,
+          "p90": 0.273
+        },
+        "glows": {
+          "p50": 0.065,
+          "p90": 0.089
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0.003
+        },
+        "mathCurves": {
+          "p50": 0.287,
+          "p90": 0.365
+        },
+        "constellation": {
+          "p50": 0.133,
+          "p90": 0.158
+        }
+      },
+      "memory": {
+        "privateMb": 489.6,
+        "workingSetMb": 734.7,
+        "processes": 11
+      },
+      "heapMb": 33.6,
+      "ticks": 0
+    },
+    {
+      "name": "full/ghost",
+      "mode": "full",
+      "presetId": "ghost",
+      "liteMode": false,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": true,
+      "expectBackdrop": true,
+      "samples": 97,
+      "drawCostMs": {
+        "p50": 0.164,
+        "p90": 0.208
+      },
+      "frameIntervalMs": {
+        "p50": 29.372
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0
+        },
+        "bokeh": {
+          "p50": 0,
+          "p90": 0
+        },
+        "glows": {
+          "p50": 0,
+          "p90": 0
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0
+        }
+      },
+      "memory": {
+        "privateMb": 423.2,
+        "workingSetMb": 683.3,
+        "processes": 11
+      },
+      "heapMb": 23.1,
+      "ticks": 0
+    },
+    {
+      "name": "full/liquid+lite",
+      "mode": "full",
+      "presetId": "liquid",
+      "liteMode": true,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": true,
+      "expectBackdrop": true,
+      "samples": 97,
+      "drawCostMs": {
+        "p50": 0.928,
+        "p90": 1.024
+      },
+      "frameIntervalMs": {
+        "p50": 14.054
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0.002
+        },
+        "bokeh": {
+          "p50": 0.096,
+          "p90": 0.117
+        },
+        "glows": {
+          "p50": 0.056,
+          "p90": 0.081
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0.001
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0.005
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0.004
+        }
+      },
+      "memory": {
+        "privateMb": 467.1,
+        "workingSetMb": 723.5,
+        "processes": 11
+      },
+      "heapMb": 24.6,
+      "ticks": 0
+    },
+    {
+      "name": "full/milkdrop",
+      "mode": "full",
+      "presetId": "milkdrop",
+      "liteMode": false,
+      "activeEngine": "milkdrop",
+      "expectEngine": "milkdrop",
+      "canRender": true,
+      "backdropDrawing": true,
+      "expectBackdrop": true,
+      "samples": 95,
+      "drawCostMs": {
+        "p50": 0.446,
+        "p90": 0.495
+      },
+      "frameIntervalMs": {
+        "p50": 47.482
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0.006
+        },
+        "bokeh": {
+          "p50": 0,
+          "p90": 0.007
+        },
+        "glows": {
+          "p50": 0,
+          "p90": 0
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0.005
+        }
+      },
+      "memory": {
+        "privateMb": 609.2,
+        "workingSetMb": 798.8,
+        "processes": 11
+      },
+      "heapMb": 32.2,
+      "ticks": 0
+    },
+    {
+      "name": "bar/liquid",
+      "mode": "bar",
+      "presetId": "liquid",
+      "liteMode": false,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": false,
+      "expectBackdrop": false,
+      "samples": 97,
+      "drawCostMs": {
+        "p50": 0,
+        "p90": 0
+      },
+      "frameIntervalMs": {
+        "p50": 46.572
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0
+        },
+        "bokeh": {
+          "p50": 0,
+          "p90": 0
+        },
+        "glows": {
+          "p50": 0,
+          "p90": 0
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0
+        }
+      },
+      "memory": {
+        "privateMb": 471.5,
+        "workingSetMb": 687.5,
+        "processes": 11
+      },
+      "heapMb": 28.1,
+      "ticks": 0
+    },
+    {
+      "name": "strip/liquid",
+      "mode": "strip",
+      "presetId": "liquid",
+      "liteMode": false,
+      "activeEngine": "swirl",
+      "expectEngine": "swirl",
+      "canRender": true,
+      "backdropDrawing": false,
+      "expectBackdrop": false,
+      "samples": 96,
+      "drawCostMs": {
+        "p50": 0,
+        "p90": 0
+      },
+      "frameIntervalMs": {
+        "p50": 46.572
+      },
+      "sections": {
+        "galaxy": {
+          "p50": 0,
+          "p90": 0
+        },
+        "bokeh": {
+          "p50": 0,
+          "p90": 0
+        },
+        "glows": {
+          "p50": 0,
+          "p90": 0
+        },
+        "sprites": {
+          "p50": 0,
+          "p90": 0
+        },
+        "confetti": {
+          "p50": 0,
+          "p90": 0
+        },
+        "mathCurves": {
+          "p50": 0,
+          "p90": 0
+        },
+        "constellation": {
+          "p50": 0,
+          "p90": 0
+        }
+      },
+      "memory": {
+        "privateMb": 372.8,
+        "workingSetMb": 668.9,
+        "processes": 11
+      },
+      "heapMb": 28.1,
+      "ticks": 0
+    }
+  ]
+}
