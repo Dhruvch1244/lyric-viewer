@@ -69,6 +69,7 @@
     onAttribution: (cb) => on('attribution', cb),
     onWallpaperPointer: (cb) => on('wallpaper-pointer', cb),
     onWallpaperPower: (cb) => on('wallpaper-power', cb),
+    onOverlayPower: (cb) => on('overlay-power', cb),
     onArtwork: (cb) => on('artwork', cb),
     onBeatmap: (cb) => on('beatmap', cb),
     onHeatmap: (cb) => on('heatmap', cb),

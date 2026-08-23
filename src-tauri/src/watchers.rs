@@ -234,33 +234,65 @@ pub(crate) fn start_pointer_forwarding(app: AppHandle) {
 #[cfg(not(windows))]
 pub(crate) fn start_pointer_forwarding(_app: AppHandle) {}
 
-/// Pause wallpaper rendering when it would be pure waste: on battery, behind
-/// a locked screen, or behind another app's exclusive fullscreen (a game) —
-/// the same three triggers Wallpaper Engine and Lively Wallpaper both use.
-/// Only while attached; a 2s poll is plenty for state that changes on human
-/// timescales (unplugging, alt-tabbing into a game), unlike the pointer-
-/// forwarding loop above which has to track a moving cursor.
+/// Pause rendering when it would be pure waste. Two policies share this one
+/// poll — a 2s interval is plenty for state that changes on human timescales
+/// (unplugging, alt-tabbing into a game), unlike the pointer-forwarding loop
+/// above which has to track a moving cursor:
+///
+/// - **Wallpaper mode**: pause on battery, behind a locked screen, or behind
+///   another app's exclusive fullscreen (a game) — the same three triggers
+///   Wallpaper Engine and Lively Wallpaper both use.
+/// - **Overlay mode** (full/bar/strip): pause on lock, exclusive-fullscreen,
+///   or the window itself being occluded (minimized / cloaked) — nobody can
+///   see it either way. Battery is handled differently here: throttling to
+///   Lite mode is right, blanking the visualiser the user deliberately opened
+///   is not, so it is reported as an independent bit rather than a pause
+///   reason (PERF-UX.md P2).
 #[cfg(windows)]
 pub(crate) fn start_power_watcher(app: AppHandle) {
+    let mut last_overlay: Option<(bool, bool)> = None;
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
-        if !WALLPAPER_ATTACHED.load(Ordering::Relaxed) {
+        let Some(hwnd) = window_hwnd(&app) else { continue };
+
+        if WALLPAPER_ATTACHED.load(Ordering::Relaxed) {
+            let (suspend, reason) = if crate::wallpaper::is_locked() {
+                (true, "lock")
+            } else if crate::wallpaper::on_battery().unwrap_or(false) {
+                (true, "battery")
+            } else if crate::wallpaper::foreground_is_fullscreen(hwnd) {
+                (true, "fullscreen")
+            } else {
+                (false, "")
+            };
+            if suspend != WALLPAPER_SUSPENDED.swap(suspend, Ordering::Relaxed) {
+                let _ = app.emit(
+                    "wallpaper-power",
+                    json!({ "suspended": suspend, "reason": if suspend { serde_json::Value::from(reason) } else { serde_json::Value::Null } }),
+                );
+            }
             continue;
         }
-        let Some(hwnd) = window_hwnd(&app) else { continue };
-        let (suspend, reason) = if crate::wallpaper::is_locked() {
+
+        let (paused, pause_reason) = if crate::wallpaper::is_locked() {
             (true, "lock")
-        } else if crate::wallpaper::on_battery().unwrap_or(false) {
-            (true, "battery")
         } else if crate::wallpaper::foreground_is_fullscreen(hwnd) {
             (true, "fullscreen")
+        } else if crate::wallpaper::is_main_window_occluded(hwnd) {
+            (true, "occluded")
         } else {
             (false, "")
         };
-        if suspend != WALLPAPER_SUSPENDED.swap(suspend, Ordering::Relaxed) {
+        let on_battery = crate::wallpaper::on_battery().unwrap_or(false);
+        if last_overlay != Some((paused, on_battery)) {
+            last_overlay = Some((paused, on_battery));
             let _ = app.emit(
-                "wallpaper-power",
-                json!({ "suspended": suspend, "reason": if suspend { serde_json::Value::from(reason) } else { serde_json::Value::Null } }),
+                "overlay-power",
+                json!({
+                    "paused": paused,
+                    "pauseReason": if paused { serde_json::Value::from(pause_reason) } else { serde_json::Value::Null },
+                    "onBattery": on_battery,
+                }),
             );
         }
     });

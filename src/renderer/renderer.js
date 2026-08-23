@@ -363,6 +363,13 @@ let audioEnv = null;
    The lyric column, wash, glows, stars, and sprites all stay on. */
 let liteMode = false;
 
+/* True while the CURRENT liteMode=true was switched on automatically by
+   applyBatteryThrottle below, rather than by the user clicking the chip.
+   Lets AC-restore revert what it auto-engaged without ever overriding a
+   choice the user actually made — see the perfBtn click handler, which
+   clears this on any manual click in either direction. */
+let liteModeAutoBattery = false;
+
 /* ------------------------------------------------------------ reduced motion */
 /*
   Honours the OS "reduce motion" / "reduce animations" setting for the CANVAS
@@ -412,9 +419,16 @@ let overlayVisible = true;
    on each other's state. */
 let wallpaperSuspended = false;
 
-/* The single gate both render loops actually check. Both conditions have to
-   allow rendering — either one being false must stop it. */
-function canRender() { return overlayVisible && !wallpaperSuspended; }
+/* Whether overlay mode (full/bar/strip) has been auto-paused by the backend:
+   screen locked, another app has exclusive fullscreen, or this window itself
+   is occluded (minimized / cloaked) — see start_power_watcher's overlay
+   branch and the onOverlayPower handler. Independent of wallpaperSuspended,
+   which only ever applies in wallpaper mode. */
+let overlayPaused = false;
+
+/* The single gate both render loops actually check. All three conditions
+   have to allow rendering — any one being false must stop it. */
+function canRender() { return overlayVisible && !wallpaperSuspended && !overlayPaused; }
 
 /* Last progress width actually written, in tenths of a percent. -1 forces the
    next frame to write, which is what resets it on a track change. */
@@ -5968,6 +5982,40 @@ window.player.onWallpaperPower(({ suspended, reason }) => {
   resumeRenderingIfNeeded(wasRendering);
 });
 
+/* Overlay mode (full/bar/strip) auto-paused/resumed by the backend's lock/
+   fullscreen/occlusion watcher, plus an independent battery bit (see
+   start_power_watcher's overlay branch in watchers.rs, PERF-UX.md P2).
+   Battery never pauses — it throttles to Lite mode instead, since the user
+   deliberately opened this visualiser. */
+window.player.onOverlayPower(({ paused, onBattery }) => {
+  const wasRendering = canRender();
+  overlayPaused = Boolean(paused);
+  resumeRenderingIfNeeded(wasRendering);
+  applyBatteryThrottle(Boolean(onBattery));
+});
+
+/* Auto-engage Lite mode on battery, and auto-revert it on AC restore — but
+   only the part of the state this function itself set. liteModeAutoBattery
+   tracks that distinction, and the perfBtn click handler clears it on any
+   manual click so a user's own choice, in either direction, always wins from
+   then on. onOverlayPower only fires when onBattery actually changes (the
+   Rust side is edge-triggered), so this never fights a manual click made
+   mid-battery-session. */
+function applyBatteryThrottle(onBattery) {
+  if (onBattery && !liteMode) {
+    liteMode = true;
+    liteModeAutoBattery = true;
+    els.perfBtn.setAttribute('aria-pressed', 'true');
+    resizeCanvas();
+    setStatus('On battery — switched to Lite mode. Click the Lite chip to turn it off.');
+  } else if (!onBattery && liteModeAutoBattery) {
+    liteMode = false;
+    liteModeAutoBattery = false;
+    els.perfBtn.setAttribute('aria-pressed', 'false');
+    resizeCanvas();
+  }
+}
+
 window.player.onIdle(() => {
   flushBeatmap();                 // persist the last song's learned beats
   flushHeatmap();                 // ...and its energy arc
@@ -6319,6 +6367,7 @@ els.presetBtn.addEventListener('click', () => {
 
 els.perfBtn.addEventListener('click', () => {
   liteMode = !liteMode;
+  liteModeAutoBattery = false; // a manual click always wins from here on
   els.perfBtn.setAttribute('aria-pressed', String(liteMode));
   try { localStorage.setItem('liteMode', liteMode ? '1' : '0'); } catch { /* ignore */ }
   resizeCanvas();

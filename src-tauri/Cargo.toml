@@ -102,6 +102,10 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    # DwmGetWindowAttribute(DWMWA_CLOAKED) — occlusion detection for the P2
+    # power watcher (a window can be cloaked without being minimized, e.g.
+    # after a virtual-desktop switch).
+    "Win32_Graphics_Dwm",
     "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
