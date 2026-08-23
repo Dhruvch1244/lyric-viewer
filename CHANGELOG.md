@@ -2,6 +2,41 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.46.0 — 2026-08-24
+
+A real keymap for the window itself, an honest memory number for the
+process tree, and AcoustID proven against real recordings instead of
+just the shape of the request.
+
+- **Six single-key shortcuts, plus `?` for a cheat sheet.** `L` Library,
+  `/` Search, `K` Settings, `P` Scene, `V` MilkDrop presets (only while
+  MilkDrop is the live engine), `B` Backdrop opacity — the six highest-
+  value panels, not all nineteen chips, because the cheat sheet itself is
+  what makes discovery work. `?` opens an overlay listing these plus the
+  five global Ctrl+Alt hotkeys that already existed but that nobody could
+  previously find in one place; it also has a chip inside More
+  (`btn-shortcuts`) since a keyboard-only affordance is invisible to a
+  first-time mouse user. Guarded against firing while a text input has
+  focus or a blocking modal is open.
+- **Memory finally has a real number, broken down by what's actually
+  using it.** The perf harness now classifies every process in the app's
+  tree by its `--type=` flag — the same one Chromium/Edge itself uses —
+  instead of summing the whole tree into one figure. Measured (release
+  build): 625–824MB total working set across scenarios, but the app's own
+  process never exceeds ~21MB private; the rest is WebView2's own
+  browser/renderer/GPU/utility/crashpad processes, ~250–370MB of it
+  before the page's own renderer is even counted. Decision: no code fix —
+  this is Chromium's multi-process model, not an app-side leak.
+- **AcoustID's real-recording path has run, twice.** Every prior test of
+  this chain fingerprinted a synthetic sine sweep, which proves the
+  request/response shape but by construction matches nothing. A new
+  `#[ignore]`d test decodes a real file, fingerprints it, and asks
+  AcoustID for real: two commercial tracks both came back correct (score
+  0.93 and 0.98, one an exact title match).
+- Test counts: 203 JS, 416 Rust (399 passing, 17 `#[ignore]`d — network/
+  API-key/fixture-gated — across the workspace's three crates). `cargo
+  clippy --workspace --all-targets --no-deps -- -D warnings` clean.
+
 ## 0.45.0 — 2026-08-23
 
 The control surface actually says what it does, MilkDrop's shuffle draws

@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.45.0 — 2026-08-23
+## Current as of v0.46.0 — 2026-08-24
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -84,6 +84,21 @@ genuinely unresolved right now.
   Search, Sprites, Lite, Pre-sync, Cover, Settings, Lyrics and Audio were
   icon-only with just a tooltip; each now carries a short visible label,
   matching the style already used by "◈ Liquid" and "⇄ Shuffle."
+- **`docs/PERF-UX.md` U4 — in-app keymap + `?` cheat sheet, shipped (0.46.0).**
+  Six single-key bindings (L/`/`/K/P/V/B) plus `?` for an overlay listing
+  them and the five global Ctrl+Alt hotkeys, guarded against firing while
+  typing or a blocking modal is open.
+- **`docs/PERF-UX.md` P4 — memory baseline, measured, no fix needed
+  (0.46.0).** The perf harness now breaks the process tree down by role
+  (browser/renderer/GPU/utility/crashpad), not just a sum. 625–824MB total
+  working set across scenarios; the app's own process never exceeds ~21MB
+  private — the cost is WebView2's own multi-process model, not an app-side
+  leak.
+- **AcoustID's real-recording path has run, twice (0.46.0).** A new
+  `#[ignore]`d test (`acoustid::tests::real_audio_identifies_a_known_song`)
+  decodes a real file, fingerprints it, and asks AcoustID for real — not
+  just synthetic-audio request shape. Two commercial tracks both came back
+  correct (score 0.93 and 0.98). See `docs/JOB-ENGINE.md` §5.1.
 
 ### Actually open
 
@@ -94,18 +109,12 @@ genuinely unresolved right now.
    1**, and isolating the vocals first does not help (154 vs 1), so the
    instrumental was never the confound. It is the model or the task. Do not
    pick this up expecting a quick win.
-2. **AcoustID's real-recording path has still never run.** The live test
-   proves the request/response shape using synthetic audio that matches
-   nothing. The full loopback-capture → fingerprint → AcoustID → MusicBrainz
-   chain has never been watched complete against a real song in a browser tab
-   — and the cache already contains the broken metadata it exists to fix
-   (`T-Series`, `…VEVO` as artist names).
-3. **`docs/PERF-UX.md` P2 wants real OS-level verification.** The code path
+2. **`docs/PERF-UX.md` P2 wants real OS-level verification.** The code path
    (lock/fullscreen/occlusion/battery, per mode) is in and structurally
    smoke-tested over CDP, but Win+L / alt-tab-to-fullscreen / minimise /
    virtual-desktop-switch / unplug-AC has not actually been run by a human
    yet, across full/bar/strip.
-4. **`player.js`'s `playAt()` has no visible failure state.** A slow or
+3. **`player.js`'s `playAt()` has no visible failure state.** A slow or
    failed read silently falls through `if (!raw) { next(); return; }` — low
    priority now that the debug-build dead zone that surfaced it turned out
    to be a measurement artifact (see "Closed since" above), but still a real
