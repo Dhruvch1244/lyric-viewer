@@ -390,5 +390,8 @@ mod tests {
         assert!(!locked, "test process is definitionally on the input desktop");
         let fullscreen = foreground_is_fullscreen(0);
         eprintln!("foreground_is_fullscreen (raw=0, i.e. never 'us'): {fullscreen}");
+        // A null HWND is not iconic and DwmGetWindowAttribute errors rather
+        // than panics on it, so this must read false, not crash.
+        assert!(!is_main_window_occluded(0));
     }
 }

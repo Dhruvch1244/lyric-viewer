@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.43.0 — 2026-08-23
+## Current as of v0.44.0 — 2026-08-23
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -40,6 +40,16 @@ genuinely unresolved right now.
   unlabelled chips to five plus a More popover; the 🔑 panel became a real
   Settings screen; MilkDrop gained a visible shuffle, a reachable heart and a
   random start; "preset" stopped naming two different systems.
+- **`docs/PERF-UX.md` P1/P2, and P3's premise corrected (0.44.0).** A perf
+  harness now lives in the repo (`npm run perf`, `scripts/perf/`), asserting
+  draw cost against a committed baseline instead of every claim costing a
+  from-scratch rig. The render loop now pauses in overlay mode too — lock,
+  exclusive-fullscreen, occlusion/minimise — and throttles to Lite rather
+  than blanking on battery; previously all of that only fired in wallpaper
+  mode. P3's "update check and library rescan compete with first paint" was
+  checked against the code and found wrong on every specific item; a real
+  measurement tool (`npm run perf:startup`) replaces the assumption, but
+  wants a real track run against it to produce an actual number.
 
 ### Actually open
 
@@ -56,16 +66,15 @@ genuinely unresolved right now.
    chain has never been watched complete against a real song in a browser tab
    — and the cache already contains the broken metadata it exists to fix
    (`T-Series`, `…VEVO` as artist names).
-3. **`docs/PERF-UX.md` P1 — there is still no perf harness in the repo.** The
-   doctrine is documented and the tooling is not: `scripts/` has no profiler,
-   the `scratchpad/profile.js` this file used to cite was never committed, and
-   CI has no perf job. Every perf claim costs a from-scratch rig. This gates
-   the honest version of P2/P3/P4.
-4. **`docs/PERF-UX.md` P2 — the app renders when nobody is looking.** The
-   battery/lock/exclusive-fullscreen suspend is gated behind
-   `WALLPAPER_ATTACHED`, so in the default overlay mode it never fires, and
-   there is no occlusion detection anywhere. A battery and thermal cost, which
-   is why fps-shaped investigations kept missing it.
+3. **`docs/PERF-UX.md` P2 wants real OS-level verification.** The code path
+   (lock/fullscreen/occlusion/battery, per mode) is in and structurally
+   smoke-tested over CDP, but Win+L / alt-tab-to-fullscreen / minimise /
+   virtual-desktop-switch / unplug-AC has not actually been run by a human
+   yet, across full/bar/strip.
+4. **`docs/PERF-UX.md` P3 wants a real-track run.** `npm run perf:startup`
+   exists; nobody has pointed it at a real track and read the result yet, so
+   the actual startup-burst cause is still an educated guess (job-engine
+   Cpu/Io lane contention from decode/analysis/fetch), not a number.
 5. **`docs/PERF-UX.md` U3 — twelve overlays, one `role="dialog"`.** No focus
    trap, no focus restore, Escape handled ad hoc. Correctness bugs, not only
    accessibility ones. The More popover (U1) and the model-consent modal are

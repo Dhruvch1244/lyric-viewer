@@ -2,6 +2,36 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.44.0 — 2026-08-23
+
+Doesn't burn battery to sit there, and perf claims now come with a number.
+
+- **The visualiser now pauses when nobody could be looking at it.** Behind a
+  locked screen, behind another app's exclusive fullscreen (a game),
+  minimised, or switched away to a different virtual desktop — the default
+  fullscreen overlay (and bar/strip) previously ran a full WebGL2 + 2D-canvas
+  render loop through all of that regardless. Only wallpaper mode paused
+  before; this extends the same idea, with its own policy.
+- **On battery, it throttles instead of blanking.** You opened a visualiser
+  on purpose, so pausing it outright would be a bug, not a feature — it drops
+  to Lite mode instead, says so once on the status line, and a manual toggle
+  always wins over the auto-engage from then on, in either direction.
+- **A perf harness lives in the repo now** (`npm run perf`), driving the real
+  app over WebView2's DevTools protocol and asserting draw cost against a
+  committed baseline — the tooling this project's own performance doctrine
+  had been missing since a prior harness was lost to never being committed.
+- **The startup-frame-rate dip finally gets a measurement tool
+  (`npm run perf:startup`)**, and a correction: the update check, the library
+  rescan, and the other usual suspects were all already verified non-blocking
+  once actually checked against the code, rather than assumed. The tool
+  measures the real remaining candidate — work triggered by a track actually
+  playing — against a real track, instead of the previous four releases'
+  worth of reasoning about it.
+- Test counts: 203 JS, 406 Rust across the workspace — unchanged from
+  0.43.0; this release is backend/tooling work plus one new interactive
+  check (`is_main_window_occluded`, folded into the existing live-desktop-
+  state test) that isn't part of the default count.
+
 ## 0.43.0 — 2026-08-23
 
 MilkDrop gets a shuffle you can see, a heart you can reach, and stops opening
