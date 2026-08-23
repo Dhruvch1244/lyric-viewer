@@ -9,43 +9,67 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.39.0 + 2026-08-22
+## Current as of v0.43.0 — 2026-08-23
 
-The Tauri rewrite, the job engine (0.37.0), and library indexing (0.38.0)
-landed since the section below was written — see `docs/JOB-ENGINE.md` for the
-authoritative phase-by-phase status, and `ROADMAP.md` for the competitive
-positioning. This section is the cold-start pickup list for what's real,
-unresolved work right now:
+The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
+landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
+is the authoritative phase-by-phase status for the backend,
+`docs/PERF-UX.md` for the performance/UX axis, and `ROADMAP.md` for
+competitive positioning. This is the cold-start pickup list for what is
+genuinely unresolved right now.
 
-1. **Diarization (JOB-ENGINE.md §5.8) — backend built and verified, not wired
-   to a caller.** The hard, novel part is done: a real pretrained
-   speaker-embedding ONNX model was found, downloaded, and run end-to-end
-   (`sidecar/src/fbank.rs`, `sidecar/src/diarize.rs`, pinned in `models.rs`
-   with a real SHA-256), a full protocol/host/Tauri-command path exists
-   (`diarize_local_file`), and `attribute::refine_with_diarization` is ready
-   to blend its clusters into the existing LLM-based per-line attribution.
-   **First move:** decide how to get raw audio to attribution for an
-   already-synced song — today `resolve_attribution` fires off lyric text
-   alone, before playback, so only songs that also need transcription ever
-   have audio in hand at that point. Call `diarize_local_file` by hand on any
-   local file in the meantime to see it work.
-2. **AcoustID is now verified live (2026-08-22)** — a real key was entered
-   and `acoustid::tests::a_real_lookup_answers` passed against the real
-   service. **Still open:** that proves the request/response shape, not that
-   a real recording's fingerprint returns a *correct* match — the full
-   loopback-capture → fingerprint → AcoustID → MusicBrainz chain has never
-   been watched complete against a real song playing in a browser tab.
-3. **The WASM/WebView Whisper fallback's model download is now consent-gated**
-   (closed 2026-08-22) — it used to fetch silently regardless of what the
-   native-sidecar consent flow answered. `ensureModelConsent` in renderer.js
-   is the real gate now, at the point `tauri-shim.js`'s `transcribeAudio`
-   would actually download something; the passive startup warm-up
-   (`schedulePreload`) stays silent until a real "yes" is on record, so it
-   never nags before the feature has been used once.
-4. Everything else queued as of 0.39.0 is either shipped or an open,
-   already-scoped item — see `docs/JOB-ENGINE.md`'s own "Not done" markers
-   (§5.8 above is the only phase not fully landed) rather than duplicating
-   that tracking here.
+### Closed since 0.39.0 — do not re-open these
+
+- **Vocal isolation, and the whole class of song it unlocks (0.41.0).** Silero
+  is a *speech* detector and scores sung vocals over dense production flat
+  zero — measured p50 0.000 across a 180s track with an audible hook, so that
+  music could not be auto-transcribed at all. Demucs ahead of the VAD takes
+  the same track from **0% voiced to 72%** and from no lyrics to a correct
+  transcription. Runs as a *retry*, only when the normal pass finds nothing.
+- **Background process priority was costing 11.5x (0.41.0).** Measured on one
+  identical unit of work: 4.46s normal, 5.39s BELOW_NORMAL, **51.39s** under
+  `PROCESS_MODE_BACKGROUND_BEGIN`. Every transcription the app had ever run
+  was paying it; Whisper is ~4x faster now.
+- **Phrase-level decoder loops (0.41.0).** The guard only looked for periods of
+  1–4 tokens; a real track looped a ~12-token line 20 times and that one
+  window took 119s. Now caught, while still letting a chorus repeat.
+- **AcoustID verified live (0.40.0)**, and the speech-model download is
+  consent-gated on *both* the native and WebView paths (0.40.0/0.41.0), with
+  consent now recorded per purpose.
+- **The control surface (0.42.0/0.43.0).** The bar went from nineteen
+  unlabelled chips to five plus a More popover; the 🔑 panel became a real
+  Settings screen; MilkDrop gained a visible shuffle, a reachable heart and a
+  random start; "preset" stopped naming two different systems.
+
+### Actually open
+
+1. **Diarization is parked, not in progress (JOB-ENGINE §5.8).** Everything
+   below the model works and is tested — VAD gating, fbank front end,
+   embedding, clustering, protocol, host command. The *capability* does not:
+   on a duo, forced to exactly two clusters, it returns **320 windows against
+   1**, and isolating the vocals first does not help (154 vs 1), so the
+   instrumental was never the confound. It is the model or the task. Do not
+   pick this up expecting a quick win.
+2. **AcoustID's real-recording path has still never run.** The live test
+   proves the request/response shape using synthetic audio that matches
+   nothing. The full loopback-capture → fingerprint → AcoustID → MusicBrainz
+   chain has never been watched complete against a real song in a browser tab
+   — and the cache already contains the broken metadata it exists to fix
+   (`T-Series`, `…VEVO` as artist names).
+3. **`docs/PERF-UX.md` P1 — there is still no perf harness in the repo.** The
+   doctrine is documented and the tooling is not: `scripts/` has no profiler,
+   the `scratchpad/profile.js` this file used to cite was never committed, and
+   CI has no perf job. Every perf claim costs a from-scratch rig. This gates
+   the honest version of P2/P3/P4.
+4. **`docs/PERF-UX.md` P2 — the app renders when nobody is looking.** The
+   battery/lock/exclusive-fullscreen suspend is gated behind
+   `WALLPAPER_ATTACHED`, so in the default overlay mode it never fires, and
+   there is no occlusion detection anywhere. A battery and thermal cost, which
+   is why fps-shaped investigations kept missing it.
+5. **`docs/PERF-UX.md` U3 — twelve overlays, one `role="dialog"`.** No focus
+   trap, no focus restore, Escape handled ad hoc. Correctness bugs, not only
+   accessibility ones. The More popover (U1) and the model-consent modal are
+   the two that do it properly; they are the template.
 
 ---
 

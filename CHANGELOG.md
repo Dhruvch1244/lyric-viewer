@@ -2,6 +2,49 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.43.0 — 2026-08-23
+
+MilkDrop gets a shuffle you can see, a heart you can reach, and stops opening
+on the same preset every time.
+
+- **Shuffle is a real setting now, not something you had to infer.** Presets
+  did change on drops — but only until the moment you picked one, and then
+  they stopped. Silently, with nothing on screen having said they were
+  changing in the first place. Choosing a preset amounted to switching the
+  feature off forever, which is why it read as broken.
+  - There is now a **Shuffle** button with a visible on/off state. Picking a
+    preset sets what plays now and shuffle carries on from it; turning shuffle
+    off is how you keep one.
+  - A preset pinned to a song still wins, and the button greys out and says so
+    instead of looking on while doing nothing.
+- **Heart the preset you are actually looking at.** Favourites already decided
+  what shuffle draws from, so hearting a handful turns 1754 community presets
+  into your own rotation — but the only way to do it was to open the browser
+  and find that preset's card, which nobody does mid-song. The heart is now
+  right there, next to the preset name.
+- **A ▸ button to move on immediately**, rather than waiting for the next drop.
+- These three appear **only while MilkDrop is on screen** and disappear
+  otherwise, so they cost nothing when you are not using it.
+- **MilkDrop no longer opens on the same preset every time.** It took the
+  first entry of the pool, so every session without a pinned preset started on
+  an identical look — out of 1754. It now picks at random from your favourites
+  when you have some, the curated set otherwise.
+- **"Preset" meant two different things.** This app's own looks and the
+  imported MilkDrop catalogue were both called presets, shown on two
+  similar-looking buttons, one of them an unlabelled symbol. They are now
+  **Scene** (this app's own) and **MilkDrop preset** (the catalogue), said the
+  same way everywhere — buttons, browser, and the first-run card, which had
+  described one and never mentioned the other.
+- **Fixed: "unparseable JSON" from a local AI tool.** Those tools have no
+  structured-output mode, so when one answers in plain prose — a usage limit,
+  a login prompt, a refusal — it still exits successfully, and the reply was
+  thrown away in favour of an error that explained nothing. It now quotes what
+  the tool actually said and names the common causes with what to do about
+  them.
+- Test counts: 203 JS, 406 Rust across the workspace — 281 app (was 269;
+  the 12 new ones cover the CLI-reply diagnostics above), 105 sidecar,
+  13 protocol, 7 sidecar integration.
+
 ## 0.42.0 — 2026-08-23
 
 The controls stop being a guessing game.

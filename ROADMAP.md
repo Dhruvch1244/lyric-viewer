@@ -11,6 +11,31 @@ undone — a real decision, not neglect), or left unmarked if it's still open.
 The competitive analysis in sections 1-2 holds up fine; it's the plan and gap
 list in sections 3-5 that needed the pass.
 
+**Status note (2026-08-23, v0.43.0):** three things in the sections below have
+been overtaken by measurement and are corrected here rather than edited in
+place, since the reasoning around them is still worth reading.
+
+- **Gap #9 ("transcription costs ~12 min of CPU per song")** — the number was
+  right and the cause was not the model. Windows' background process mode was
+  costing **11.5×** on inference work (4.46s → 51.39s on one identical unit),
+  which every transcription this app ever ran was paying. Whisper is ~4×
+  faster since 0.41.0.
+- **Phase 5's vocal isolation ("shipped, as an opt-in toggle")** — that toggle
+  only ever drove the WebView fallback, and the header of `demucs.js` admits
+  it had never been run against the live model. It has now: isolation is in
+  the sidecar, runs automatically as a *retry* when the speech detector finds
+  no voice, and takes an EDM track from **0% voiced to 72%** — a whole class
+  of song that could not previously be transcribed at all. See JOB-ENGINE
+  §5.9/§5.10.
+- **Gap #0b ("the shuffle reads as arbitrary, not designed")** — still true of
+  MilkDrop until 0.43.0, though not for the reason written here. Presets did
+  cycle on drops, but silently, and stopped the moment you picked one. It is
+  now an explicit Shuffle mode with a visible state, alongside a reachable
+  heart (favourites already decided what shuffle drew from) and a random
+  start. See `docs/PERF-UX.md` U6.
+
+The competitive analysis in sections 1–2 still holds.
+
 **Status note (2026-08-22):** this document's own items are still accurate as
 of the check below — nothing here has reversed. Two adjacent, more granular
 efforts finished the same day, tracked in `docs/JOB-ENGINE.md` rather than
