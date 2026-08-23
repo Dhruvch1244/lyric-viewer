@@ -129,14 +129,13 @@ Honest list of what is actually weak, worst first.
 
 ### Blocking adoption
 
-1. 🔁 **One display mode, and it is fullscreen — REVERSED, not solved.** This
-   gap's own reasoning (below) argued for adding a compact/taskbar mode.
-   0.28.0 went the opposite way instead: it removed Bar/Strip and the
-   Fullscreen/Bar/Strip menu entirely, coercing any persisted compact-mode
-   pref to Fullscreen on launch ("gone for good," per the commit). The code
-   paths were left dormant rather than deleted, but there's no menu, chip, or
-   persisted state that can reach them anymore. If this bounce problem is
-   still real, it needs a fresh decision, not a revival of the old menu.
+1. ✅ **Compact display modes — shipped for real in the Tauri build, this
+   entry was stale.** 0.28.0's Electron-era reversal (removing Bar/Strip
+   entirely) did not carry forward. `full`, `bar` (140px floating), `strip`
+   (96px, click-through), and `wallpaper` are all real and reachable today —
+   a proper `role="menu"` picker, `Ctrl+Alt+D` cycling, persisted prefs, real
+   teardown. Confirmed and corrected against the code in `docs/PERF-UX.md`
+   §5 (2026-08-22); this file simply hadn't been updated since.
    ~~The app takes over the screen or it does nothing. Every competitor offers
    a small, always-on mode. This is the single biggest reason someone tries
    it once and stops.~~
@@ -425,7 +424,7 @@ the leak.
 |---|---|---|---|---|
 | 1 | Butterchurn as a second engine (preset ecosystem) | Very high | Medium | ✅ Shipped |
 | 2 | Preset system + beat-synced transitions | Very high | Medium | ✅ Shipped |
-| 3 | Compact display modes | Very high | Medium | 🔁 Reversed (0.28.0, fullscreen-only) |
+| 3 | Compact display modes | Very high | Medium | ✅ Shipped — `full`/`bar`/`strip`/`wallpaper` all reachable in the Tauri build; the 0.28.0 reversal was Electron-era and did not carry forward. See `docs/PERF-UX.md` §5. |
 | 4 | Optional transcription pack (124 -> ~60 MB) | High | Medium | ✅ Solved differently (Tauri, ~6MB) |
 | 5 | Auto-update | High | Low | ✅ Shipped |
 | 6 | Deeper audio analysis | High | Medium | ✅ Shipped (native symphonia DSP) |

@@ -202,7 +202,44 @@ guessing at a different one would repeat the exact mistake this doc's own
 activity, the next move is tuning that lane's concurrency/priority — not
 `setup()` — and is its own follow-up.
 
-**Risk:** low. **Impact:** the first impression, which is disproportionate.
+**Measured (2026-08-23, `--build dev`, real track).** The script now takes
+`--track <path>`, calling `window.LocalPlayer.enqueue()` right after CDP
+attach instead of waiting for a human to start playback externally — the
+same entry point `libraryCard`'s click handler uses. Driven against a real
+5-track set, the dip is real and worse than the historical fps series
+above: **for ~30s starting immediately after enqueue, the renderer stopped
+answering `Runtime.evaluate` at all** (two back-to-back 15s CDP timeouts),
+and by the time it answered again `LocalPlayer.isActive()` had gone
+`false` — the track had aborted, not merely stalled. Reproduced twice: a
+plain 100s `--track` run collected zero samples across the entire window,
+and a step-by-step diagnostic (300ms polling) caught the same ~30s dead
+zone landing right after the enqueue call, immediately followed by
+`isActive()` flipping false.
+
+**Isolated (2026-08-23, `--build release`): debug-build artifact, not a real
+bug.** `npm run perf:build-release` was built and the same `--track` run
+repeated against it on two different tracks (a 100s EDM run, a 90s hip-hop
+run). Neither showed anything resembling the dead zone — largest gap between
+samples was 309ms and 367ms respectively (against ~30,000ms on the dev
+build), 467 and 425 samples collected with none dropped, and both runs
+recovered into the ordinary noisy-but-alive fps series matching the original
+116→...→240 historical pattern, not a stall. `analyzeLocalFile`'s unoptimized
+symphonia decode+DSP pass on a debug binary fully explains the dev-build dead
+zone; there is no evidence of job-engine lane contention or an actual
+freeze/abort in what ships. **Do not re-run this on a debug build expecting a
+different answer** — the dev-build "hang" was real but is a measurement
+artifact of `--build dev`, not a user-facing bug.
+
+Still worth doing regardless of this result: `player.js`'s `playAt()` has a
+silent `if (!raw) { next(); return; }` fallback on a slow/failed read, with
+no visible failure state — low priority now that there's nothing here to
+actually trigger it, but still a gap if some other future codepath does.
+
+**Risk:** none remaining — measured, not guessed. **Impact:** the first
+impression, still disproportionate to fix given P1's harness now exists, but
+no longer urgent: the dip recovers on its own within the same window the
+original 0.21.0 measurement showed, on a real release build, on two
+different tracks.
 
 ---
 
@@ -422,8 +459,8 @@ project.
 | 2 | **U2** Settings stops being a key | UX | Medium | **Low** | — |
 | 3 | **P2** Stop rendering when unseen | Perf | **Very high** (battery/thermal) | Medium | P1 to verify |
 | 4 | **U1** Group the nineteen chips | UX | **Very high** (adoption) | Medium | — |
-| 5 | **U3** One panel primitive | UX | High (+ correctness) | Medium | — |
-| 6 | **P3** Stagger the startup burst | Perf | High (first impression) | Low–Medium | P1 |
+| 5 | **U3** One panel primitive — ✅ shipped (0.45.0) | UX | High (+ correctness) | Medium | — |
+| 6 | **P3** Stagger the startup burst — ✅ measured, no fix needed (0.45.0) | Perf | High (first impression) | Low–Medium | P1 |
 | 7 | **U4** Keymap + `?` cheat sheet | UX | Medium | Low–Medium | U3 |
 | 8 | **P4** Memory baseline → decide | Perf | Unknown — that's the point | Low | P1 |
 | 9 | **U5** Keep splitting renderer.js | UX/sustaining | Indirect | Ongoing | opportunistic |

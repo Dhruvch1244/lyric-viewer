@@ -140,8 +140,8 @@
              undifferentiated row, which is a lot of unlabelled icons to sit
              on top of a visualiser; the rest moved behind More. See
              docs/PERF-UX.md U1. -->
-        <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.2 4.6h11.6M2.2 8h8.6M2.2 11.4h5.6"/></svg></button>
-        <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫</button>
+        <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.2 4.6h11.6M2.2 8h8.6M2.2 11.4h5.6"/></svg>Lyrics</button>
+        <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫ Audio</button>
         <!-- "Scene", not "preset": this is the app's OWN look (swirl field + 2D
              layers), and the ✳ chip below is the imported MilkDrop catalogue.
              Both used to be called a preset, with two similar-looking chips
@@ -179,26 +179,26 @@
             <div class="more-menu__row">
             <button id="btn-script" class="chip" type="button">अ</button>
             <button id="btn-translate" class="chip" type="button">EN</button>
-            <button id="btn-import-lyrics" class="chip" type="button" title="Import a .lrc file for this song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="1.4" width="10" height="13.2" rx="1.2"/><path d="M5.4 5h5.2M5.4 8h5.2M5.4 11h3.2"/></svg></button>
-            <button id="btn-lyrics-search" class="chip" type="button" title="Search for lyrics by hand — for when nothing auto-matched, or it matched the wrong song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.6" cy="6.6" r="4.2"/><path d="M9.7 9.7 14 14"/></svg></button>
+            <button id="btn-import-lyrics" class="chip" type="button" title="Import a .lrc file for this song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="1.4" width="10" height="13.2" rx="1.2"/><path d="M5.4 5h5.2M5.4 8h5.2M5.4 11h3.2"/></svg>Import</button>
+            <button id="btn-lyrics-search" class="chip" type="button" title="Search for lyrics by hand — for when nothing auto-matched, or it matched the wrong song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.6" cy="6.6" r="4.2"/><path d="M9.7 9.7 14 14"/></svg>Search</button>
             </div>
           </div>
           <div class="more-menu__group">
             <span class="more-menu__label">Look</span>
             <div class="more-menu__row">
             <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity">◐ vivid</button>
-            <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻</button>
+            <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻ Sprites</button>
             <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — the imported community catalogue. Browse, favourite and pin." aria-pressed="false" hidden>✳ MilkDrop</button>
-            <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg></button>
+            <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg>Lite</button>
             <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="8.4" rx="1"/><path d="M5.6 14h4.8M8 11v3"/></svg>Wallpaper</button>
             </div>
           </div>
           <div class="more-menu__group">
             <span class="more-menu__label">Library &amp; setup</span>
             <div class="more-menu__row">
-            <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg></button>
-            <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣</button>
-            <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg></button>
+            <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg>Pre-sync</button>
+            <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣ Cover</button>
+            <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg>Settings</button>
             </div>
           </div>
           </div>
@@ -372,7 +372,7 @@
       <!-- Collapsible pre-sync panel, revealed by the 📋 chip. Paste a list of
            "Artist - Title" lines (one per line) to fetch + cache their synced
            lyrics ahead of time, so they play instantly and offline later. -->
-      <div id="presync" class="listbox" hidden>
+      <div id="presync" class="listbox" hidden role="dialog" aria-modal="true" aria-label="Pre-sync tracks">
         <label class="listbox__label" for="presync-input">Paste tracks — one “Artist - Title” per line</label>
         <textarea id="presync-input" class="listbox__input" rows="6" spellcheck="false"
                   placeholder="Seedhe Maut - Nanchaku&#10;DIVINE - Mera Bhai&#10;KR$NA - Freeverse Feast"></textarea>
@@ -394,7 +394,7 @@
     <!-- The library. A proper panel rather than the 30vh list buried in the HUD
          that it replaces: cover art, what is known about each song, a search,
          and — now that the app can play files itself — click to play. -->
-    <section id="library" class="library" hidden aria-label="Song library">
+    <section id="library" class="library" hidden role="dialog" aria-modal="true" aria-label="Song library">
       <header class="library__bar">
         <h2 class="library__title">Library</h2>
         <input id="library-search" class="library__search" type="search"
@@ -427,7 +427,7 @@
          like, so choosing one meant loading it and looking. 0.21.0 shows the
          pictures, remembers the ones you like, and lets you throw away the ones
          you never want to see again. -->
-    <section id="milkdrop-panel" class="mdp" hidden aria-label="MilkDrop presets">
+    <section id="milkdrop-panel" class="mdp" hidden role="dialog" aria-modal="true" aria-label="MilkDrop presets">
       <header class="mdp__bar">
         <h2 class="mdp__title">MilkDrop presets</h2>
         <input id="mdp-search" class="mdp__search" type="search"
@@ -457,7 +457,7 @@
          including the near-misses the automatic pick rejects on purpose, since
          those are exactly what is needed when it got it wrong. Choosing one
          also recolours the app, because the cover drives the palette. -->
-    <section id="poster" class="poster" hidden aria-label="Cover art">
+    <section id="poster" class="poster" hidden role="dialog" aria-modal="true" aria-label="Cover art">
       <header class="poster__bar">
         <h2 class="poster__title">Cover art</h2>
         <span id="poster-status" class="poster__status" role="status"></span>
@@ -477,7 +477,7 @@
          time-stamps still show (so "does LRCLIB even have this song" has an
          answer) but can't be applied yet — this app's rendering is built on
          timestamped lines. -->
-    <section id="lyrics-search" class="lyricsearch" hidden aria-label="Search lyrics">
+    <section id="lyrics-search" class="lyricsearch" hidden role="dialog" aria-modal="true" aria-label="Search lyrics">
       <header class="lyricsearch__bar">
         <h2 class="lyricsearch__title">Search lyrics</h2>
         <input id="lyricsearch-input" class="lyricsearch__input" type="search"
@@ -556,7 +556,7 @@
          it at all. One dismissible card, once per install, naming the chips
          that are not self-evident and the two hotkeys. Deliberately NOT a
          tour: anything longer gets dismissed unread. -->
-    <section id="welcome" class="welcome" hidden aria-label="Welcome">
+    <section id="welcome" class="welcome" hidden role="dialog" aria-modal="true" aria-label="Welcome">
       <h2 class="welcome__title">Lyric Overlay</h2>
       <p class="welcome__lede">
         Play something in any app and the words follow. Move the mouse to bring
@@ -581,7 +581,7 @@
          returning user does not need the chips explained again, they want to
          know what changed. Shown once per new version, friendly and short —
          the list is filled by the renderer from a per-version highlights map. -->
-    <section id="whatsnew" class="welcome" hidden aria-label="What's new">
+    <section id="whatsnew" class="welcome" hidden role="dialog" aria-modal="true" aria-label="What's new">
       <h2 class="welcome__title">Hey — a few new things <span id="whatsnew-version" class="welcome__version"></span></h2>
       <p class="welcome__lede">Thanks for keeping it running. Here's what changed:</p>
       <ul id="whatsnew-list" class="welcome__keys"></ul>
@@ -615,6 +615,11 @@
     <!-- Tauri backing for window.player. MUST load before player.js/renderer.js,
          which assume window.player already exists (Electron set it in preload). -->
     <script src="tauri-shim.js"></script>
+    <!-- Shared focus-trap primitive for overlay panels (PERF-UX.md U3). Loads
+         early since it defines window.PanelFocus with no dependency on
+         anything else; the actual per-panel registration happens in
+         onboarding-cards.js, which loads last. -->
+    <script src="panel-focus.js"></script>
     <!-- Webview Whisper (transformers.js/WASM). Lazy — nothing loads until a song
          actually needs transcribing. -->
     <script src="whisper.js"></script>

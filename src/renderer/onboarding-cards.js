@@ -207,3 +207,43 @@ if (els.localcliDismiss) {
 if (window.player.onLocalcliOffer) {
   window.player.onLocalcliOffer(({ detected }) => showLocalcliOffer(detected));
 }
+
+/* --------------------------------------------------------- focus trap (U3) */
+/*
+  One registration point for every real panel in the app, rather than hand-
+  wiring trapFocus/releaseFocus into each one's own open()/close() — see
+  panel-focus.js for what registerPanel() actually does. This file loads
+  last (index.html), so every element and close() function below already
+  exists, including milkdrop-panel.js's (loaded just before this file).
+
+  The three ambient notification cards below (capture-nudge, update-card,
+  localcli-card) are deliberately NOT registered the same way: they carry
+  `role="status"` because they are non-blocking toasts that appear alongside
+  whatever the user is already doing, not panels that take over the screen.
+  Force-focusing them or trapping Tab inside would fight that — a keyboard
+  user tabbing through the HUD should be able to tab past one, not get stuck
+  in it. They still get Escape-to-dismiss, scoped to when focus is actually
+  inside one (e.g. a user tabbed onto its button on purpose).
+*/
+if (window.PanelFocus) {
+  const { registerPanel } = window.PanelFocus;
+  registerPanel(els.welcome, () => els.welcomeClose && els.welcomeClose.click());
+  registerPanel(els.whatsnew, () => els.whatsnewClose && els.whatsnewClose.click());
+  registerPanel(els.modelConsent, () => closeModelConsent());
+  registerPanel(els.keybox, () => closeKeybox());
+  registerPanel(els.presync, () => closePresync());
+  registerPanel(els.poster, () => closePoster());
+  registerPanel(els.lyricSearch, () => closeLyricSearch());
+  registerPanel(els.library, () => closeLibrary());
+  registerPanel(els.mdPanel, () => closeMilkdropPanel());
+  registerPanel(typeof modeMenu !== 'undefined' ? modeMenu : null, () => closeModeMenu());
+  registerPanel(typeof moreMenu !== 'undefined' ? moreMenu : null, () => closeMoreMenu(false));
+}
+
+for (const [el, dismiss] of [
+  [els.captureNudge, closeCaptureNudge],
+  [els.updateCard, () => els.updateLater && els.updateLater.click()],
+  [els.localcliCard, () => els.localcliDismiss && els.localcliDismiss.click()],
+]) {
+  if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Escape') dismiss(); });
+}

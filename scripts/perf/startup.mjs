@@ -26,10 +26,19 @@
     npm run perf:startup                       # 120s, sampled every 200ms
     npm run perf:startup -- --duration 60
     npm run perf:startup -- --interval 500 --verbose
+    npm run perf:startup -- --track "C:\path\to\song.mp3"   # auto-plays a real file
+
+  `--track` closes the gap the two bullets above describe as deliberate: it
+  drives the same `window.LocalPlayer.enqueue()` the library panel's card
+  click uses (renderer.js's `libraryCard`), fired right after CDP attach, so
+  the burst is captured against the exact subsystem load a real play causes —
+  decode, offline analysis, lyric/artwork fetch — without a human sitting
+  there starting playback by hand. Omit it and the manual workflow described
+  below is unchanged.
 */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename, extname, resolve as resolvePath } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cpus, platform, release } from 'node:os';
@@ -43,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DEFAULTS = { port: 9222, build: 'dev', durationMs: 120_000, intervalMs: 200, verbose: false };
 
 function parseArgs(argv) {
-  const args = { ...DEFAULTS, out: null };
+  const args = { ...DEFAULTS, out: null, track: null };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--duration') args.durationMs = Number(argv[++i]) * 1000;
@@ -51,11 +60,27 @@ function parseArgs(argv) {
     else if (a === '--build') args.build = argv[++i];
     else if (a === '--port') args.port = Number(argv[++i]);
     else if (a === '--out') args.out = argv[++i];
+    else if (a === '--track') args.track = argv[++i];
     else if (a === '--verbose') args.verbose = true;
     else throw new Error(`unknown argument: ${a}`);
   }
   if (!['dev', 'release'].includes(args.build)) throw new Error(`--build must be dev or release, got ${args.build}`);
   return args;
+}
+
+/**
+ * "Artist - Title.mp3" -> {artist, title}, the same convention the library's
+ * folder-import path already assumes elsewhere in this app. Falls back to the
+ * bare filename as the title when there's no ` - ` to split on, rather than
+ * guessing wrong.
+ * @param {string} filePath
+ * @returns {{artist: string, title: string}}
+ */
+function parseTrackMeta(filePath) {
+  const stem = basename(filePath, extname(filePath));
+  const sep = stem.indexOf(' - ');
+  if (sep === -1) return { artist: '', title: stem };
+  return { artist: stem.slice(0, sep).trim(), title: stem.slice(sep + 3).trim() };
 }
 
 /** Same reasoning as harness.mjs's assertPortFree: attaching to a leftover
@@ -171,12 +196,30 @@ async function main() {
     const { session: cdp } = await attachToApp(args.port, 15 * 60_000);
     appPid = await findAppPid(child.pid);
 
-    console.log(
-      `Recording for ${(args.durationMs / 1000).toFixed(0)}s from process launch (Ctrl-C to stop early and still save).\n` +
-        'This app only observes SMTC — it does not play anything itself. Start a real track in ' +
-        'whatever media app you normally use whenever you want the burst captured; the timestamps ' +
-        'below are what let you line the dip up with when playback actually started.\n'
-    );
+    let trackMeta = null;
+    if (args.track) {
+      const localPath = resolvePath(args.track);
+      trackMeta = parseTrackMeta(localPath);
+      // Fire-and-forget, per cdp.mjs's own warning: enqueue()'s promise
+      // resolves only after the file is read over IPC, decoded and playback
+      // started, so awaiting it here would block sampling on exactly the
+      // burst this script exists to capture.
+      await cdp.evaluate(
+        `window.LocalPlayer.enqueue([{localPath: ${JSON.stringify(localPath)}, ` +
+          `title: ${JSON.stringify(trackMeta.title)}, artist: ${JSON.stringify(trackMeta.artist)}}]);`
+      );
+      console.log(
+        `Recording for ${(args.durationMs / 1000).toFixed(0)}s from process launch (Ctrl-C to stop early and still save).\n` +
+          `Auto-started "${trackMeta.artist ? trackMeta.artist + ' - ' : ''}${trackMeta.title}" via LocalPlayer.enqueue right after attach.\n`
+      );
+    } else {
+      console.log(
+        `Recording for ${(args.durationMs / 1000).toFixed(0)}s from process launch (Ctrl-C to stop early and still save).\n` +
+          'This app only observes SMTC — it does not play anything itself. Start a real track in ' +
+          'whatever media app you normally use whenever you want the burst captured; the timestamps ' +
+          'below are what let you line the dip up with when playback actually started.\n'
+      );
+    }
 
     while (!interrupted && Date.now() - launchedAt < args.durationMs) {
       const tickStart = Date.now();
@@ -203,6 +246,7 @@ async function main() {
       machine: { cpu: cpus()[0]?.model ?? 'unknown', cores: cpus().length, platform: `${platform()} ${release()}` },
       durationMs: args.durationMs,
       intervalMs: args.intervalMs,
+      track: trackMeta ? { ...trackMeta, path: resolvePath(args.track) } : null,
       interrupted,
       samples,
     };

@@ -2,6 +2,47 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.45.0 — 2026-08-23
+
+The control surface actually says what it does, MilkDrop's shuffle draws
+from more than ten looks, and the startup dip finally has a real answer.
+
+- **Every icon-only chip now carries a visible label.** Import, Search,
+  Sprites, Lite, Pre-sync, Cover, Settings, Lyrics and Audio used to be a
+  bare glyph with only a tooltip — matches the icon+label style "◈ Liquid"
+  and "⇄ Shuffle" already used elsewhere in the bar.
+- **MilkDrop's shuffle pool grew from 10 presets to 150, vetted rather than
+  dumped.** Cycling the whole 1754-preset catalogue was tried once already
+  and walked back — too many are dim, broken on this renderer, or ugly. All
+  1754 were surveyed against the real engine this time (luminance + texture
+  scoring), 1171 passed a broken/blank filter, and 150 were stratified-
+  sampled from the top of that pool and spot-checked by eye. Reproducible
+  via `scripts/perf/curate-milkdrop-presets.mjs`.
+- **A real focus trap, on every dialog-style panel.** Library, poster,
+  pre-sync, lyric search, Settings, the MilkDrop browser, model-consent
+  download prompt, welcome/what's-new cards, and both popover menus now
+  contain Tab, close on Escape, and return focus to whatever opened them —
+  previously only one panel in the whole app did any of that, and Tab could
+  walk clean out of an open dialog into the page behind it. The three
+  ambient toast notifications (capture nudge, update card, local-CLI offer)
+  deliberately keep their non-modal behaviour instead.
+- **The startup-frame-rate dip finally has a real answer, not a guess.**
+  `npm run perf:startup` now drives real local playback itself
+  (`--track <path>`, via `LocalPlayer.enqueue()`) instead of needing a human
+  to press play. First pass against a debug build found something alarming
+  — a ~30s dead zone where the renderer stopped responding and the track
+  aborted — but the same run against a release build, on two different
+  tracks, showed nothing of the kind: largest gap between samples was
+  under 400ms both times, recovering into the same noisy-but-alive fps
+  series the original 2026 measurement showed. The debug-build freeze was
+  an unoptimized decode pass, not a shipped bug.
+- Two stale `ROADMAP.md` entries corrected: compact display modes
+  (full/bar/strip/wallpaper) have been real and reachable in the Tauri
+  build for a while — the doc still called them "reversed" from an
+  Electron-era decision that didn't carry forward.
+- Test counts: 203 JS, 406 Rust — unchanged from 0.44.0, all passing.
+  `cargo clippy --workspace --all-targets --no-deps -- -D warnings` clean.
+
 ## 0.44.0 — 2026-08-23
 
 Doesn't burn battery to sit there, and perf claims now come with a number.

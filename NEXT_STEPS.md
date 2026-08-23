@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.44.0 — 2026-08-23
+## Current as of v0.45.0 — 2026-08-23
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -50,6 +50,40 @@ genuinely unresolved right now.
   checked against the code and found wrong on every specific item; a real
   measurement tool (`npm run perf:startup`) replaces the assumption, but
   wants a real track run against it to produce an actual number.
+- **`docs/PERF-UX.md` P3's real-track run, closed for real (0.45.0).**
+  `npm run perf:startup --track <path>` now drives real local playback
+  itself via `LocalPlayer.enqueue()`. First pass against a debug build found
+  something alarming — a ~30s dead zone where the renderer stopped
+  responding and the track aborted — but a follow-up against
+  `npm run perf:build-release` on two different tracks (EDM, hip-hop) found
+  no dead zone at all: largest gap between samples 309ms/367ms, both
+  recovering into the same noisy-but-alive fps series the original 0.21.0
+  measurement showed. The debug-build freeze was `analyzeLocalFile`'s
+  unoptimized symphonia decode, not a shipped bug. Do not re-open this
+  expecting a different answer on a debug build — that was the artifact.
+- **`docs/PERF-UX.md` U3 — one panel primitive, shipped (0.45.0).** A shared
+  `panel-focus.js` (Tab-trap, Escape-to-close, focus-restore-to-opener) is
+  now wired to all eleven real dialog-style panels via one registration
+  point in `onboarding-cards.js`, driven by each panel's existing `hidden`
+  attribute rather than rewriting each one's bespoke open()/close(). The
+  three ambient toast notifications (capture nudge, update card, local-CLI
+  offer) deliberately keep their non-modal `role="status"` behaviour —
+  trapping Tab into a passive corner toast would have been a regression, not
+  a fix. Verified live: opener-tracking, Tab-wrap both directions, and
+  Escape-restore-focus all confirmed against the real app.
+- **MilkDrop's curated shortlist grown 10 → 150, machine-vetted (0.45.0).**
+  The 10-preset shortlist `milkdropCyclePool()` falls back to (favourites
+  aside) was too small to read as "shuffle," but the fix couldn't be "cycle
+  all 1754" — that was tried before and explicitly walked back, since a
+  large share of the corpus is dim, broken on this renderer, or ugly. All
+  1754 were surveyed against the real engine (luminance + texture scoring),
+  1171 passed a broken/blank filter, 150 were stratified-sampled from the
+  upper score band and spot-checked by eye. Reproducible via
+  `scripts/perf/curate-milkdrop-presets.mjs`.
+- **HUD/More-menu icon-only chips got visible labels (0.45.0).** Import,
+  Search, Sprites, Lite, Pre-sync, Cover, Settings, Lyrics and Audio were
+  icon-only with just a tooltip; each now carries a short visible label,
+  matching the style already used by "◈ Liquid" and "⇄ Shuffle."
 
 ### Actually open
 
@@ -71,14 +105,11 @@ genuinely unresolved right now.
    smoke-tested over CDP, but Win+L / alt-tab-to-fullscreen / minimise /
    virtual-desktop-switch / unplug-AC has not actually been run by a human
    yet, across full/bar/strip.
-4. **`docs/PERF-UX.md` P3 wants a real-track run.** `npm run perf:startup`
-   exists; nobody has pointed it at a real track and read the result yet, so
-   the actual startup-burst cause is still an educated guess (job-engine
-   Cpu/Io lane contention from decode/analysis/fetch), not a number.
-5. **`docs/PERF-UX.md` U3 — twelve overlays, one `role="dialog"`.** No focus
-   trap, no focus restore, Escape handled ad hoc. Correctness bugs, not only
-   accessibility ones. The More popover (U1) and the model-consent modal are
-   the two that do it properly; they are the template.
+4. **`player.js`'s `playAt()` has no visible failure state.** A slow or
+   failed read silently falls through `if (!raw) { next(); return; }` — low
+   priority now that the debug-build dead zone that surfaced it turned out
+   to be a measurement artifact (see "Closed since" above), but still a real
+   gap if some other codepath hits it.
 
 ---
 
