@@ -84,6 +84,38 @@ gate would be enforcing a number nobody believes.
   `stop()` uses `taskkill /T` so a run cannot leave an orphaned always-on-top
   overlay on someone's screen.
 
+## Measuring the startup burst (P3)
+
+```bash
+npm run perf:startup                  # 120s from process launch, sampled every 200ms
+npm run perf:startup -- --duration 60
+```
+
+Separate from the harness above, and observational rather than a gate — no
+baseline, no pass/fail. It records `frameIntervalMs`/`drawCostMs` from the
+moment the process launches, prints a bucketed fps-equivalent series so a dip
+is visible without opening the output JSON (`scripts/perf/runs/startup-*.json`),
+and stops on its own after `--duration` or on Ctrl-C (still saving what it
+has).
+
+Two things it deliberately does *not* do, both load-bearing:
+
+- **No `PERF_DEBUG` reload.** The steady-state harness reloads the page once
+  to turn on per-section `perfCost`. `frameIntervalMs`/`drawCostMs` update
+  unconditionally regardless of that flag, and a reload here would destroy
+  the exact from-launch window being measured.
+- **No synthetic audio driver.** `scenarios.mjs`'s driver replaces
+  `window.AudioReactive` specifically so the harness never needs a real,
+  gitignored track — but the startup burst is caused by the subsystem that
+  bypasses (decode, offline beatmap/heatmap analysis, lyric/artwork fetch).
+  This app only observes SMTC; it doesn't play anything itself. **A
+  cold-launch-only run with nothing playing will show a flat, uninteresting
+  series** — that's expected, and is itself evidence `setup()` isn't the
+  culprit (see PERF-UX.md P3). To capture the actual burst, start a real
+  track in whatever media app you normally use after the "Recording for…"
+  line prints; the timestamps in the output are what let you line the dip up
+  with when playback actually started.
+
 ## Reading the baseline
 
 `baseline.json` is committed; `runs/` is not. The baseline records the machine

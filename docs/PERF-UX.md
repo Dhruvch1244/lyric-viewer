@@ -152,9 +152,12 @@ analysis, lyric and artwork fetch) rather than with the visual engine.
 `NEXT_STEPS.md` closes that entry with *"Whether the startup burst can be
 staggered has not been tried."* It still has not been.
 
-**What changed since:** there is now a job engine with lanes, priorities and an
-`Idle` lane — the exact machinery that staging requires and that did not exist
-when the note was written.
+**What changed since:** there is now a job engine with lanes and priorities
+(`Lane::{Io,Cpu,Inference}`, `Priority::{Now,Next,Idle}`, `jobs/mod.rs`) —
+but no delay/defer primitive. `Idle` means backfill-with-no-deadline, not
+backfill-after-N-ms; grepping `jobs/` for `sleep`/`delay` turns up test code
+only. Staggering onto `Idle` is available; staggering onto a *timer* is not
+built.
 
 **What fires at startup today** (`lib.rs` `setup()`, in order): panic hook,
 tray, hotkeys, prefs load, stale-recording sweep, journal open + **resume any
@@ -162,12 +165,42 @@ stale transcription**, API keys, **update check**, display-mode/wallpaper
 apply, SMTC watcher, pointer-forwarding loop, power watcher, library watcher.
 Renderer-side: `getPrefs`, `getTranscribeConfig`, then a model-cache warm-up.
 
-Several of those have no business competing with first paint — an update check
-and a library rescan in particular.
+**Corrected, verified against current source (P1's harness in hand) rather
+than assumed:** the previous version of this section named "an update check
+and a library rescan in particular" as competing with first paint. Neither
+does, and nothing else on the list does either:
 
-**First move:** measure it (needs P1), then move the non-essential onto `Idle`
-with a delay. Do not reorder anything before there is a number; the profile
-that blamed MilkDrop for these dips was wrong.
+| Step | What actually happens |
+|---|---|
+| Update check (`commands/updater.rs:16-28`) | `tauri::async_runtime::spawn`s and returns immediately — the `setup()` call is non-blocking today. |
+| Library watcher (`library.rs:443-453`) | Sleeps 60s **before** its first scan. Costs nothing at first paint — the opposite of the old framing. |
+| Resume stale transcription (`lib.rs:136-143`) | Only loops and calls `jobs::submit(_, Priority::Idle)` per job — a HashMap lookup and a channel send. The real work runs later, already on the `Inference` lane. |
+| `start_smtc` / `start_pointer_forwarding` / `start_power_watcher` (`watchers.rs`) | Each spawns and returns immediately; the thread's first real action waits for its own initial sleep (250ms / 33ms / 2s). |
+| Renderer bootstrap (`renderer.js:7288-7301`) | `requestAnimationFrame(drawBackdrop)`/`requestAnimationFrame(frame)` are scheduled **before** `getPrefs()`/`getOffset()`/`resyncSmtc()` are even called — first frame isn't gated on any of them. |
+| Model-cache warm-up (`schedulePreload`, `renderer.js:5154-5166`) | Already `requestIdleCallback`, already an 8s timeout. Already correctly deferred. |
+
+So there is nothing here that both (a) blocks first paint and (b) has a
+"move it later" fix available. The likely real cause of the historical
+116→...→240 fps sequence is work triggered by **a track actually starting**
+— decode, beatmap/heatmap offline analysis, lyric/artwork fetch — which runs
+on the job engine's `Cpu`/`Io` lanes and competes with the render thread for
+real CPU cores. That is a different phenomenon from app cold-launch, and
+P1's harness structurally cannot reproduce it: `scenarios.mjs`'s driver
+replaces `window.AudioReactive` with a synthetic envelope specifically to
+avoid needing a real, gitignored track — which also skips the exact
+subsystem that would cause this burst.
+
+**First move:** `npm run perf:startup` (`scripts/perf/startup.mjs`) records
+`frameIntervalMs`/`drawCostMs` from process launch through a real track
+actually playing, and prints a bucketed fps-equivalent series so a dip is
+visible without opening the JSON. It is observational, not a gate — no
+baseline, no pass/fail. **Do not reorder anything in `setup()` or the
+renderer bootstrap before this produces a number**; every specific target
+the old version of this section named turned out to be already fine, and
+guessing at a different one would repeat the exact mistake this doc's own
+§0 warns about. If a real run shows the dip correlating with `Cpu`/`Io` lane
+activity, the next move is tuning that lane's concurrency/priority — not
+`setup()` — and is its own follow-up.
 
 **Risk:** low. **Impact:** the first impression, which is disproportionate.
 
