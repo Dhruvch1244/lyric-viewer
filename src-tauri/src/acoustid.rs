@@ -641,4 +641,54 @@ mod tests {
         let candidates = lookup(&fp, 30).expect("lookup should succeed even with no match");
         println!("acoustid returned {} candidate(s)", candidates.len());
     }
+
+    /// The one test in this module that can actually fail to identify
+    /// anything: `a_real_lookup_answers` above only proves the request/response
+    /// shape against synthetic audio, which by construction matches nothing.
+    /// This is the real chain — a real recording, decoded and fingerprinted,
+    /// against AcoustID's live index — run against a real commercial track,
+    /// same fixture convention as the sidecar's `real_*` tests
+    /// (`LYRIC_TEST_AUDIO`, e.g. `songs/Red - Seedhe Maut.mp3`; `songs/` is
+    /// gitignored). Lives here rather than in `analysis.rs` (which owns
+    /// `decode_to_mono`) because `acoustid` and `analysis` are sibling modules
+    /// under the crate root, so `crate::analysis::decode_to_mono` is reachable
+    /// from here without either module needing to be `pub`.
+    ///
+    /// `decode_to_mono`'s native sample rate is used directly — unlike the
+    /// sidecar's Whisper fixtures, `fingerprint::compute` wants the source
+    /// rate (it resamples to 11025 Hz internally), not a 16kHz downmix made
+    /// for a different consumer.
+    ///
+    /// Run with:
+    /// `ACOUSTID_API_KEY=... LYRIC_TEST_AUDIO="songs/Artist - Title.mp3" \
+    ///   cargo test -p lyric-overlay --lib -- --ignored real_audio_identifies --nocapture`
+    #[test]
+    #[ignore = "needs an AcoustID API key, the network, and LYRIC_TEST_AUDIO set to a real song"]
+    fn real_audio_identifies_a_known_song() {
+        let key = api_key().expect("set ACOUSTID_API_KEY to run this");
+        assert!(!key.is_empty());
+        let path = std::env::var("LYRIC_TEST_AUDIO").expect("set LYRIC_TEST_AUDIO to a real audio file");
+
+        let (samples, rate) = crate::analysis::decode_to_mono(&path).unwrap_or_else(|| panic!("cannot decode {path}"));
+        let track_secs = samples.len() as u32 / rate;
+        println!("decoded {} samples at {rate} Hz ({track_secs}s)", samples.len());
+
+        let fp = crate::fingerprint::compute(&samples, rate).expect("fingerprint should compute from real audio");
+        println!("fingerprint covers {}s", fp.analysed_secs);
+
+        let result = identify(&fp, track_secs).expect("identify should not error");
+        let identified = result.expect("expected a confident match — got none");
+        println!(
+            "AcoustID identified: {} — {} (score {:.2}, mbid {})",
+            identified.artist, identified.title, identified.score, identified.mbid
+        );
+
+        // Loose on purpose: MusicBrainz's own phrasing of an artist/title can
+        // differ from the file name (feat. credits, remaster suffixes,
+        // romanisation), so this checks the identification is non-empty and
+        // plausible rather than string-equal to `path`'s "Artist - Title".
+        assert!(!identified.artist.trim().is_empty());
+        assert!(!identified.title.trim().is_empty());
+        assert!(identified.score >= MIN_SCORE);
+    }
 }

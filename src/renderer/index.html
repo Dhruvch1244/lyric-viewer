@@ -146,7 +146,7 @@
              layers), and the ✳ chip below is the imported MilkDrop catalogue.
              Both used to be called a preset, with two similar-looking chips
              and only one of them labelled. -->
-        <button id="btn-preset" class="chip" type="button" title="Scene — this app's own look. Click to change.">◈ Liquid</button>
+        <button id="btn-preset" class="chip" type="button" title="Scene — this app's own look. Click to change. (P)">◈ Liquid</button>
         <!-- Live MilkDrop controls (PERF-UX.md U6b/U6c). Contextual on purpose:
              they exist only while MilkDrop is the engine on screen and vanish
              on the swirl one, so putting shuffle and the heart a single click
@@ -180,15 +180,15 @@
             <button id="btn-script" class="chip" type="button">अ</button>
             <button id="btn-translate" class="chip" type="button">EN</button>
             <button id="btn-import-lyrics" class="chip" type="button" title="Import a .lrc file for this song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="1.4" width="10" height="13.2" rx="1.2"/><path d="M5.4 5h5.2M5.4 8h5.2M5.4 11h3.2"/></svg>Import</button>
-            <button id="btn-lyrics-search" class="chip" type="button" title="Search for lyrics by hand — for when nothing auto-matched, or it matched the wrong song" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.6" cy="6.6" r="4.2"/><path d="M9.7 9.7 14 14"/></svg>Search</button>
+            <button id="btn-lyrics-search" class="chip" type="button" title="Search for lyrics by hand — for when nothing auto-matched, or it matched the wrong song (/)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6.6" cy="6.6" r="4.2"/><path d="M9.7 9.7 14 14"/></svg>Search</button>
             </div>
           </div>
           <div class="more-menu__group">
             <span class="more-menu__label">Look</span>
             <div class="more-menu__row">
-            <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity">◐ vivid</button>
+            <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity (B)">◐ vivid</button>
             <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻ Sprites</button>
-            <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — the imported community catalogue. Browse, favourite and pin." aria-pressed="false" hidden>✳ MilkDrop</button>
+            <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — the imported community catalogue. Browse, favourite and pin. (V)" aria-pressed="false" hidden>✳ MilkDrop</button>
             <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg>Lite</button>
             <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="8.4" rx="1"/><path d="M5.6 14h4.8M8 11v3"/></svg>Wallpaper</button>
             </div>
@@ -198,7 +198,8 @@
             <div class="more-menu__row">
             <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg>Pre-sync</button>
             <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣ Cover</button>
-            <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg>Settings</button>
+            <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics (K)" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg>Settings</button>
+            <button id="btn-shortcuts" class="chip" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">? Shortcuts</button>
             </div>
           </div>
           </div>
@@ -607,6 +608,40 @@
         <button id="model-consent-never" class="chip chip--muted" type="button">Don't ask again</button>
       </div>
       <div id="model-consent-log" class="modelconsent__log" hidden></div>
+    </section>
+
+    <!-- U4: the cheat sheet is the authoritative list of every shortcut —
+         global hotkeys are OS-level (tray.rs) and invisible to this page, so
+         they are spelled out here by hand rather than read from the OS. -->
+    <div id="cheatsheet-backdrop" class="modelconsent-backdrop" hidden></div>
+    <section id="cheatsheet" class="modelconsent cheatsheet" hidden role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <h2 class="modelconsent__title">Keyboard shortcuts</h2>
+      <div class="cheatsheet__group">
+        <span class="more-menu__label">Global — works anywhere, even unfocused</span>
+        <dl class="cheatsheet__list">
+          <div><dt>Ctrl+Alt+←/→</dt><dd>Nudge lyric timing ±100ms</dd></div>
+          <div><dt>Ctrl+Alt+0</dt><dd>Reset lyric timing offset</dd></div>
+          <div><dt>Ctrl+Alt+H</dt><dd>Show/hide the overlay</dd></div>
+          <div><dt>Ctrl+Alt+M</dt><dd>Toggle desktop wallpaper mode</dd></div>
+          <div><dt>Ctrl+Alt+D</dt><dd>Cycle display mode</dd></div>
+        </dl>
+      </div>
+      <div class="cheatsheet__group">
+        <span class="more-menu__label">In this window</span>
+        <dl class="cheatsheet__list">
+          <div><dt>L</dt><dd>Library</dd></div>
+          <div><dt>/</dt><dd>Search lyrics</dd></div>
+          <div><dt>K</dt><dd>Settings</dd></div>
+          <div><dt>P</dt><dd>Scene</dd></div>
+          <div><dt>V</dt><dd>MilkDrop presets (while MilkDrop is the live engine)</dd></div>
+          <div><dt>B</dt><dd>Backdrop opacity</dd></div>
+          <div><dt>Esc</dt><dd>Close whatever panel is open</dd></div>
+          <div><dt>?</dt><dd>This list</dd></div>
+        </dl>
+      </div>
+      <div class="modelconsent__row">
+        <button id="cheatsheet-close" class="chip" type="button">Close</button>
+      </div>
     </section>
 
     <!-- Parent-side proxy for the MilkDrop frame above. The Butterchurn bundles

@@ -262,6 +262,48 @@ already be fine.
 
 **Risk:** low. Explicitly a *measure-then-decide*, not a *fix*.
 
+**Measured (release build, 2026-08-23).** The harness's `sampleProcessTree`
+already recorded memory; it was extended (`scripts/perf/harness.mjs`,
+`classifyProcess`) to break the tree down by *what* each process is, not just
+sum it, since `--type=` on WebView2's own command line is exactly what
+Chromium itself uses to tell a browser process from a renderer from a GPU
+process. Full run: `scripts/perf/runs/run-2026-08-23T19-04-24-143Z.json`.
+
+Total working set across scenarios ran **625–824MB** — the old debug-build
+figure (~153MB combined) undercounted by an order of magnitude because it only
+ever looked at one or two processes, not the real eight-process tree. Per
+role, `full/liquid`:
+
+| role | processes | private | working set |
+|---|---|---|---|
+| app (main, the Rust/wry host) | 1 | 20.6MB | 49.9MB |
+| webview2 (browser) | 1 | 45.7MB | 136.3MB |
+| webview2 (utility ×3) | 3 | 30.9MB | 81.9MB |
+| webview2 (renderer — the page) | 1 | 170.1MB | 227.2MB |
+| webview2 (gpu-process) | 1 | 170.7MB | 118.5MB |
+| webview2 (crashpad-handler) | 1 | 3.0MB | 13.3MB |
+
+**The app's own process is not the story — it never exceeded ~21MB private
+across any scenario.** The cost is structural WebView2 overhead: browser +
+utility + GPU + crashpad alone run **250–370MB** before the page's own
+renderer is counted at all, in every scenario including `bar`/`strip` where
+the backdrop is deliberately parked and drawing nothing. `full/milkdrop` was
+the heaviest overall (823.6MB working set) — Butterchurn's own WebGL2 surface
+adds real weight on top of the swirl engine's baseline, as the compact-mode
+teardown already implied.
+
+**Decision: no code fix.** This is Chromium's own multi-process model, owned
+by WebView2 and the OS, not an app-side leak — there is no lever here the app
+controls the way it controls its own draw cost. One real methodology caveat
+for any future re-run: all eight scenarios shared a single app launch (as the
+harness always does), and the `gpu-process` number did not track scene
+complexity monotonically — `bar`/`strip`, drawing nothing, still carried
+250–288MB, higher than several drawing `full` scenarios earlier in the same
+run. That reads as GPU-process allocations from an earlier scenario not being
+released on teardown, which means per-mode comparisons from this run are not
+independent; a mode-by-mode memory *comparison* (not just a total baseline)
+would need one fresh launch per scenario to be trustworthy.
+
 ---
 
 ## 3. UX track
@@ -350,6 +392,18 @@ discoverable only by reading tooltips one at a time.
 **First move:** a real keymap plus a `?` cheat-sheet overlay. The cheat sheet
 is worth more than the keymap on its own: it also fixes discovery for the four
 global hotkeys that already work and that nobody knows about.
+
+**Shipped.** Six new in-app single-key bindings — `L` Library, `/` Search,
+`K` Settings, `P` Scene, `V` MilkDrop presets (only while MilkDrop is the live
+engine), `B` Backdrop — plus `?` for a cheat-sheet overlay listing both these
+and all five global Ctrl+Alt hotkeys, so the ones nobody knew about are now
+spelled out in one place. The keydown listener is guarded against firing while
+a text input has focus or a blocking modal (welcome/whatsnew/model-consent/the
+cheat sheet itself) is open. `?` also got a chip inside More
+(`btn-shortcuts`), since a keyboard-only affordance is invisible to a
+first-time mouse user. Deliberately not all nineteen chips — the doc's own
+framing above holds: the cheat sheet is what makes discovery work, exhaustive
+per-chip binding was not the point.
 
 ---
 
@@ -461,8 +515,8 @@ project.
 | 4 | **U1** Group the nineteen chips | UX | **Very high** (adoption) | Medium | — |
 | 5 | **U3** One panel primitive — ✅ shipped (0.45.0) | UX | High (+ correctness) | Medium | — |
 | 6 | **P3** Stagger the startup burst — ✅ measured, no fix needed (0.45.0) | Perf | High (first impression) | Low–Medium | P1 |
-| 7 | **U4** Keymap + `?` cheat sheet | UX | Medium | Low–Medium | U3 |
-| 8 | **P4** Memory baseline → decide | Perf | Unknown — that's the point | Low | P1 |
+| 7 | **U4** Keymap + `?` cheat sheet — ✅ shipped | UX | Medium | Low–Medium | U3 |
+| 8 | **P4** Memory baseline → decide — ✅ measured, no fix needed | Perf | Unknown — that's the point | Low | P1 |
 | 9 | **U5** Keep splitting renderer.js | UX/sustaining | Indirect | Ongoing | opportunistic |
 
 **Two things can start today with no dependency:** U2 (an hour, mostly copy)

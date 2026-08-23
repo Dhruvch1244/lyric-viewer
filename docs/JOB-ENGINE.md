@@ -201,6 +201,20 @@ fingerprints to the C reference across all five algorithm variants, and
 benchmarks ~4% faster than the C library (269 vs 258 Melem/s at 120 s). Pure
 Rust means no new C toolchain dependency on Windows.
 
+**Verified end-to-end against real recordings, not just the API shape.** Every
+prior test of this chain (`acoustid::tests::a_real_lookup_answers`) fingerprinted
+a synthetic sine sweep, which proves AcoustID accepts the request and the
+response parses but by construction matches nothing. A new `#[ignore]`d test,
+`acoustid::tests::real_audio_identifies_a_known_song`, decodes a real file
+(`analysis::decode_to_mono`, native sample rate — `fingerprint::compute`
+resamples to 11025 Hz internally, so no separate 16kHz downmix is needed here
+unlike the Whisper fixtures), fingerprints it, and asks AcoustID for real. Two
+real commercial tracks both came back correct: "Red - Seedhe Maut.mp3" →
+*Seedhe Maut, Hisab — RED* (score 0.93), "Karan Aujla - Mexico.mp3" → *Karan
+Aujla — Mexico* (score 0.98, exact title match). The full
+capture→fingerprint→AcoustID→MusicBrainz chain is real, not just
+request-shaped.
+
 ### 5.2 Silero VAD before Whisper **(best effort-to-payoff ratio)**
 
 A 2.3 MB ONNX model that classifies ~30 ms chunks in **under 1 ms on CPU**.

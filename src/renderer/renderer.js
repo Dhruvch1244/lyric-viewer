@@ -102,6 +102,10 @@ const els = {
   modelConsentLater: document.getElementById('model-consent-later'),
   modelConsentNever: document.getElementById('model-consent-never'),
   modelConsentLog: document.getElementById('model-consent-log'),
+  cheatsheetBtn: document.getElementById('btn-shortcuts'),
+  cheatsheetBackdrop: document.getElementById('cheatsheet-backdrop'),
+  cheatsheet: document.getElementById('cheatsheet'),
+  cheatsheetClose: document.getElementById('cheatsheet-close'),
   captureNudge: document.getElementById('capture-nudge'),
   nudgeEnable: document.getElementById('nudge-enable'),
   nudgeDismiss: document.getElementById('nudge-dismiss'),
@@ -5629,6 +5633,68 @@ if (modeMenu) {
   });
 }
 
+/*
+  U4: a real in-app keymap, plus '?' for the cheat sheet that lists it (see
+  docs/PERF-UX.md U4). Deliberately a small set of high-value bindings, not
+  all nineteen chips — the cheat sheet is what makes discovery work, not
+  exhaustive coverage. `?` also has a chip inside More (btn-shortcuts) since a
+  keyboard-only affordance is invisible to a first-time mouse user.
+*/
+function closeCheatsheet() {
+  if (els.cheatsheet) els.cheatsheet.hidden = true;
+  if (els.cheatsheetBackdrop) els.cheatsheetBackdrop.hidden = true;
+}
+
+function openCheatsheet() {
+  if (!els.cheatsheet) return;
+  els.cheatsheet.hidden = false;
+  if (els.cheatsheetBackdrop) els.cheatsheetBackdrop.hidden = false;
+}
+
+if (els.cheatsheetBtn) els.cheatsheetBtn.addEventListener('click', openCheatsheet);
+if (els.cheatsheetClose) els.cheatsheetClose.addEventListener('click', closeCheatsheet);
+if (els.cheatsheetBackdrop) els.cheatsheetBackdrop.addEventListener('click', closeCheatsheet);
+
+// The same panels that block the page in wallpaper mode (WALLPAPER_PANELS,
+// below) also count as "already have the keyboard" here — welcome/whatsnew/
+// model-consent/cheatsheet are the ones marked aria-modal="true".
+const BLOCKING_MODALS = [els.welcome, els.whatsnew, els.modelConsent, els.cheatsheet].filter(Boolean);
+
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return; // global Ctrl+Alt hotkeys live in tray.rs, not here
+  const target = document.activeElement;
+  const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+  if (typing) return;
+  if (BLOCKING_MODALS.some((el) => !el.hidden)) return;
+
+  switch (e.key) {
+    case '?':
+      openCheatsheet();
+      break;
+    case 'l': case 'L':
+      if (els.libraryBtn) els.libraryBtn.click();
+      break;
+    case '/':
+      e.preventDefault(); // browsers use bare '/' for quick-find
+      if (els.lyricSearchBtn) els.lyricSearchBtn.click();
+      break;
+    case 'k': case 'K':
+      if (els.keyBtn) els.keyBtn.click();
+      break;
+    case 'p': case 'P':
+      if (els.presetBtn) els.presetBtn.click();
+      break;
+    case 'v': case 'V':
+      if (els.mdBtn && !els.mdBtn.hidden) els.mdBtn.click(); // hidden unless MilkDrop is the live engine
+      break;
+    case 'b': case 'B':
+      if (els.backdropBtn) els.backdropBtn.click();
+      break;
+    default:
+      return;
+  }
+});
+
 if (els.wallpaperBtn) {
   els.wallpaperBtn.addEventListener('click', () => {
     window.player.setDisplayMode(displayMode === 'wallpaper' ? 'full' : 'wallpaper');
@@ -5861,7 +5927,7 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, moreMenu,
 ].filter(Boolean);
 
 function anyPanelOpen() {

@@ -236,6 +236,7 @@ if (window.PanelFocus) {
   registerPanel(els.lyricSearch, () => closeLyricSearch());
   registerPanel(els.library, () => closeLibrary());
   registerPanel(els.mdPanel, () => closeMilkdropPanel());
+  registerPanel(els.cheatsheet, () => closeCheatsheet());
   registerPanel(typeof modeMenu !== 'undefined' ? modeMenu : null, () => closeModeMenu());
   registerPanel(typeof moreMenu !== 'undefined' ? moreMenu : null, () => closeMoreMenu(false));
 }

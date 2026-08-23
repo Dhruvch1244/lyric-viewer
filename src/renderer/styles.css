@@ -1354,6 +1354,40 @@ body.mode-wallpaper .poster {
 
 .modelconsent__file--done .modelconsent__file-fill { background: var(--chrome-green-ink); }
 
+.cheatsheet { overflow-y: auto; gap: 0.9rem; }
+
+.cheatsheet__group + .cheatsheet__group { margin-top: 0.2rem; }
+
+.cheatsheet__list {
+  margin: 0.4rem 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.9rem;
+  row-gap: 0.4rem;
+}
+
+.cheatsheet__list > div { display: contents; }
+
+.cheatsheet__list dt {
+  font-family: var(--chrome-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--chrome-ink);
+  background: var(--chrome-chip-bg, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+  align-self: start;
+}
+
+.cheatsheet__list dd {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--chrome-ink-dim);
+  align-self: start;
+  padding-top: 0.05rem;
+}
+
 /* ---- HUD ---- */
 
 .hud {

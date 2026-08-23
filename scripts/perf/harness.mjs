@@ -107,7 +107,7 @@ async function processTree(rootPid) {
     [
       '-NoProfile',
       '-Command',
-      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,PrivatePageCount,WorkingSetSize | ConvertTo-Json -Compress',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,PrivatePageCount,WorkingSetSize,CommandLine | ConvertTo-Json -Compress',
     ],
     { maxBuffer: 64 * 1024 * 1024 }
   );
@@ -133,10 +133,36 @@ async function processTree(rootPid) {
 }
 
 /**
- * Memory across the app's process tree.
+ * Which part of the app a process in the tree actually is.
+ *
+ * WebView2 is itself a multi-process Chromium: one browser process plus a GPU
+ * process, a renderer per frame (the page, and MilkDrop's own CSP-isolated
+ * iframe surfaces as another), and utility processes for things like audio.
+ * A tree-wide sum treats all of that as one number; this is what lets P4 say
+ * *where* memory goes instead of just how much there is. Classified from
+ * `--type=` on the command line, the same flag Chromium/Edge itself uses —
+ * the browser process is the only WebView2 one without it.
+ *
+ * @param {{Name?: string, CommandLine?: string}} p
+ * @returns {string}
+ */
+function classifyProcess(p) {
+  const name = p.Name || '';
+  if (/^lyric-overlay\.exe$/i.test(name)) return 'app (main)';
+  if (/^lyric-inference/i.test(name)) return 'sidecar (inference)';
+  if (/^msedgewebview2\.exe$/i.test(name)) {
+    const m = /--type=([a-z-]+)/i.exec(p.CommandLine || '');
+    return m ? `webview2 (${m[1]})` : 'webview2 (browser)';
+  }
+  return `other (${name || 'unknown'})`;
+}
+
+/**
+ * Memory across the app's process tree, both as a total and broken out by
+ * what each process actually is.
  *
  * @param {number} rootPid
- * @returns {Promise<{privateMb: number, workingSetMb: number, processes: number}|null>}
+ * @returns {Promise<{privateMb: number, workingSetMb: number, processes: number, byRole: Record<string,{privateMb: number, workingSetMb: number, processes: number}>}|null>}
  */
 async function sampleProcessTree(rootPid) {
   try {
@@ -144,7 +170,27 @@ async function sampleProcessTree(rootPid) {
     if (!tree.length) return null;
     const priv = tree.reduce((sum, p) => sum + (Number(p.PrivatePageCount) || 0), 0);
     const ws = tree.reduce((sum, p) => sum + (Number(p.WorkingSetSize) || 0), 0);
-    return { privateMb: +(priv / 1048576).toFixed(1), workingSetMb: +(ws / 1048576).toFixed(1), processes: tree.length };
+
+    const byRole = {};
+    for (const p of tree) {
+      const role = classifyProcess(p);
+      const bucket = byRole[role] || { privateMb: 0, workingSetMb: 0, processes: 0 };
+      bucket.privateMb += Number(p.PrivatePageCount) || 0;
+      bucket.workingSetMb += Number(p.WorkingSetSize) || 0;
+      bucket.processes += 1;
+      byRole[role] = bucket;
+    }
+    for (const bucket of Object.values(byRole)) {
+      bucket.privateMb = +(bucket.privateMb / 1048576).toFixed(1);
+      bucket.workingSetMb = +(bucket.workingSetMb / 1048576).toFixed(1);
+    }
+
+    return {
+      privateMb: +(priv / 1048576).toFixed(1),
+      workingSetMb: +(ws / 1048576).toFixed(1),
+      processes: tree.length,
+      byRole,
+    };
   } catch {
     return null; // Memory is a nice-to-have; never fail a run over it.
   }
