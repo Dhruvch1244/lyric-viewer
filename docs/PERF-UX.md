@@ -352,9 +352,18 @@ Three candidates, in preference order:
 3. **On the preset chip itself** — click cycles, a small heart sits on its
    corner. Densest, and the least discoverable.
 
-**First move:** U6a and U6d are unambiguous and cheap — fix the fixed-start
-bug and settle the vocabulary. U6b/U6c need the placement decision above
-before any of it is worth building.
+**All four are now done.** U6a (random start) and U6d (Scene vs MilkDrop
+preset) shipped first as they needed no decision. U6b/U6c then shipped as
+option 1, the contextual cluster: `⇄ Shuffle`, a heart and `▸` next appear
+beside the scene chip only while MilkDrop is the live engine and disappear on
+the swirl one, so the bar stays at U1's five chips the rest of the time.
+
+The behavioural fix inside U6b is the part that mattered: shuffle was
+previously implied by `!milkdropChosen`, so picking a preset silently turned
+cycling off forever. It is now a real mode with a visible chip — picking a
+preset sets what plays now and shuffle carries on from it; turning shuffle off
+is how you keep one. A per-track pin still outranks the mode, and the chip
+says so rather than sitting there looking enabled while doing nothing.
 
 ### U5 — `renderer.js` is 7,055 lines *(sustaining)*
 

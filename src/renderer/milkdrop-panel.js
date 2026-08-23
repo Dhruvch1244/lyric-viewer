@@ -248,6 +248,8 @@ function chooseMilkdrop(name) {
   const card = els.mdList.querySelector(`[data-preset="${cssEscape(name)}"]`);
   if (card) card.setAttribute('aria-current', 'true');
   updateMilkdropPinChip();
+  // The HUD heart refers to whatever is playing, which this just changed.
+  if (typeof updateMilkdropLiveChips === 'function') updateMilkdropLiveChips();
 }
 
 /** Preset names contain quotes and brackets; a selector needs them escaped. */

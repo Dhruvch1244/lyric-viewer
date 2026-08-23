@@ -1629,6 +1629,24 @@ body.keybox-open .hud {
   gap: 1.2rem;
 }
 
+/* Live MilkDrop controls, next to the scene chip. Present only while MilkDrop
+   is the engine on screen — see updateMilkdropLiveChips. */
+.hud__live {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.hud__live[hidden] {
+  display: none;
+}
+
+/* A favourited preset should be obvious at a glance across a room, which a
+   pressed-chip outline alone is not. */
+#btn-md-heart[aria-pressed="true"] {
+  color: #ff6b8a;
+}
+
 /* Divider between clusters of chips. Faint on purpose: it is there to break a
    row into readable runs, not to draw attention to itself over the visuals. */
 .hud__sep {

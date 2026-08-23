@@ -1469,6 +1469,12 @@ function isCompact() {
  */
 const MILKDROP_SWITCH_MS = 42000;
 
+/* Whether drops are allowed to change the MilkDrop preset (PERF-UX.md U6b).
+   Defaults ON because that IS the behaviour the app has always had — this
+   makes it visible and switchable rather than something inferred from whether
+   you happen to have picked a preset. */
+let milkdropShuffle = localStorage.getItem('milkdropShuffle') !== '0';
+
 /*
   Resolution ladder for the 2D backdrop, mirroring the swirl's.
 
@@ -2563,10 +2569,12 @@ function applyEngine(preset, now, dt, w, h) {
       // that matters here specifically.
       milkdropName = window.MilkDrop.loadPreset(milkdropTargetFor(preset), 0);
       lastMilkdropSwitchAt = now;
+      updateMilkdropLiveChips();
     } else {
       window.MilkDrop.destroy();
       els.milkdrop.hidden = true;
       closeMilkdropPanel();
+      updateMilkdropLiveChips();
     }
   }
 
@@ -2588,6 +2596,7 @@ function applyEngine(preset, now, dt, w, h) {
     // An explicit choice cuts; an automatic one blends.
     milkdropName = window.MilkDrop.loadPreset(want, (pinned || milkdropChosen) ? 0 : 2.7);
     lastMilkdropSwitchAt = now;
+    updateMilkdropLiveChips();
   }
 
   /*
@@ -2599,7 +2608,20 @@ function applyEngine(preset, now, dt, w, h) {
     develop, so cutting on every drop in a four-on-the-floor track would be a
     strobe rather than a sequence.
   */
-  if (!pinned && !milkdropChosen
+  /*
+    `milkdropShuffle` replaced an implicit `!milkdropChosen` here, and that is
+    the whole point of U6b. Presets used to cycle on drops until the moment you
+    picked one, and then stop — silently, with nothing on screen having said
+    they were cycling in the first place or that they had stopped. Choosing a
+    preset reading as "turn the feature off forever" is exactly what made this
+    feel broken.
+
+    Now it is a mode with a visible chip. Picking a preset sets what is playing
+    NOW and shuffle carries on from it; turning shuffle off is how you keep
+    one. A per-track pin still wins, because a pin is an explicit "always this,
+    for this song" and outranks a global mode.
+  */
+  if (milkdropShuffle && !pinned
       && dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
     /* Hidden presets are excluded here, not only from the browser. This is
        where an unwanted preset actually turns up, so a veto that did not reach
@@ -2624,6 +2646,7 @@ function applyEngine(preset, now, dt, w, h) {
       milkdropName = window.MilkDrop.loadPreset(milkdropWanted, phraseBlend);
       lastMilkdropSwitchAt = now;
       markMilkdropSeen(milkdropWanted);
+      updateMilkdropLiveChips();
       setStatus(`MilkDrop — ${milkdropName}`);
     }
   }
@@ -6196,6 +6219,89 @@ function applyPresetLabel() {
   els.presetBtn.title = substituted
     ? `Scene: ${preset.name} — running "Minimal" to hold the frame rate`
     : `Scene — ${preset.name}. This app's own look; click to cycle. (✳ is the MilkDrop catalogue.)`;
+}
+
+/*
+  The live MilkDrop cluster — shuffle, heart, next (PERF-UX.md U6b/U6c).
+
+  Shown only while MilkDrop is the engine on screen. The heart is the load
+  bearing one: favourites already decide what shuffle draws from
+  (`milkdropCyclePool` prefers liked presets once there is more than one), so
+  hearting a few turns 1754 community presets into your own rotation. That
+  mechanism existed already and was reachable only by opening the browser and
+  finding the current preset's card in it, which is not a thing anyone does
+  mid-song.
+*/
+const mdLive = document.getElementById('md-live');
+const mdShuffleBtn = document.getElementById('btn-md-shuffle');
+const mdHeartBtn = document.getElementById('btn-md-heart');
+const mdNextBtn = document.getElementById('btn-md-next');
+
+function updateMilkdropLiveChips() {
+  if (!mdLive) return;
+  mdLive.hidden = activeEngine !== 'milkdrop';
+  if (mdLive.hidden) return;
+
+  if (mdShuffleBtn) {
+    mdShuffleBtn.setAttribute('aria-pressed', String(milkdropShuffle));
+    const pinned = typeof pinnedMilkdrop === 'function' ? pinnedMilkdrop() : null;
+    // Say why it is not shuffling rather than showing an on-looking chip that
+    // does nothing — a pin outranks the mode, and that is invisible otherwise.
+    mdShuffleBtn.title = pinned
+      ? 'Shuffle is off for this song — it has a pinned preset (unpin it in the browser)'
+      : milkdropShuffle
+        ? 'Shuffle is on — drops change the preset. Click to keep the current one.'
+        : 'Shuffle is off — the preset stays put. Click to let drops change it.';
+    mdShuffleBtn.classList.toggle('chip--muted', Boolean(pinned));
+  }
+
+  if (mdHeartBtn) {
+    const liked = Boolean(milkdropName) && typeof mdpFavourites !== 'undefined' && mdpFavourites.has(milkdropName);
+    mdHeartBtn.textContent = liked ? '♥' : '♡';
+    mdHeartBtn.setAttribute('aria-pressed', String(liked));
+    mdHeartBtn.title = liked
+      ? `Favourited — shuffle draws from your favourites. Click to remove "${milkdropName || ''}".`
+      : `Favourite "${milkdropName || 'this preset'}" — shuffle then draws from your favourites`;
+  }
+}
+
+if (mdShuffleBtn) {
+  mdShuffleBtn.addEventListener('click', () => {
+    milkdropShuffle = !milkdropShuffle;
+    localStorage.setItem('milkdropShuffle', milkdropShuffle ? '1' : '0');
+    updateMilkdropLiveChips();
+    setStatus(milkdropShuffle ? 'shuffle on — presets change on drops' : 'shuffle off — keeping this preset');
+  });
+}
+
+if (mdHeartBtn) {
+  mdHeartBtn.addEventListener('click', () => {
+    if (!milkdropName || typeof toggleMilkdropFavourite !== 'function') return;
+    toggleMilkdropFavourite(milkdropName);
+    updateMilkdropLiveChips();
+    const liked = mdpFavourites.has(milkdropName);
+    setStatus(liked ? `favourited ${milkdropName}` : `removed ${milkdropName} from favourites`);
+  });
+}
+
+if (mdNextBtn) {
+  mdNextBtn.addEventListener('click', () => {
+    if (typeof milkdropCyclePool !== 'function' || !window.MilkDrop) return;
+    const pool = milkdropCyclePool();
+    if (pool.length < 2) {
+      setStatus('only one preset to choose from — favourite a few more in the browser');
+      return;
+    }
+    // Advance from where we are, so repeated clicks walk the pool rather than
+    // landing on the same neighbour twice.
+    const i = pool.indexOf(milkdropName);
+    milkdropWanted = pool[(i + 1) % pool.length];
+    milkdropName = window.MilkDrop.loadPreset(milkdropWanted, 0);
+    lastMilkdropSwitchAt = performance.now();
+    if (typeof markMilkdropSeen === 'function') markMilkdropSeen(milkdropWanted);
+    updateMilkdropLiveChips();
+    setStatus(`MilkDrop — ${milkdropName}`);
+  });
 }
 
 /* Clicking the chip re-rolls the look for the CURRENT song and remembers that
