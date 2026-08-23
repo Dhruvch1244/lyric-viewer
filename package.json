@@ -4,6 +4,10 @@
   "description": "Beat-aware synced lyric overlay for Windows. Detects any media app via SMTC.",
   "scripts": {
     "test": "node --test",
+    "perf": "node scripts/perf/harness.mjs",
+    "perf:baseline": "node scripts/perf/harness.mjs --baseline",
+    "perf:build-release": "node scripts/perf/harness.mjs --build-release",
+    "perf:startup": "node scripts/perf/startup.mjs",
     "probe": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File src-tauri/smtc-poll.ps1 -Once",
     "vendor:presets": "node scripts/vendor-presets.js",
     "tauri": "tauri",

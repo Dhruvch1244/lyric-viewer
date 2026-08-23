@@ -35,6 +35,12 @@ src-tauri/icons/ios/
 # with a target triple in the name, not authored source.
 src-tauri/binaries/
 
+# Perf harness output: one JSON per run, plus the isolated WebView2 profile a
+# perf run uses so it cannot disturb the real install's localStorage. The
+# committed reference numbers live in scripts/perf/baseline.json, which is NOT
+# ignored — comparing against it is the whole point.
+scripts/perf/runs/
+
 # Local audio used for profiling and verification runs (diarization, beat
 # tracking, Whisper). Commercial music — it is somebody else's copyright, this
 # remote is public, and the files are tens of MB each. Nothing in the repo may

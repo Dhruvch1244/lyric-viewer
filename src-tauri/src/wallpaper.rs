@@ -17,6 +17,7 @@ use std::ffi::c_void;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, RedrawWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
@@ -343,6 +344,29 @@ pub fn foreground_is_fullscreen(our_raw: isize) -> bool {
         }
         let mr = mi.rcMonitor;
         wr.left <= mr.left && wr.top <= mr.top && wr.right >= mr.right && wr.bottom >= mr.bottom
+    }
+}
+
+/// True when the overlay window itself cannot be seen: minimized, or cloaked
+/// by DWM (e.g. parked on a different virtual desktop). Deliberately does not
+/// attempt general occlusion-by-another-window — that needs z-order/rect
+/// testing across every window on screen and is the false-positive-prone kind
+/// of check a "did I just blank the thing the user is looking at" feature
+/// cannot afford to guess at.
+pub fn is_main_window_occluded(our_raw: isize) -> bool {
+    let hwnd = hwnd_from_raw(our_raw);
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            return true;
+        }
+        let mut cloaked: u32 = 0;
+        let ok = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut _ as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        ok.is_ok() && cloaked != 0
     }
 }
 
