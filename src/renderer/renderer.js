@@ -2518,9 +2518,16 @@ function milkdropTargetFor(preset) {
     milkdropChosen = null;
     milkdropWanted = preset.milkdrop;
   }
-  const seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted))
-    ? milkdropWanted
-    : milkdropDefault();
+  let seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted)) ? milkdropWanted : null;
+  if (!seed) {
+    // `milkdropDefault` is random now, and this function runs every frame —
+    // so the answer has to be recorded as the current intent, not re-rolled.
+    // Exactly what the drop-triggered cycle below does with its own pick, and
+    // for the same reason: without it the next frame disagrees and the preset
+    // changes at the frame rate.
+    seed = milkdropDefault();
+    milkdropWanted = seed;
+  }
   return pinnedMilkdrop() || milkdropChosen || seed;
 }
 
@@ -6187,8 +6194,8 @@ function applyPresetLabel() {
   const substituted = renderedPresetId && renderedPresetId !== presetId;
   els.presetBtn.textContent = substituted ? `◈ ${preset.name} ⚡` : `◈ ${preset.name}`;
   els.presetBtn.title = substituted
-    ? `${preset.name} — running "Minimal" to hold the frame rate`
-    : `Visual preset — ${preset.name} (click to cycle)`;
+    ? `Scene: ${preset.name} — running "Minimal" to hold the frame rate`
+    : `Scene — ${preset.name}. This app's own look; click to cycle. (✳ is the MilkDrop catalogue.)`;
 }
 
 /* Clicking the chip re-rolls the look for the CURRENT song and remembers that

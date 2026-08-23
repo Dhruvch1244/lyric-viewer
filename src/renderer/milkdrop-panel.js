@@ -165,10 +165,25 @@ function milkdropCyclePool() {
   return curated.length > 0 ? curated : allowed;
 }
 
-/** The preset to open MilkDrop on when nothing is pinned or chosen. */
+/**
+ * The preset to open MilkDrop on when nothing is pinned or chosen.
+ *
+ * Random, not `pool[0]`. It used to take the first entry, so every session
+ * without a pin opened on the identical look — out of 1754 presets, which
+ * rather defeats the point of having them. The pool is already the right set
+ * to draw from: liked presets when there are any, the curated list otherwise
+ * (see `milkdropCyclePool`), so a random pick here is a random pick from
+ * *your* presets rather than from everything.
+ *
+ * The caller is responsible for asking once and remembering the answer —
+ * `milkdropTargetFor` runs every frame, so a fresh random on each call would
+ * change the preset sixty times a second. It records the result as the
+ * current intent, the same way the drop-triggered cycle does.
+ */
 function milkdropDefault() {
   const pool = milkdropCyclePool();
-  return pool.length ? pool[0] : null;
+  if (!pool.length) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 /** Per-track MilkDrop preset pins, keyed like every other per-track override. */
