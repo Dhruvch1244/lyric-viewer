@@ -2,6 +2,37 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.48.0 — 2026-08-24
+
+- **A live bug, found from a screenshot and fixed the same session.** A
+  translation failure concatenates every LLM provider's own error text (a
+  full Gemini JSON error body, a multi-sentence Claude policy refusal) and
+  hands it straight to the status line — which has no width cap or CSS
+  truncation, since it was built for short messages like "translating…".
+  The ~500-character result wrapped across three lines and took over the top
+  of the screen. Not a translation bug: `translate.rs`/`llm.rs` return a
+  clean error the whole way through; nothing writes into the lyric cues.
+  Capped the status line at 140 characters at the source, so every caller
+  that pipes a raw `.message` through — transliteration, transcription,
+  import, folder-watch, not just this one — is covered, not just patched
+  once. The full text still reaches the console.
+- **MilkDrop's actual blur cause, fixed — not just a quality slider.**
+  MilkDrop was hardcoded to `pixelRatio: 1` and, outside Lite mode, a plain
+  CSS-pixel-accurate canvas. On any scaled Windows display (125%/150%,
+  common on laptops) that renders at a fraction of the physical pixels and
+  gets stretched — which reads as washed out. Replaced the old lite-only
+  0.55/1 binary with a real quality tier: `performance` (0.55, old Lite
+  behavior), `standard` (1, CSS-accurate), `high` (actual device pixel
+  ratio, capped at 2x — the sharp option), and `auto` (new default) — stays
+  sharp always, including for a song that needed no processing at all, and
+  drops one tier only while transcription is actually running. Paired with
+  an explicit frame-rate cap (60/30/auto-uncapped, default 60). Both live in
+  Settings under a new "Visuals" section. Verified live through the full
+  postMessage boundary into MilkDrop's own iframe, not just the JS logic in
+  isolation.
+- Test counts unchanged: 203 JS, 427 Rust (406 passing, 21 `#[ignore]`d).
+  `cargo clippy --workspace --all-targets --no-deps -- -D warnings` clean.
+
 ## 0.47.1 — 2026-08-24
 
 Follow-up to 0.47.0, from an audit of error-handling gaps ahead of shipping

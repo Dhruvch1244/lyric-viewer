@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.47.1 — 2026-08-24
+## Current as of v0.48.0 — 2026-08-24
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -126,6 +126,22 @@ genuinely unresolved right now.
   transcription runs). Diarization and Genius remain explicitly not
   attempted — a closed research dead-end and a policy decision, respectively,
   not pending code.
+- **A live status-line bug found from a user screenshot, fixed same-session
+  (0.48.0).** A translation failure piped a raw multi-provider error blob
+  (~500 chars — a full Gemini JSON body plus a Claude refusal) straight into
+  the status line, which had no width cap, wrapping across three lines over
+  the top of the screen. Not a translation bug — `translate.rs`/`llm.rs`
+  return a clean error the whole way through. Capped `setStatus()` itself at
+  140 chars so every caller passing a raw `.message` through is covered, not
+  just this one call site.
+- **MilkDrop's actual blur cause, fixed (0.48.0).** Hardcoded
+  `pixelRatio: 1` plus a plain CSS-pixel-accurate canvas meant any scaled
+  Windows display (125%/150%) rendered at a fraction of its physical pixels
+  and got stretched — the real cause of a "washed out" complaint. Real
+  quality tiers now exist (`performance`/`standard`/`high`/`auto`, `auto`
+  reacting live to whether transcription is running), plus an explicit FPS
+  cap (60/30/auto), both in Settings → Visuals. Verified through the actual
+  postMessage boundary into MilkDrop's iframe, not just the JS logic.
 
 ### Actually open
 
