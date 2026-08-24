@@ -2,6 +2,33 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.47.0 — 2026-08-24
+
+The render-pause code finally met a real Windows desktop — some of it held
+up, most of it turned out to have never been reachable in the first place.
+
+- **P2's occlusion pause was mostly testing nothing.**
+  `scripts/perf/verify-p2.mjs` now drives the app through minimize,
+  virtual-desktop switch, and exclusive fullscreen over real OS state, not
+  just code-reading. Minimize turned out permanently unreachable — the
+  window's own `skipTaskbar`/no-decorations config exempts it from every
+  Windows subsystem that could trigger it (tried the JS API, Win+D, and
+  Win+M — none work). Virtual-desktop switching doesn't cloak it either,
+  confirmed by screenshot: the overlay keeps rendering at full opacity on a
+  brand-new, empty virtual desktop. That one is by design, not a bug — this
+  is an OSD-style overlay meant to follow the user across desktops, the same
+  way RTSS/Rainmeter/Discord's overlay do, and pinning it to one desktop
+  would break that. Exclusive-fullscreen pause is confirmed working, 3/3
+  clean across full/bar/strip. `docs/PERF-UX.md` is corrected to match what
+  was actually verified.
+- **A slow or failed local file read no longer fails silently.**
+  `player.js`'s `playAt()` used to fall straight through to the next track
+  with nothing on screen — indistinguishable from the queue simply being
+  empty. It now surfaces a status message first.
+- Test counts: 203 JS, 427 Rust (406 passing, 21 `#[ignore]`d across the
+  workspace's three crates). `cargo clippy --workspace --all-targets
+  --no-deps -- -D warnings` clean.
+
 ## 0.46.0 — 2026-08-24
 
 A real keymap for the window itself, an honest memory number for the

@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.46.0 — 2026-08-24
+## Current as of v0.47.0 — 2026-08-24
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -99,6 +99,17 @@ genuinely unresolved right now.
   decodes a real file, fingerprints it, and asks AcoustID for real — not
   just synthetic-audio request shape. Two commercial tracks both came back
   correct (score 0.93 and 0.98). See `docs/JOB-ENGINE.md` §5.1.
+- **`docs/PERF-UX.md` P2's real-OS-state verification, closed for real
+  (0.47.0).** Minimize and virtual-desktop-cloak are confirmed permanently
+  unreachable for this window (`skipTaskbar` + no decorations exempt it from
+  Windows' minimize-all and desktop-cloak subsystems) — the virtual-desktop
+  case is intentional, not a bug, confirmed by screenshot and by asking: this
+  is an OSD-style overlay meant to follow the user across desktops.
+  Exclusive-fullscreen pause is confirmed working, 3/3 clean. Win+L and
+  unplugging AC remain the two states no script can safely drive — still need
+  a human. `player.js`'s `playAt()` no longer silently skips a track on a
+  slow/failed read — it surfaces a status message first, closing the item
+  below.
 
 ### Actually open
 
@@ -109,16 +120,11 @@ genuinely unresolved right now.
    1**, and isolating the vocals first does not help (154 vs 1), so the
    instrumental was never the confound. It is the model or the task. Do not
    pick this up expecting a quick win.
-2. **`docs/PERF-UX.md` P2 wants real OS-level verification.** The code path
-   (lock/fullscreen/occlusion/battery, per mode) is in and structurally
-   smoke-tested over CDP, but Win+L / alt-tab-to-fullscreen / minimise /
-   virtual-desktop-switch / unplug-AC has not actually been run by a human
-   yet, across full/bar/strip.
-3. **`player.js`'s `playAt()` has no visible failure state.** A slow or
-   failed read silently falls through `if (!raw) { next(); return; }` — low
-   priority now that the debug-build dead zone that surfaced it turned out
-   to be a measurement artifact (see "Closed since" above), but still a real
-   gap if some other codepath hits it.
+2. **`docs/PERF-UX.md` P2's lock-screen and battery-unplug states still need
+   a human.** Win+L is scriptable to trigger but not to safely recover from
+   (typing the unlock password isn't something to automate); battery state
+   is read from Windows, not simulated. Everything scriptable has now run —
+   see "Closed since" above.
 
 ---
 
