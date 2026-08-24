@@ -11,7 +11,7 @@ use crate::state::{save_prefs, CurTrack, Prefs, CRASH_REPORTING_ENABLED};
 
 #[tauri::command]
 pub(crate) fn get_prefs(state: State<Mutex<Prefs>>) -> Value {
-    let p = state.lock().unwrap();
+    let p = state.lock().unwrap_or_else(|e| e.into_inner());
     json!({
         "script": p.script,
         "showTranslation": p.show_translation,
@@ -26,7 +26,7 @@ pub(crate) fn get_prefs(state: State<Mutex<Prefs>>) -> Value {
 /// on for the user.
 #[tauri::command]
 pub(crate) fn set_crash_reporting(enabled: bool, state: State<Mutex<Prefs>>, app: AppHandle) {
-    let mut p = state.lock().unwrap();
+    let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
     p.crash_reporting_enabled = enabled;
     save_prefs(&app, &p);
     CRASH_REPORTING_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -34,13 +34,13 @@ pub(crate) fn set_crash_reporting(enabled: bool, state: State<Mutex<Prefs>>, app
 
 #[tauri::command]
 pub(crate) fn get_offset(state: State<Mutex<Prefs>>) -> Value {
-    json!({ "offsetMs": state.lock().unwrap().offset_ms })
+    json!({ "offsetMs": state.lock().unwrap_or_else(|e| e.into_inner()).offset_ms })
 }
 
 #[tauri::command]
 pub(crate) fn set_offset(value_ms: i64, state: State<Mutex<Prefs>>, app: AppHandle) -> i64 {
     {
-        let mut p = state.lock().unwrap();
+        let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
         p.offset_ms = value_ms;
         save_prefs(&app, &p);
     }
@@ -53,7 +53,7 @@ pub(crate) fn set_offset(value_ms: i64, state: State<Mutex<Prefs>>, app: AppHand
 pub(crate) fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) {
     let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
     let value = {
-        let mut p = st.lock().unwrap();
+        let mut p = st.lock().unwrap_or_else(|e| e.into_inner());
         p.offset_ms = absolute.unwrap_or(p.offset_ms + delta);
         save_prefs(app, &p);
         p.offset_ms
@@ -64,7 +64,7 @@ pub(crate) fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) 
 #[tauri::command]
 pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<Mutex<CurTrack>>, app: AppHandle) -> Value {
     {
-        let mut p = state.lock().unwrap();
+        let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
         p.script = script.clone();
         save_prefs(&app, &p);
     }
@@ -73,7 +73,7 @@ pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<
     }
     // Switching to Devanagari: transliterate the current track's cued lyrics
     // (cache-first), the same on-demand path the renderer's अ button expects.
-    let key = cur.lock().unwrap().key.clone();
+    let key = cur.lock().unwrap_or_else(|e| e.into_inner()).key.clone();
     if key.is_empty() {
         return json!({ "status": "error", "message": "nothing playing" });
     }
@@ -108,14 +108,14 @@ pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<
 
 #[tauri::command]
 pub(crate) fn set_show_translation(show: bool, state: State<Mutex<Prefs>>, app: AppHandle) {
-    let mut p = state.lock().unwrap();
+    let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
     p.show_translation = show;
     save_prefs(&app, &p);
 }
 
 #[tauri::command]
 pub(crate) fn get_display_mode(state: State<Mutex<Prefs>>) -> String {
-    state.lock().unwrap().display_mode.clone()
+    state.lock().unwrap_or_else(|e| e.into_inner()).display_mode.clone()
 }
 
 #[tauri::command]
@@ -157,7 +157,7 @@ pub(crate) fn get_autostart(_app: AppHandle) -> bool {
 
 #[tauri::command]
 pub(crate) fn get_transcribe_config(state: State<Mutex<Prefs>>) -> Value {
-    let p = state.lock().unwrap();
+    let p = state.lock().unwrap_or_else(|e| e.into_inner());
     json!({
         "enabled": p.transcribe_enabled,
         "language": p.transcribe_language,
@@ -168,7 +168,7 @@ pub(crate) fn get_transcribe_config(state: State<Mutex<Prefs>>) -> Value {
 
 #[tauri::command]
 pub(crate) fn set_transcribe_config(cfg: Value, state: State<Mutex<Prefs>>, app: AppHandle) {
-    let mut p = state.lock().unwrap();
+    let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(v) = cfg.get("enabled").and_then(|v| v.as_bool()) {
         p.transcribe_enabled = v;
     }

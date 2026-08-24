@@ -55,7 +55,7 @@ impl Pool {
                         set_below_normal();
                     }
                     loop {
-                        let task = { rx.lock().unwrap().recv() };
+                        let task = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
                         match task {
                             Ok(task) => task(),
                             // Sender dropped — the engine is going away.

@@ -130,7 +130,7 @@ pub(crate) fn allow(app: &AppHandle, purpose: &str, missing: &[(&'static str, u6
     }
 
     let (tx, rx) = mpsc::channel();
-    *PENDING.lock().unwrap() = Some((purpose.to_string(), tx));
+    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some((purpose.to_string(), tx));
 
     let total: u64 = missing.iter().map(|(_, s)| s).sum();
     let _ = app.emit(
@@ -152,7 +152,7 @@ pub(crate) fn answer(app: &AppHandle, consent: bool, remember: bool) {
     // The purpose comes from whichever prompt is outstanding, not from the
     // renderer — the answer has to be recorded against the question that was
     // actually asked, and only this side knows what that was.
-    let pending = PENDING.lock().unwrap().take();
+    let pending = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take();
     let purpose = pending.as_ref().map(|(p, _)| p.clone()).unwrap_or_else(|| PURPOSE_SPEECH.to_string());
     if remember {
         save(app, &purpose, &Consent { decided: true, consented: consent });

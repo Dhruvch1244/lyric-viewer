@@ -46,7 +46,7 @@ pub(crate) fn toggle_overlay(app: &AppHandle) {
 /// must not be a dead end. See wallpaper_interact for the click-driven path.
 pub(crate) fn toggle_wallpaper(app: &AppHandle) {
     let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
-    let current = st.lock().unwrap().display_mode.clone();
+    let current = st.lock().unwrap_or_else(|e| e.into_inner()).display_mode.clone();
     set_mode(app, if current == "wallpaper" { "full" } else { "wallpaper" });
 }
 

@@ -68,7 +68,7 @@ fn apply_click_through(app: &AppHandle, mode: &str) {
 pub(crate) fn set_mode(app: &AppHandle, mode: &str) {
     let old_mode = match app.try_state::<Mutex<Prefs>>() {
         Some(st) => {
-            let mut p = st.lock().unwrap();
+            let mut p = st.lock().unwrap_or_else(|e| e.into_inner());
             let old = p.display_mode.clone();
             p.display_mode = mode.to_string();
             save_prefs(app, &p);
@@ -95,7 +95,7 @@ pub(crate) fn set_mode(app: &AppHandle, mode: &str) {
 /// also doubles as a general "get me back to normal" from any mode.
 pub(crate) fn cycle_display_mode(app: &AppHandle) {
     let Some(st) = app.try_state::<Mutex<Prefs>>() else { return };
-    let current = st.lock().unwrap().display_mode.clone();
+    let current = st.lock().unwrap_or_else(|e| e.into_inner()).display_mode.clone();
     let next = match current.as_str() {
         "full" => "bar",
         "bar" => "strip",

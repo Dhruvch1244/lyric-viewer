@@ -144,6 +144,7 @@
 
     reportJobs: (payload) => call('report_jobs', { payload }),
     reportClientError: (message) => call('report_client_error', { message }),
+    cancelTranscription: () => call('cancel_transcription', {}),
     answerModelConsent: (consent, remember) => call('answer_model_consent', { consent, remember }),
     getModelConsentStatus: () => call('get_model_consent_status', {}, { decided: false, consented: false }),
     /* Speaker diarization (ROADMAP.md §5.8) — not called from anywhere in the

@@ -1785,6 +1785,21 @@ body.keybox-open .hud {
   cursor: default;
 }
 
+/* hud-work is a passive status display most of the time — only clickable
+   (to cancel transcription) while that specific job is running, so it
+   should not look clickable the rest of the time. */
+.chip--work {
+  cursor: default;
+}
+
+.chip--work-cancellable {
+  cursor: pointer;
+}
+
+.chip--work-cancellable:hover {
+  border-color: var(--chrome-ink-faint);
+}
+
 /* Inline SVG glyphs replacing emoji across the chrome — sized to the chip's
    own font-size so they scale with it instead of carrying a fixed pixel size. */
 .chip svg,

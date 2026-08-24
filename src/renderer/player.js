@@ -100,6 +100,16 @@
     const audio = element();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(new Blob([raw]));
+
+    // A file that reads fine but is corrupt or an unsupported codec fires
+    // 'error' on the element rather than rejecting anything awaitable here —
+    // without this, playAt() falls through as if it were fine: track info
+    // shows, nothing ever plays, and there is no visible failure state. The
+    // sibling of the !raw case above, for a file that reads but does not decode.
+    let decodeFailed = false;
+    const onDecodeError = () => { decodeFailed = true; };
+    audio.addEventListener('error', onDecodeError, { once: true });
+
     audio.src = objectUrl;
 
     // Wait for metadata so the duration is known before the track is announced —
@@ -111,12 +121,31 @@
       setTimeout(done, 4000);
     });
 
+    audio.removeEventListener('error', onDecodeError);
+    if (decodeFailed) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+      const label = item.title || item.localPath;
+      if (typeof setStatus === 'function') setStatus(`couldn't play "${label}" — skipping`);
+      next();
+      return;
+    }
+
     const durationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
     const track = { ...item, durationMs };
     await window.player.setLocalTrack(track);
     if (listeners.track) listeners.track(track);
 
-    await audio.play().catch(() => { /* autoplay refusal; the UI offers play */ });
+    await audio.play().catch((err) => {
+      // NotAllowedError is the ordinary autoplay-policy refusal the UI's own
+      // play button already covers. Anything else — a file that passed
+      // loadedmetadata but still can't actually decode, for instance — is a
+      // real failure that deserves a visible status instead of silent nothing.
+      if (err && err.name !== 'NotAllowedError') {
+        const label = item.title || item.localPath;
+        if (typeof setStatus === 'function') setStatus(`couldn't play "${label}"`);
+      }
+    });
 
     /*
       Warm the lyrics cache for what is queued behind this song, so it opens

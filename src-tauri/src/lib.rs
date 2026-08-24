@@ -119,7 +119,7 @@ pub fn run() {
             app.manage(Mutex::new(state::CurTrack::default()));
             #[cfg(windows)]
             app.manage(Mutex::<Option<smtc::Session>>::new(None));
-            app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "available": false }))));
+            app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "phase": "idle", "prompt": false }))));
 
             // Recording temp files a previous session left behind (audio.rs).
             // Unlike a transcription, a recording is not journaled — it is
@@ -229,6 +229,7 @@ pub fn run() {
             commands::playback::analyze_local_file,
             commands::lyrics_cmds::transcribe_audio,
             commands::lyrics_cmds::report_transcribe_progress,
+            commands::lyrics_cmds::cancel_transcription,
             commands::lyrics_cmds::finalize_transcription,
             commands::lyrics_cmds::answer_model_consent,
             commands::lyrics_cmds::diarize_local_file,

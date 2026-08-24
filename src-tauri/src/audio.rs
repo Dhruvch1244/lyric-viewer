@@ -773,7 +773,7 @@ mod tests {
         let rate = 100u32;
         let path = recording_temp_path();
         {
-            let mut slot = RECORDING.lock().unwrap();
+            let mut slot = RECORDING.lock().unwrap_or_else(|e| e.into_inner());
             *slot = Some(RecordingSink::create(path.clone(), rate).unwrap());
         }
         // Below MIN_USEFUL_SECONDS(20s) at 100 Hz: under 2000 samples.
@@ -786,7 +786,7 @@ mod tests {
         // this is the one test allowed to touch the RECORDING static.
         record_batch(&[0.25; 10_000], rate + 1);
         let seconds = {
-            let slot = RECORDING.lock().unwrap();
+            let slot = RECORDING.lock().unwrap_or_else(|e| e.into_inner());
             slot.as_ref().unwrap().seconds()
         };
         assert!((seconds - 5.0).abs() < 1e-9, "record_batch did not reach every pushed sample, or took a mismatched-rate packet");
@@ -794,7 +794,7 @@ mod tests {
         // Mirror imp::stop_recording's own gate here, since that function is
         // Windows-only and this test isn't: below the threshold, the file
         // must not be handed back, and it must be cleaned up.
-        let sink = RECORDING.lock().unwrap().take().unwrap();
+        let sink = RECORDING.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap();
         assert!(sink.seconds() < MIN_USEFUL_SECONDS);
         let p = sink.path.clone();
         drop(sink);

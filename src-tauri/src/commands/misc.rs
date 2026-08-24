@@ -50,7 +50,7 @@ pub(crate) fn report_jobs(payload: Value, cur: State<Mutex<crate::state::CurTrac
         .map(|arr| arr.iter().filter_map(|j| j.get("label").and_then(|l| l.as_str())).collect::<Vec<_>>().join(" · "))
         .unwrap_or_default();
     let song = {
-        let c = cur.lock().unwrap();
+        let c = cur.lock().unwrap_or_else(|e| e.into_inner());
         if c.title.is_empty() {
             "Nothing playing".to_string()
         } else if c.artist.is_empty() {
@@ -121,7 +121,7 @@ pub(crate) fn open_crash_log(app: AppHandle) -> Value {
 #[cfg(windows)]
 #[tauri::command]
 pub(crate) fn resync_smtc(app: AppHandle, state: State<Mutex<Option<crate::smtc::Session>>>) {
-    let sample = state.lock().unwrap().clone();
+    let sample = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(s) = sample {
         // A fresh Option<String> each call: this is a resync, not a diff
         // against whatever the poll loop's own `current_key` happens to be,
@@ -152,7 +152,7 @@ pub(crate) fn wallpaper_interact(on: bool, app: AppHandle, state: State<Mutex<Pr
     use crate::state::{WALLPAPER_ATTACHED, WALLPAPER_SURFACED};
     use crate::watchers::window_hwnd;
 
-    let is_wallpaper = state.lock().unwrap().display_mode == "wallpaper";
+    let is_wallpaper = state.lock().unwrap_or_else(|e| e.into_inner()).display_mode == "wallpaper";
     if !is_wallpaper || on == WALLPAPER_SURFACED.load(Ordering::Relaxed) {
         return;
     }

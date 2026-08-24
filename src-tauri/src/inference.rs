@@ -16,6 +16,8 @@
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use inference_protocol::{read_frame, write_frame, Cue, Request, Response, SpeakerSpan, Stage, PROTOCOL_VERSION};
 use tauri::{AppHandle, Manager};
@@ -25,6 +27,15 @@ use crate::jobs::CancelToken;
 /// Sample rate the sidecar requires. Resampling happens here, on the host,
 /// because the host already owns the decode path.
 pub(crate) const SAMPLE_RATE: u32 = 16_000;
+
+/// How long the response-reading loop below will wait with nothing at all
+/// arriving from the sidecar before treating it as hung rather than merely
+/// slow. Generous on purpose: a single slow transcription window on
+/// constrained hardware has measured over 100s before (NEXT_STEPS.md, the
+/// phrase-loop bug fixed in 0.41.0) even without being genuinely stuck. This
+/// is a "nothing at all for three minutes" backstop, not a normal-progress
+/// budget — see run_sidecar's and diarize's read loops.
+const SIDECAR_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Where the ONNX models and tokenizer live, downloaded on first use.
 pub(crate) fn model_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -263,32 +274,68 @@ fn run_sidecar(
     )
     .map_err(|e| format!("cannot send the transcription request: {e}"))?;
 
+    // read_frame() blocks with no way to time out a single call, and the
+    // cancel check above only ran BETWEEN frames — so a sidecar that goes
+    // truly silent (wedged, not crashed; Session's Drop only catches a dead
+    // process) left this thread stuck forever, cancellation included, since
+    // "checked between frames" never gets a next frame to run between. Move
+    // the blocking read onto its own thread and poll it with a timeout
+    // instead, same shape as the stderr-drain thread above.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || loop {
+        let frame = read_frame::<_, Response>(&mut r);
+        let is_terminal = !matches!(frame, Ok(Some(_)));
+        if tx.send(frame).is_err() || is_terminal {
+            break; // main loop moved on, or there is nothing further to read
+        }
+    });
+
     let mut cancelled_sent = false;
+    let mut timed_out = false;
     let outcome = loop {
-        // Checked between frames. Cooperative by nature — the sidecar stops at
-        // its next span boundary, it does not abandon a model run in flight.
+        // Cooperative by nature — the sidecar stops at its next span
+        // boundary, it does not abandon a model run in flight.
         if cancel.cancelled() && !cancelled_sent {
             let _ = write_frame(&mut w, &Request::Cancel { job_id });
             cancelled_sent = true;
         }
-        match read_frame::<_, Response>(&mut r) {
-            Ok(Some(Response::Progress { stage, pct, .. })) => progress(stage, pct),
-            Ok(Some(Response::Result { cues, .. })) => break Ok(Outcome::Cues(cues)),
-            Ok(Some(Response::NeedsIsolation { .. })) => break Ok(Outcome::NeedsIsolation),
-            Ok(Some(Response::Error { message, .. })) => break Err(message),
-            Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
-            Ok(Some(Response::Diarized { .. })) => break Err("sidecar answered a transcription with a diarization result".into()),
-            Ok(None) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
-            Err(e) => break Err(format!("sidecar response stream broke: {e}")),
+        match rx.recv_timeout(SIDECAR_IDLE_TIMEOUT) {
+            Ok(Ok(Some(Response::Progress { stage, pct, .. }))) => progress(stage, pct),
+            Ok(Ok(Some(Response::Result { cues, .. }))) => break Ok(Outcome::Cues(cues)),
+            Ok(Ok(Some(Response::NeedsIsolation { .. }))) => break Ok(Outcome::NeedsIsolation),
+            Ok(Ok(Some(Response::Error { message, .. }))) => break Err(message),
+            Ok(Ok(Some(Response::Ready { .. }))) | Ok(Ok(Some(Response::Bye))) => continue,
+            Ok(Ok(Some(Response::Diarized { .. }))) => {
+                break Err("sidecar answered a transcription with a diarization result".into())
+            }
+            Ok(Ok(None)) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
+            Ok(Err(e)) => break Err(format!("sidecar response stream broke: {e}")),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                break Err(format!(
+                    "sidecar produced nothing for {}s — treating it as hung",
+                    SIDECAR_IDLE_TIMEOUT.as_secs()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                timed_out = true; // reader thread is gone; nothing more will ever arrive either way
+                break Err("sidecar reader thread ended unexpectedly".into());
+            }
         }
     };
 
-    // Ask for a clean exit so the process is not killed mid-write. `Session`'s
-    // Drop still kills it if this does not land, so a wedged sidecar cannot
-    // outlive the job either way.
-    let _ = write_frame(&mut w, &Request::Shutdown);
-    let _ = w.flush();
-    let _ = session.child.wait();
+    if timed_out {
+        // A wedged sidecar will not process a Shutdown request either — do
+        // not wait on it here. Session's Drop (kill() then wait(), not a
+        // bare wait()) is the bounded backstop; falling through to it is the
+        // whole point of detecting the hang in the first place.
+        log::warn!("inference sidecar job {job_id} timed out; killing it");
+    } else {
+        // Ask for a clean exit so the process is not killed mid-write.
+        let _ = write_frame(&mut w, &Request::Shutdown);
+        let _ = w.flush();
+        let _ = session.child.wait();
+    }
 
     outcome
 }
@@ -368,28 +415,54 @@ pub(crate) fn diarize(
     )
     .map_err(|e| format!("cannot send the diarization request: {e}"))?;
 
+    // See the matching comment in run_sidecar above — same hang risk, same fix.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || loop {
+        let frame = read_frame::<_, Response>(&mut r);
+        let is_terminal = !matches!(frame, Ok(Some(_)));
+        if tx.send(frame).is_err() || is_terminal {
+            break;
+        }
+    });
+
     let mut cancelled_sent = false;
+    let mut timed_out = false;
     let outcome = loop {
         if cancel.cancelled() && !cancelled_sent {
             let _ = write_frame(&mut w, &Request::Cancel { job_id });
             cancelled_sent = true;
         }
-        match read_frame::<_, Response>(&mut r) {
-            Ok(Some(Response::Progress { pct, .. })) => progress(pct),
-            Ok(Some(Response::Diarized { spans, .. })) => break Ok(spans),
-            Ok(Some(Response::Error { message, .. })) => break Err(message),
-            Ok(Some(Response::Ready { .. })) | Ok(Some(Response::Bye)) => continue,
-            Ok(Some(Response::Result { .. })) | Ok(Some(Response::NeedsIsolation { .. })) => {
+        match rx.recv_timeout(SIDECAR_IDLE_TIMEOUT) {
+            Ok(Ok(Some(Response::Progress { pct, .. }))) => progress(pct),
+            Ok(Ok(Some(Response::Diarized { spans, .. }))) => break Ok(spans),
+            Ok(Ok(Some(Response::Error { message, .. }))) => break Err(message),
+            Ok(Ok(Some(Response::Ready { .. }))) | Ok(Ok(Some(Response::Bye))) => continue,
+            Ok(Ok(Some(Response::Result { .. }))) | Ok(Ok(Some(Response::NeedsIsolation { .. }))) => {
                 break Err("sidecar answered a diarization with a transcription result".into())
             }
-            Ok(None) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
-            Err(e) => break Err(format!("sidecar response stream broke: {e}")),
+            Ok(Ok(None)) => break Err(format!("sidecar exited without answering; log: {}", log.join().unwrap_or_default())),
+            Ok(Err(e)) => break Err(format!("sidecar response stream broke: {e}")),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                break Err(format!(
+                    "sidecar produced nothing for {}s — treating it as hung",
+                    SIDECAR_IDLE_TIMEOUT.as_secs()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                timed_out = true;
+                break Err("sidecar reader thread ended unexpectedly".into());
+            }
         }
     };
 
-    let _ = write_frame(&mut w, &Request::Shutdown);
-    let _ = w.flush();
-    let _ = session.child.wait();
+    if timed_out {
+        log::warn!("inference sidecar job {job_id} timed out; killing it");
+    } else {
+        let _ = write_frame(&mut w, &Request::Shutdown);
+        let _ = w.flush();
+        let _ = session.child.wait();
+    }
 
     outcome
 }

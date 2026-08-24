@@ -222,7 +222,7 @@ pub(crate) fn rescan(app: &AppHandle, folders: &[String]) {
     }
 
     let index = {
-        let _guard = INDEX_LOCK.lock().unwrap();
+        let _guard = INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (index, _added, _updated) = diff_index(load_index(app), &watched, &found);
         save_index(app, &index);
         index
@@ -266,7 +266,7 @@ fn queue_backfill(app: &AppHandle, index: &Index) {
 /// for a plain JSON read/write.
 fn mark_analyzed(app: &AppHandle, path: &str, expect: &LibraryEntry) {
     let index = {
-        let _guard = INDEX_LOCK.lock().unwrap();
+        let _guard = INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut index = load_index(app);
         if let Some(entry) = index.get_mut(path) {
             if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
@@ -285,7 +285,7 @@ fn mark_analyzed(app: &AppHandle, path: &str, expect: &LibraryEntry) {
 /// title), not a reason to re-hit those services on every scan tick forever.
 fn mark_lyrics_synced(app: &AppHandle, path: &str, expect: &LibraryEntry) {
     let index = {
-        let _guard = INDEX_LOCK.lock().unwrap();
+        let _guard = INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut index = load_index(app);
         if let Some(entry) = index.get_mut(path) {
             if entry.size == expect.size && entry.modified_ms == expect.modified_ms {
@@ -427,7 +427,7 @@ pub(crate) fn folder_summaries(app: &AppHandle, folders: &[String]) -> Vec<Value
 /// from the watch list, so a stale count doesn't linger until the next scan
 /// happens to walk (and thus correct) it.
 pub(crate) fn forget_folder(app: &AppHandle, folder: &str) {
-    let _guard = INDEX_LOCK.lock().unwrap();
+    let _guard = INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut index = load_index(app);
     let prefix = PathBuf::from(folder);
     index.retain(|path, _| !Path::new(path).starts_with(&prefix));
@@ -444,7 +444,7 @@ pub(crate) fn start_library_watcher(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(SCAN_INTERVAL_SECS));
         let Some(state) = app.try_state::<std::sync::Mutex<crate::state::Prefs>>() else { continue };
-        let folders = state.lock().unwrap().library_folders.clone();
+        let folders = state.lock().unwrap_or_else(|e| e.into_inner()).library_folders.clone();
         if folders.is_empty() {
             continue;
         }

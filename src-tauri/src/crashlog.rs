@@ -148,6 +148,14 @@ pub fn append_client_error(app: &AppHandle, message: &str) {
     append(app, "renderer", message);
 }
 
+/// Append a Rust-side error worth keeping visible after the fact — a failed
+/// update install, for instance, where the caller already handles the
+/// failure gracefully (no panic) but the underlying error would otherwise be
+/// discarded with nothing to debug a real-world report against.
+pub fn append_backend_error(app: &AppHandle, message: &str) {
+    append(app, "backend", message);
+}
+
 /// Absolute path to the crash log, for the "Open crash log" button — created
 /// (empty, if new) so there is always something for the file manager to open
 /// rather than a "path not found" error on a machine that never crashed.

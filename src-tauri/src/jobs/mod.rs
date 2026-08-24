@@ -188,6 +188,18 @@ pub(crate) fn cancel_track(track: &str) {
     engine().cancel_track(track);
 }
 
+/// Cancel everything in flight for whatever track is playing right now — the
+/// user-facing "cancel" affordance (the `hud-work` chip), as opposed to
+/// `cancel_track`'s automatic call on a track change. Cooperative, same as
+/// every other cancellation here: the sidecar stops at its next checkpoint,
+/// not mid-instruction.
+pub(crate) fn cancel_current() {
+    let cur = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(track) = cur {
+        cancel_track(&track);
+    }
+}
+
 /// Which track key is playing right now, as far as the engine knows.
 static CURRENT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -201,7 +213,7 @@ static CURRENT: Mutex<Option<String>> = Mutex::new(None);
 /// calling it from there gives exactly one insertion point instead of two that
 /// could drift apart.
 pub(crate) fn set_current_track(key: &str) {
-    let mut cur = CURRENT.lock().unwrap();
+    let mut cur = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
     if cur.as_deref() == Some(key) {
         return; // same song (a re-resolve, a seek) — leave its work alone
     }
@@ -246,7 +258,7 @@ impl Engine {
         // Register before queueing. Doing it the other way round would let two
         // submissions of the same key both pass the check and both queue.
         {
-            let mut reg = self.registry.lock().unwrap();
+            let mut reg = self.registry.lock().unwrap_or_else(|e| e.into_inner());
             if reg.inflight.contains_key(&key) {
                 return false;
             }
@@ -267,7 +279,7 @@ impl Engine {
     }
 
     fn cancel_track(&self, track: &str) {
-        let reg = self.registry.lock().unwrap();
+        let reg = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         let Some(keys) = reg.by_track.get(track) else { return };
         for key in keys {
             if let Some(token) = reg.inflight.get(key) {
@@ -283,7 +295,7 @@ impl Engine {
 
 /// Drop a job's registration once it is done (or was never started).
 fn release(registry: &Arc<Mutex<Registry>>, key: &str, track: Option<&str>) {
-    let mut reg = registry.lock().unwrap();
+    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
     reg.inflight.remove(key);
     if let Some(track) = track {
         if let Some(keys) = reg.by_track.get_mut(track) {

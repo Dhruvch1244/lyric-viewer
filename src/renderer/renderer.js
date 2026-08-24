@@ -4153,7 +4153,26 @@ function setJob(name, label) {
   }
   els.work.hidden = false;
   els.work.textContent = `⟳ ${[...jobs.values()].join(' · ')}`;
-  els.work.title = `Background work in progress:\n${[...jobs.values()].join('\n')}`;
+  // Only transcription is actually cancellable here (see the click handler
+  // below) — other jobs (translate, mood, lyrics lookup) are quick enough
+  // that there was never a "this is visibly stuck" problem to solve for them.
+  els.work.title = jobs.has('whisper')
+    ? `Background work in progress:\n${[...jobs.values()].join('\n')}\n\nClick to cancel transcription`
+    : `Background work in progress:\n${[...jobs.values()].join('\n')}`;
+  els.work.classList.toggle('chip--work-cancellable', jobs.has('whisper'));
+}
+
+/* Cancel transcription from the hud-work chip itself — the sidecar can only
+   be interrupted cooperatively (inference.rs's idle-timeout is the backstop
+   for a genuinely wedged one; this is for a healthy one the user just does
+   not want to wait out). A no-op while 'whisper' is not among the running
+   jobs, so this is safe to leave wired unconditionally. */
+if (els.work) {
+  els.work.addEventListener('click', () => {
+    if (!jobs.has('whisper')) return;
+    if (window.player.cancelTranscription) window.player.cancelTranscription();
+    setStatus('cancelling transcription…');
+  });
 }
 
 /* Band meters. Cached element handles and last-written values, because this

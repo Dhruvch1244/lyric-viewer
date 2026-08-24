@@ -29,7 +29,7 @@ pub(crate) fn add_library_folder(app: AppHandle, state: State<Mutex<Prefs>>) -> 
     let path = dir.to_string_lossy().to_string();
 
     let folders = {
-        let mut p = state.lock().unwrap();
+        let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
         if !p.library_folders.iter().any(|f| f == &path) {
             p.library_folders.push(path.clone());
         }
@@ -46,7 +46,7 @@ pub(crate) fn add_library_folder(app: AppHandle, state: State<Mutex<Prefs>>) -> 
 #[tauri::command]
 pub(crate) fn remove_library_folder(path: String, app: AppHandle, state: State<Mutex<Prefs>>) -> Value {
     let folders = {
-        let mut p = state.lock().unwrap();
+        let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
         p.library_folders.retain(|f| f != &path);
         save_prefs(&app, &p);
         p.library_folders.clone()
@@ -57,6 +57,6 @@ pub(crate) fn remove_library_folder(path: String, app: AppHandle, state: State<M
 
 #[tauri::command]
 pub(crate) fn get_library_folders(app: AppHandle, state: State<Mutex<Prefs>>) -> Value {
-    let folders = state.lock().unwrap().library_folders.clone();
+    let folders = state.lock().unwrap_or_else(|e| e.into_inner()).library_folders.clone();
     json!(crate::library::folder_summaries(&app, &folders))
 }

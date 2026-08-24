@@ -229,7 +229,7 @@ pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, dura
     // that needs to know.
     jobs::set_current_track(&key);
     if let Some(st) = app.try_state::<Mutex<CurTrack>>() {
-        *st.lock().unwrap() = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
+        *st.lock().unwrap_or_else(|e| e.into_inner()) = CurTrack { title: title.clone(), artist: artist.clone(), key: key.clone() };
     }
     let song = if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") };
     set_tray_tooltip(&app, &format!("Lyric Overlay\n{song}"));
@@ -1349,7 +1349,7 @@ pub(crate) fn choose_lyrics_candidate(track: Value, id: i64, app: AppHandle) -> 
 /// cues directly (the renderer awaits this) and caches them for next time.
 #[tauri::command]
 pub(crate) fn request_translation(app: AppHandle, state: State<Mutex<CurTrack>>) -> Value {
-    let cur = state.lock().unwrap().clone();
+    let cur = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if cur.key.is_empty() {
         return json!({ "status": "error", "message": "nothing playing" });
     }
@@ -1509,6 +1509,17 @@ pub(crate) fn transcribe_audio(app: AppHandle, payload: Value) -> Value {
 #[tauri::command]
 pub(crate) fn report_transcribe_progress(app: AppHandle, data: Value) {
     let _ = app.emit("transcribe-progress", data);
+}
+
+/// User-facing cancel for the `hud-work` chip's transcription entry. Same
+/// cooperative cancellation the job engine already uses on a track change
+/// (`jobs::cancel_track`) — this just gives the user a way to trigger it
+/// deliberately, for a job they'd rather not wait out (see inference.rs's
+/// sidecar idle-timeout doc for why "wait it out" was previously the only
+/// option even when it was visibly stuck).
+#[tauri::command]
+pub(crate) fn cancel_transcription() {
+    crate::jobs::cancel_current();
 }
 
 /// The renderer's answer to `model-consent-needed` (model_consent.rs). Wakes

@@ -141,7 +141,7 @@ pub(crate) fn start_smtc(app: AppHandle) {
             // own now that this poll loop starts fast enough to sometimes win
             // the race against the webview's own page load.
             if let Some(state) = app.try_state::<Mutex<Option<crate::smtc::Session>>>() {
-                *state.lock().unwrap() = sample.clone();
+                *state.lock().unwrap_or_else(|e| e.into_inner()) = sample.clone();
             }
 
             match &sample {
