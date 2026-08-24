@@ -141,6 +141,51 @@ paused.
 looking at. This needs the state-coverage lesson applied deliberately: test
 *with a song playing*, *mid-panel*, *across a mode switch*.
 
+**Verified against real OS state (2026-08-24), and the "occluded" reason is
+mostly dead code — by design, not by bug.** `scripts/perf/verify-p2.mjs`
+drives the app through minimize, virtual-desktop switch, and an exclusive
+fullscreen cover, across all three overlay modes. Minimize and
+virtual-desktop both failed uniformly (9/9, clean, no exceptions). Digging
+into why, rather than assuming a detection bug:
+
+- **Minimize can never happen to this window, through any mechanism.**
+  `window.minimize()`, Win+D ("show desktop"), and Win+M ("minimize all
+  windows") were all tried directly — none of them so much as flips
+  `isMinimized()`. The window's own config (`skipTaskbar: true`,
+  `decorations: false`) puts it in Windows' `WS_EX_TOOLWINDOW`-adjacent
+  category, which every one of those subsystems explicitly excludes. There
+  is no user action that reaches this code path. `is_main_window_occluded`'s
+  `IsIconic` check is correct code guarding a state that cannot occur.
+- **Virtual-desktop switching does not cloak this window — confirmed by
+  screenshot, not inferred.** Switched to a freshly created, empty virtual
+  desktop and captured it: the swirl backdrop and welcome card were still
+  rendering there, full opacity. The window is not tracked by Explorer's
+  virtual-desktop manager (same untracked-tool-window category as above), so
+  DWM never applies `DWMWA_CLOAKED` when the user switches away. **This is
+  intentional, not a bug — confirmed with the product owner.** This app is
+  an OSD-style overlay (RTSS, Rainmeter, and Discord's overlay all use the
+  same exemption on purpose): the entire pitch is lyrics that follow you
+  regardless of which desktop or app has focus. Pinning the window to one
+  desktop (`IVirtualDesktopManager::MoveWindowToDesktop`) would "fix" the
+  cloak check at the cost of breaking that. **Decision: leave the window
+  and the detection code exactly as they are.** `is_main_window_occluded`'s
+  cloak check stays in place — harmless, and would engage correctly if the
+  window's styling ever changes — but budget nothing on it working today.
+- **Exclusive-fullscreen genuinely works — confirmed on a clean rerun.** It
+  also failed in that first run, but a follow-up diagnostic showed the
+  spawned cover window really did win `GetForegroundWindow`, and
+  `overlayPaused` correctly flipped `true`. The first run's failure traced
+  to whatever window happened to hold real OS focus at that exact moment
+  (Windows' focus-steal prevention is sensitive to it) — an environmental
+  fluke in that one run, not a harness or app bug. A clean rerun of
+  `verify-p2.mjs` (fullscreen only, its default now — see below) passed
+  3/3 across `full`/`bar`/`strip`.
+
+Net effect on this item's real-world value for the default **overlay**
+modes: exclusive-fullscreen pause is confirmed working. Lock-screen remains
+unautomatable (needs a human). Occlusion via minimize or desktop-switch will
+never contribute, by design — accept that rather than chase it further.
+
 ---
 
 ### P3 — The startup burst

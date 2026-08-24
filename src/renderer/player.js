@@ -86,7 +86,16 @@
     const item = queue[i];
 
     const raw = await window.player.readLocalFile(item.localPath);
-    if (!raw) { next(); return; }
+    if (!raw) {
+      // A slow/failed read used to fall straight through to the next track
+      // with nothing on screen — indistinguishable from the queue simply
+      // being empty. setStatus is the app-wide mechanism for exactly this
+      // kind of transient notice (renderer.js, #status/role="status").
+      const label = item.title || item.localPath;
+      if (typeof setStatus === 'function') setStatus(`couldn't read "${label}" — skipping`);
+      next();
+      return;
+    }
 
     const audio = element();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
