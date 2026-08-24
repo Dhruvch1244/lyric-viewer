@@ -4090,7 +4090,24 @@ function drawBackdrop(now) {
 
 /* ----------------------------------------------------------------- helpers */
 
+/*
+  The status line has no width cap and no CSS truncation (it wraps by
+  design, for the ordinary short human messages it was built for) — so a
+  handful of callers that hand it a raw provider-failure string straight
+  through (translation, transliteration, transcription) could dump an
+  entire multi-provider error blob — JSON error bodies and a multi-sentence
+  refusal, joined with " | " — across the top of the screen, wrapped over
+  several lines. Capped here, once, rather than at every call site, so a
+  future caller with the same shape of bug is covered automatically. The
+  full text still reaches the console for anyone who goes looking.
+*/
+const STATUS_MAX_CHARS = 140;
+
 function setStatus(text) {
+  if (typeof text === 'string' && text.length > STATUS_MAX_CHARS) {
+    console.error('[status] truncated for display:', text);
+    text = `${text.slice(0, STATUS_MAX_CHARS - 1)}…`;
+  }
   els.status.textContent = text;
 }
 
