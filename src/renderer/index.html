@@ -147,14 +147,17 @@
              Both used to be called a preset, with two similar-looking chips
              and only one of them labelled. -->
         <button id="btn-preset" class="chip" type="button" title="Scene — this app's own look. Click to change. (P)">◈ Liquid</button>
-        <!-- Live MilkDrop controls (PERF-UX.md U6b/U6c). Contextual on purpose:
-             they exist only while MilkDrop is the engine on screen and vanish
-             on the swirl one, so putting shuffle and the heart a single click
-             from the visuals costs nothing the rest of the time. U1 had just
-             cut this bar from nineteen chips to five and that should hold. -->
+        <!-- Shuffle (PERF-UX.md U6b) is always visible, not contextual — it is
+             just a persisted preference, safe to arm from the swirl engine for
+             whenever MilkDrop becomes active. Heart/Next stay contextual below:
+             they act on the CURRENT MilkDrop preset, which does not exist once
+             MilkDrop's GPU surface has been torn down. -->
+        <button id="btn-md-shuffle" class="chip" type="button" aria-pressed="true"
+                title="Shuffle — let drops change the MilkDrop preset">⇄ Shuffle</button>
+        <!-- Contextual on purpose: heart/next exist only while MilkDrop is the
+             engine on screen and vanish on the swirl one. U1 had just cut this
+             bar from nineteen chips to five and that should hold. -->
         <span id="md-live" class="hud__live" hidden>
-          <button id="btn-md-shuffle" class="chip" type="button" aria-pressed="true"
-                  title="Shuffle — let drops change the MilkDrop preset">⇄ Shuffle</button>
           <button id="btn-md-heart" class="chip" type="button" aria-pressed="false"
                   title="Favourite this preset — shuffle draws from your favourites once you have some">♡</button>
           <button id="btn-md-next" class="chip" type="button"

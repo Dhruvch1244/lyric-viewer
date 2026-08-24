@@ -6338,12 +6338,18 @@ function applyPresetLabel() {
 /*
   The live MilkDrop cluster — shuffle, heart, next (PERF-UX.md U6b/U6c).
 
-  Shown only while MilkDrop is the engine on screen. The heart is the load
-  bearing one: favourites already decide what shuffle draws from
-  (`milkdropCyclePool` prefers liked presets once there is more than one), so
-  hearting a few turns 1754 community presets into your own rotation. That
-  mechanism existed already and was reachable only by opening the browser and
-  finding the current preset's card in it, which is not a thing anyone does
+  Shuffle is always visible, not contextual: it is just a persisted
+  preference (`milkdropShuffle`), safe to arm from the swirl engine for
+  whenever MilkDrop becomes active later — clicking it never switches
+  engines by itself. Heart and next stay contextual (shown only while
+  MilkDrop is the engine on screen) because both act on the CURRENT MilkDrop
+  preset, which does not exist once MilkDrop's GPU surface has been torn
+  down (compact-mode teardown). The heart is the load bearing one:
+  favourites already decide what shuffle draws from (`milkdropCyclePool`
+  prefers liked presets once there is more than one), so hearting a few
+  turns 1754 community presets into your own rotation. That mechanism
+  existed already and was reachable only by opening the browser and finding
+  the current preset's card in it, which is not a thing anyone does
   mid-song.
 */
 const mdLive = document.getElementById('md-live');
@@ -6352,9 +6358,7 @@ const mdHeartBtn = document.getElementById('btn-md-heart');
 const mdNextBtn = document.getElementById('btn-md-next');
 
 function updateMilkdropLiveChips() {
-  if (!mdLive) return;
-  mdLive.hidden = activeEngine !== 'milkdrop';
-  if (mdLive.hidden) return;
+  const live = activeEngine === 'milkdrop';
 
   if (mdShuffleBtn) {
     mdShuffleBtn.setAttribute('aria-pressed', String(milkdropShuffle));
@@ -6364,10 +6368,18 @@ function updateMilkdropLiveChips() {
     mdShuffleBtn.title = pinned
       ? 'Shuffle is off for this song — it has a pinned preset (unpin it in the browser)'
       : milkdropShuffle
-        ? 'Shuffle is on — drops change the preset. Click to keep the current one.'
-        : 'Shuffle is off — the preset stays put. Click to let drops change it.';
+        ? live
+          ? 'Shuffle is on — drops change the preset. Click to keep the current one.'
+          : 'Shuffle is armed — presets will change on drops once MilkDrop is the active engine. Click to turn off.'
+        : live
+          ? 'Shuffle is off — the preset stays put. Click to let drops change it.'
+          : 'Shuffle is off — click to arm it for when MilkDrop is the active engine.';
     mdShuffleBtn.classList.toggle('chip--muted', Boolean(pinned));
   }
+
+  if (!mdLive) return;
+  mdLive.hidden = !live;
+  if (mdLive.hidden) return;
 
   if (mdHeartBtn) {
     const liked = Boolean(milkdropName) && typeof mdpFavourites !== 'undefined' && mdpFavourites.has(milkdropName);
@@ -6417,6 +6429,11 @@ if (mdNextBtn) {
     setStatus(`MilkDrop — ${milkdropName}`);
   });
 }
+
+// Shuffle is always visible now (PERF-UX.md U6b follow-up) — give it a
+// correct title/aria-pressed from the persisted pref before any engine
+// switch or click happens, rather than waiting for the first one.
+updateMilkdropLiveChips();
 
 /* Clicking the chip re-rolls the look for the CURRENT song and remembers that
    choice for it. Songs otherwise pick their own look automatically, so this is

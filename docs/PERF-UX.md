@@ -554,18 +554,22 @@ project.
 
 | # | Item | Track | Impact | Effort | Depends on |
 |---|---|---|---|---|---|
-| 1 | **P1** Perf harness in-repo | Perf | Unlocks the rest | Medium | — |
-| 2 | **U2** Settings stops being a key | UX | Medium | **Low** | — |
-| 3 | **P2** Stop rendering when unseen | Perf | **Very high** (battery/thermal) | Medium | P1 to verify |
-| 4 | **U1** Group the nineteen chips | UX | **Very high** (adoption) | Medium | — |
+| 1 | **P1** Perf harness in-repo — ✅ shipped (0.44.0) | Perf | Unlocks the rest | Medium | — |
+| 2 | **U2** Settings stops being a key — ✅ shipped (0.42.0) | UX | Medium | **Low** | — |
+| 3 | **P2** Stop rendering when unseen — ✅ shipped (0.44.0), verified against real OS state (0.47.0) | Perf | **Very high** (battery/thermal) | Medium | P1 to verify |
+| 4 | **U1** Group the nineteen chips — ✅ shipped (0.42.0/0.43.0) | UX | **Very high** (adoption) | Medium | — |
 | 5 | **U3** One panel primitive — ✅ shipped (0.45.0) | UX | High (+ correctness) | Medium | — |
 | 6 | **P3** Stagger the startup burst — ✅ measured, no fix needed (0.45.0) | Perf | High (first impression) | Low–Medium | P1 |
-| 7 | **U4** Keymap + `?` cheat sheet — ✅ shipped | UX | Medium | Low–Medium | U3 |
-| 8 | **P4** Memory baseline → decide — ✅ measured, no fix needed | Perf | Unknown — that's the point | Low | P1 |
+| 7 | **U4** Keymap + `?` cheat sheet — ✅ shipped (0.46.0) | UX | Medium | Low–Medium | U3 |
+| 8 | **P4** Memory baseline → decide — ✅ measured, no fix needed (0.46.0) | Perf | Unknown — that's the point | Low | P1 |
 | 9 | **U5** Keep splitting renderer.js | UX/sustaining | Indirect | Ongoing | opportunistic |
+| 10 | **U6** Preset-system UX (random start, shuffle, heart, vocabulary) — ✅ shipped | UX | High | Medium | — |
 
-**Two things can start today with no dependency:** U2 (an hour, mostly copy)
-and U1 (the grouping decision costs thinking, not code).
+**Every numbered item here is now shipped or explicitly resolved, except U5**
+(ongoing/opportunistic by design — split renderer.js when touching an area
+for another reason, not as its own project). This roadmap's job is done;
+see `NEXT_STEPS.md` for what's actually still open and `ROADMAP.md` for
+what comes after it.
 
 **P1 gates the honest version of P2/P3/P4.** P2's fix could be written without
 it — but then it would ship on reasoning, which is precisely the pattern §0
