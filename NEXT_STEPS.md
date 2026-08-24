@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.47.0 — 2026-08-24
+## Current as of v0.47.1 — 2026-08-24
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -105,11 +105,27 @@ genuinely unresolved right now.
   Windows' minimize-all and desktop-cloak subsystems) — the virtual-desktop
   case is intentional, not a bug, confirmed by screenshot and by asking: this
   is an OSD-style overlay meant to follow the user across desktops.
-  Exclusive-fullscreen pause is confirmed working, 3/3 clean. Win+L and
-  unplugging AC remain the two states no script can safely drive — still need
-  a human. `player.js`'s `playAt()` no longer silently skips a track on a
+  Exclusive-fullscreen pause is confirmed working, 3/3 clean. Win+L
+  (lock screen) verified by hand after this entry was first written: locked
+  twice, both times paused correctly with `reason=lock` and resumed within
+  seconds of unlocking. Unplugging AC is the one state left that never got
+  tested. `player.js`'s `playAt()` no longer silently skips a track on a
   slow/failed read — it surfaces a status message first, closing the item
   below.
+- **Robustness audit + fixes, five real gaps closed (0.47.1).** Ahead of
+  shipping to people who are not the developer: the in-app update
+  notification was completely dead (a field-name mismatch between what Rust
+  emitted and what the JS read — verified live, now shows and progresses
+  correctly); a corrupt/unsupported local audio file failed with total
+  silence (no status, no skip) — now matches the unreadable-file fix above;
+  `Mutex::lock().unwrap()` poisoning was systemic across ~10 files, one
+  panic anywhere turning into "this subsystem is dead until restart"; the
+  inference sidecar could hang forever with cancellation unable to interrupt
+  it (fixed with a 3-minute idle timeout on its own reader thread) and had
+  no user-facing cancel at all (the `hud-work` chip is now clickable while
+  transcription runs). Diarization and Genius remain explicitly not
+  attempted — a closed research dead-end and a policy decision, respectively,
+  not pending code.
 
 ### Actually open
 
@@ -120,11 +136,11 @@ genuinely unresolved right now.
    1**, and isolating the vocals first does not help (154 vs 1), so the
    instrumental was never the confound. It is the model or the task. Do not
    pick this up expecting a quick win.
-2. **`docs/PERF-UX.md` P2's lock-screen and battery-unplug states still need
-   a human.** Win+L is scriptable to trigger but not to safely recover from
-   (typing the unlock password isn't something to automate); battery state
-   is read from Windows, not simulated. Everything scriptable has now run —
-   see "Closed since" above.
+2. **`docs/PERF-UX.md` P2's battery-unplug state is the one thing left
+   untested.** Lock-screen is now verified (see "Closed since" above);
+   unplugging AC has no software trigger, so it still needs a human at the
+   machine to actually pull the cable and watch `overlayPaused`/`onBattery`
+   in the HUD, not just read `on_battery()`'s code.
 
 ---
 

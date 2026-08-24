@@ -2,6 +2,47 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.47.1 — 2026-08-24
+
+Follow-up to 0.47.0, from an audit of error-handling gaps ahead of shipping
+to real users. Five fixes, each verified live rather than assumed correct.
+
+- **The in-app update notification was completely dead.**
+  `commands/updater.rs` emitted `{available, status}`; `onboarding-cards.js`'s
+  `applyUpdateState()` read `{phase, prompt, percent}` — a field-name
+  mismatch, not a missing feature. The update card could never show, even
+  though the backend correctly detected updates the whole time. Rewritten to
+  match the real contract: downloads and installs silently in the background
+  (matching the card's own "is downloaded and ready" copy), reports real
+  progress via the SDK's chunk callback, and logs a failed install to the
+  crash log instead of discarding the error. Verified live: injecting the
+  real event shape now correctly shows the card and the progress pill.
+- **Corrupt or unsupported local audio files failed completely silently.**
+  `player.js`'s `playAt()` had no `'error'` listener on the audio element and
+  swallowed every `play()` rejection identically — track info would show,
+  nothing would ever play, no status, no auto-skip. Now surfaces a status
+  message and skips forward, the same shape as the unreadable-file fix
+  earlier this release cycle.
+- **`Mutex::lock().unwrap()` poisoning was systemic**, across roughly ten
+  files. One panic anywhere while holding a lock would poison it, turning a
+  single bad path into "this subsystem is dead until restart" for every
+  later command touching that state. Swept to the poison-safe
+  `.unwrap_or_else(|e| e.into_inner())`.
+- **The inference sidecar could hang forever with no way out.** Its
+  response-reading loop blocked on a single read with no timeout, and
+  cancellation was only checked *between* frames — so a genuinely wedged
+  sidecar (not crashed; a deadlock, not something `Session`'s `Drop` catches)
+  left the loop stuck indefinitely regardless of cancellation. The blocking
+  read now runs on its own thread, polled with a 3-minute idle timeout; the
+  post-loop graceful-shutdown wait (previously unconditional and itself
+  unbounded) only runs when a real response actually arrived. Also added the
+  missing user-facing cancel affordance: the `hud-work` chip is clickable
+  while transcription is running, wired to the job engine's existing
+  per-track cancellation, previously unreachable from the UI at all.
+- Test counts unchanged from 0.47.0: 203 JS, 427 Rust (406 passing, 21
+  `#[ignore]`d). `cargo clippy --workspace --all-targets --no-deps -- -D
+  warnings` clean.
+
 ## 0.47.0 — 2026-08-24
 
 The render-pause code finally met a real Windows desktop — some of it held
