@@ -224,9 +224,16 @@
     post({ type: 'render', t, elapsed: elapsedSeconds });
   }
 
-  /** @param {number} w @param {number} h CSS pixels @param {boolean} [lite] Lite mode — render at a lower internal resolution */
-  function resize(w, h, lite) {
-    post({ type: 'resize', width: w, height: h, lite: Boolean(lite) });
+  /**
+   * @param {number} w @param {number} h CSS pixels
+   * @param {number} [scale] internal render resolution as a multiple of CSS
+   *   pixels — 1 for CSS-pixel-accurate, >1 for sharper-than-CSS (device
+   *   pixel ratio), <1 to render fewer pixels than displayed (Lite mode).
+   *   Computed by the caller (renderer.js's milkdropRenderScale) — this
+   *   frame just applies whatever it is told.
+   */
+  function resize(w, h, scale) {
+    post({ type: 'resize', width: w, height: h, scale: Number(scale) > 0 ? Number(scale) : 1 });
   }
 
   /**

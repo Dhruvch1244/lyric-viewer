@@ -374,6 +374,47 @@ let liteMode = false;
    clears this on any manual click in either direction. */
 let liteModeAutoBattery = false;
 
+/*
+  MilkDrop's internal render resolution, as a real quality tier rather than
+  the old lite-only 0.55/1 binary.
+
+  'high' renders at the ACTUAL device pixel ratio (capped at 2x) instead of
+  this app's usual DPR-capped-at-1.0 rule (PERF-UX.md §0) — on any scaled
+  Windows display (125%/150%, extremely common on laptops) the old fixed
+  pixelRatio:1 backing store was a fraction of the physical pixels, then
+  stretched, which reads as soft/washed-out. That tradeoff existed for perf
+  headroom this app no longer needs to spend as carefully.
+
+  'auto' (the default) drops to 'standard' only while transcription
+  ('whisper') is actually running — the one background job heavy enough to
+  be worth trading for — and holds 'high' the rest of the time, including
+  for a song that needed no processing at all and has nothing competing for
+  the CPU.
+*/
+const MD_QUALITY_SCALE = {
+  performance: 0.55,
+  standard: 1,
+  high: Math.min(window.devicePixelRatio || 1, 2),
+};
+let mdQuality = 'auto';
+
+function milkdropRenderScale() {
+  if (liteMode) return MD_QUALITY_SCALE.performance; // battery/perf emergency always wins
+  if (mdQuality === 'auto') return jobs.has('whisper') ? MD_QUALITY_SCALE.standard : MD_QUALITY_SCALE.high;
+  return MD_QUALITY_SCALE[mdQuality] ?? MD_QUALITY_SCALE.high;
+}
+
+/*
+  An explicit frame-rate cap, independent of the adaptive drawCostMs governor
+  below. 'auto' is that existing governor, unchanged — cheap frames run
+  uncapped (vsync), expensive ones back off. '60' is the new default: most
+  displays exceed 60Hz today, and rendering faster than that burns GPU/battery
+  for a difference nobody sees. Lite mode's own 30fps throttle always wins
+  over this when it is active (see the throttleMs computation below).
+*/
+const FPS_CAP_MS = { auto: null, '60': 16, '30': 33 };
+let fpsCap = '60';
+
 /* ------------------------------------------------------------ reduced motion */
 /*
   Honours the OS "reduce motion" / "reduce animations" setting for the CANVAS
@@ -2579,7 +2620,7 @@ function applyEngine(preset, now, dt, w, h) {
     if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
-      window.MilkDrop.resize(w, h, liteMode);
+      window.MilkDrop.resize(w, h, milkdropRenderScale());
       milkdropSize = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
       // Cut rather than blend on the way in: there is nothing to blend FROM,
       // and a fade from black reads as the app being slow to start. The target
@@ -2670,13 +2711,16 @@ function applyEngine(preset, now, dt, w, h) {
   }
 
   // Resize crosses a frame boundary, so it is sent only on a real change rather
-  // than every frame — the CSS already stretches the frame itself. Lite mode
-  // is folded into the same key so toggling it mid-song re-fires this exactly
-  // like a real size change, dropping (or restoring) MilkDrop's render res.
-  const size = `${Math.floor(w)}x${Math.floor(h)}:${liteMode ? 1 : 0}`;
+  // than every frame — the CSS already stretches the frame itself. The
+  // computed render scale is folded into the same key (not just w/h) so
+  // Lite mode, a manual quality change, or 'auto' quality reacting to
+  // transcription starting/stopping all re-fire this exactly like a real
+  // size change, dropping (or restoring) MilkDrop's render resolution.
+  const scale = milkdropRenderScale();
+  const size = `${Math.floor(w)}x${Math.floor(h)}:${scale}`;
   if (size !== milkdropSize) {
     milkdropSize = size;
-    window.MilkDrop.resize(w, h, liteMode);
+    window.MilkDrop.resize(w, h, scale);
   }
 
   window.MilkDrop.render(dt / 1000);
@@ -3320,7 +3364,7 @@ function drawBackdrop(now) {
     // stuttering at the display's full refresh rate. rAF still fires every vsync
     // via the finally block; we just return early until enough time has elapsed.
     // The dt-normalised decays below keep motion speed correct at any frame rate.
-    const throttleMs = liteMode ? 33 : (drawCostMs > 26 ? 32 : drawCostMs > 17 ? 20 : 0);
+    const throttleMs = liteMode ? 33 : (FPS_CAP_MS[fpsCap] ?? (drawCostMs > 26 ? 32 : drawCostMs > 17 ? 20 : 0));
     if (throttleMs && lastDrawnAt && (now - lastDrawnAt) < throttleMs) return;
     lastDrawnAt = now;
     startedAt = performance.now();
@@ -5849,6 +5893,35 @@ if (els.wallpaperBtn) {
   }
 }
 
+/* MilkDrop quality + frame-rate cap. Renderer-only preferences (localStorage,
+   like liteMode/backdropLevel) rather than backend-persisted — cosmetic/perf
+   knobs that never need to survive outside this machine's browser storage.
+   Read localStorage directly for the initial value here rather than the
+   mdQuality/fpsCap variables — this code runs before the bootstrap block
+   further down restores them, so the variables would still be at their
+   just-declared defaults at this point. */
+{
+  const qualitySelect = document.getElementById('keybox-md-quality');
+  if (qualitySelect) {
+    const saved = localStorage.getItem('mdQuality');
+    qualitySelect.value = saved && (saved === 'auto' || saved in MD_QUALITY_SCALE) ? saved : 'auto';
+    qualitySelect.addEventListener('change', () => {
+      mdQuality = qualitySelect.value;
+      try { localStorage.setItem('mdQuality', mdQuality); } catch { /* ignore */ }
+    });
+  }
+
+  const fpsSelect = document.getElementById('keybox-fps-cap');
+  if (fpsSelect) {
+    const saved = localStorage.getItem('fpsCap');
+    fpsSelect.value = saved && saved in FPS_CAP_MS ? saved : '60';
+    fpsSelect.addEventListener('change', () => {
+      fpsCap = fpsSelect.value;
+      try { localStorage.setItem('fpsCap', fpsCap); } catch { /* ignore */ }
+    });
+  }
+}
+
 /* Whisper transcription language. The backend (get/set-transcribe-config) has
    existed since the Tauri port; this is the first UI control for it — until
    now `whisperLanguage` could only be set by hand-editing settings.json, and
@@ -7386,6 +7459,10 @@ try {
   const lv = localStorage.getItem('lyricsVisible');
   if (lv !== null) lyricsVisible = lv === '1';
   liteMode = localStorage.getItem('liteMode') === '1';
+  const mq = localStorage.getItem('mdQuality');
+  if (mq && (mq === 'auto' || mq in MD_QUALITY_SCALE)) mdQuality = mq;
+  const fc = localStorage.getItem('fpsCap');
+  if (fc && fc in FPS_CAP_MS) fpsCap = fc;
   // No global preset any more — each song carries its own look (see
   // applyLookForTrack). Only explicit per-song overrides are stored.
 } catch { /* ignore */ }

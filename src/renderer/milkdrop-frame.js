@@ -275,17 +275,18 @@
   }
 
   /*
-    Lite mode drops the internal render resolution rather than swapping presets
-    — the canvas is CSS-stretched to 100% (see milkdrop.html), so a smaller
-    backing buffer just costs Butterchurn fewer pixels per frame, the same
-    trick swirl.js uses for its own Lite scale.
+    The internal render resolution vs. the CSS-stretched-to-100% canvas (see
+    milkdrop.html) is the whole quality lever here — a smaller backing buffer
+    costs Butterchurn fewer pixels per frame (Lite mode, scale<1), a larger
+    one is sharper than a plain CSS pixel (device pixel ratio, scale>1). The
+    scale itself is decided by the parent (renderer.js's milkdropRenderScale)
+    — this frame just applies whatever it is told, same trick swirl.js uses
+    for its own quality scale.
   */
-  const LITE_SCALE = 0.55;
-
-  function resize(width, height, lite) {
-    const scale = lite ? LITE_SCALE : 1;
-    const w = Math.max(1, Math.floor(width * scale));
-    const h = Math.max(1, Math.floor(height * scale));
+  function resize(width, height, scale) {
+    const s = scale > 0 ? scale : 1;
+    const w = Math.max(1, Math.floor(width * s));
+    const h = Math.max(1, Math.floor(height * s));
     canvas.width = w;
     canvas.height = h;
     if (!visualizer) return;
@@ -300,7 +301,7 @@
     switch (msg.type) {
       case 'init': init(); break;
       case 'preset': loadPreset(msg.name, msg.blend, msg.data); break;
-      case 'resize': resize(msg.width, msg.height, msg.lite); break;
+      case 'resize': resize(msg.width, msg.height, msg.scale); break;
       case 'render': render(msg); break;
       case 'thumb': thumbnail(msg.name, msg.data); break;
       case 'thumb-end': endThumbnails(); break;

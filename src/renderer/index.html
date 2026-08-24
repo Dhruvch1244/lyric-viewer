@@ -285,6 +285,34 @@
         </div>
 
         <div class="keybox__section">
+          <span class="keybox__heading">Visuals</span>
+        </div>
+
+        <!-- MilkDrop's internal render resolution — see milkdropRenderScale()
+             in renderer.js. "Auto" drops one tier only while transcription is
+             actually running; the rest of the time, including a song that
+             needed no processing at all, it renders sharp. -->
+        <div class="keybox__local">
+          <span class="keybox__label">MilkDrop quality</span>
+          <select id="keybox-md-quality" class="chip" title="MilkDrop's internal render resolution">
+            <option value="auto">Auto — sharp, drops one tier while transcribing</option>
+            <option value="high">High — sharpest (device pixel ratio)</option>
+            <option value="standard">Standard — one CSS pixel per render pixel</option>
+            <option value="performance">Performance — lower resolution, lighter</option>
+          </select>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">Frame rate cap</span>
+          <span class="keybox__note">Lite mode's own 30fps cap always applies on top of this when it's on.</span>
+          <select id="keybox-fps-cap" class="chip" title="Cap the render loop's frame rate">
+            <option value="60">60fps</option>
+            <option value="30">30fps</option>
+            <option value="auto">Auto (uncapped — matches your monitor's refresh rate)</option>
+          </select>
+        </div>
+
+        <div class="keybox__section">
           <span class="keybox__heading">Transcription</span>
           <span class="keybox__note">Used only for songs with no synced lyrics anywhere.</span>
         </div>
