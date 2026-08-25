@@ -275,6 +275,60 @@ test('different moods can pick different looks for the exact same song', () => {
   assert.notEqual(calm, energetic);
 });
 
+test('forTrack with no genre key behaves exactly like today (no genre resolved yet)', () => {
+  const withoutGenre = VisualPresets.forTrack('Seedhe Maut|Nazar').id;
+  const withEmptyGenre = VisualPresets.forTrack('Seedhe Maut|Nazar', undefined, '').id;
+  assert.equal(withEmptyGenre, withoutGenre);
+});
+
+test('forTrack stays deterministic per (track, genre) pair', () => {
+  const a = VisualPresets.forTrack('Artist|Title', undefined, 'Hip-Hop').id;
+  assert.equal(VisualPresets.forTrack('Artist|Title', undefined, 'Hip-Hop').id, a);
+});
+
+test('a genre-biased pick only ever lands inside that genre bucket\'s subset', () => {
+  const urbanIds = ['concert', 'stage', 'geometry'];
+  for (let i = 0; i < 40; i += 1) {
+    const id = VisualPresets.forTrack(`artist ${i}|title ${i}`, undefined, 'Hip-Hop').id;
+    assert.ok(urbanIds.includes(id), `${id} is not an urban-genre preset`);
+  }
+});
+
+test('genre classification buckets varied real-world spellings together', () => {
+  assert.equal(VisualPresets.classifyGenre('Hip-Hop'), 'urban');
+  assert.equal(VisualPresets.classifyGenre('hip hop'), 'urban');
+  assert.equal(VisualPresets.classifyGenre('trap'), 'urban');
+  assert.equal(VisualPresets.classifyGenre('R&B'), 'smooth');
+  assert.equal(VisualPresets.classifyGenre('lo-fi'), 'smooth');
+  assert.equal(VisualPresets.classifyGenre('K-Pop'), 'global');
+  assert.equal(VisualPresets.classifyGenre('something nobody has heard of'), 'pop');
+});
+
+test('different genres can pick different looks for the exact same song', () => {
+  const smooth = VisualPresets.forTrack('Test Artist|Test Song', undefined, 'Jazz').id;
+  const intense = VisualPresets.forTrack('Test Artist|Test Song', undefined, 'Metal').id;
+  assert.notEqual(smooth, intense);
+});
+
+test('mood and genre together intersect rather than one silently winning', () => {
+  // "dark" -> wormhole/geometry/concert; "Hip-Hop" -> concert/stage/geometry.
+  // Intersection is {concert, geometry} — a narrower, coherent subset of both.
+  const bothIds = ['concert', 'geometry'];
+  for (let i = 0; i < 40; i += 1) {
+    const id = VisualPresets.forTrack(`artist ${i}|title ${i}`, 'dark', 'Hip-Hop').id;
+    assert.ok(bothIds.includes(id), `${id} is not in the dark ∩ urban intersection`);
+  }
+});
+
+test('mood and genre disagreeing to an empty intersection falls back to the mood pool', () => {
+  // "calm" -> liquid/heatmap/vinyl; "Hip-Hop" -> concert/stage/geometry. No overlap.
+  const calmIds = ['liquid', 'heatmap', 'vinyl'];
+  for (let i = 0; i < 40; i += 1) {
+    const id = VisualPresets.forTrack(`artist ${i}|title ${i}`, 'calm', 'Hip-Hop').id;
+    assert.ok(calmIds.includes(id), `${id} did not fall back to the mood pool`);
+  }
+});
+
 test('affordable substitutes a coherent preset instead of gutting one', () => {
   const concert = VisualPresets.byId('concert');
   // Lite mode is an explicit choice, so it steps in immediately.

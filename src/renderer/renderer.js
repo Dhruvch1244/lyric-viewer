@@ -275,7 +275,7 @@ let pulse = 0;
 let baseEnergy = 0.35;
 /** Current song mood label, for the status line. */
 let currentMood = null;
-/** Current song genre (genre.rs — MusicBrainz, LLM fallback), library-badge only for now. */
+/** Current song genre (genre.rs — MusicBrainz, LLM fallback); biases preset choice and shows as a library badge. */
 let currentGenre = null;
 /**
  * The visual profile derived from the song's mood + energy — motion character,
@@ -5304,9 +5304,10 @@ window.player.onTrack((track) => {
   applyLookForTrack(track);   // each song carries its own remembered look
   if (els.source) els.source.hidden = true; // cleared until this track's lyrics land
 
-  // Reset mood/energy; the sentiment analysis (if available) upgrades this soon.
+  // Reset mood/energy/genre; the sentiment/genre passes (if available) upgrade this soon.
   baseEnergy = typeof track.energy === 'number' ? track.energy : 0.35;
   currentMood = null;
+  currentGenre = null;
   applyMoodProfile(); // back to neutral until this track's mood lands
   buildup = 0;
   dropFlash = 0;
@@ -5471,6 +5472,12 @@ window.player.onMood((data) => {
 window.player.onGenre((data) => {
   if (!isForCurrentTrack(data.track)) return;
   currentGenre = data.genre || null;
+  // Re-derive the look now that genre is actually known — same reasoning as
+  // onMood just above: the first pick at track-start ran with whatever was
+  // known THEN (usually neither mood nor genre, both resolve async after
+  // lyrics). A no-op for an overridden track or a pick genre doesn't change;
+  // otherwise the existing per-frame crossfade handles the transition.
+  applyLookForTrack(currentTrack);
   // Refresh the library card in place if the panel happens to be open while
   // this resolves — a live-playing song's card is the one most likely to be
   // looked at right now, and otherwise it would show blank until reopened.
@@ -6472,7 +6479,7 @@ function applyLookForTrack(track) {
   const override = readLookOverrides()[trackLookKey(track)];
   presetId = override
     ? window.VisualPresets.byId(override).id
-    : window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key).id;
+    : window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key, currentGenre).id;
   applyPresetLabel();
 }
 

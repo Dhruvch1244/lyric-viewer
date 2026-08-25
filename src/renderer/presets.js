@@ -361,10 +361,58 @@
   };
 
   /**
+   * Genre text is free-form (MusicBrainz tags, an LLM's own wording — see
+   * genre.rs) where mood is a small fixed vocabulary, so it needs a
+   * classification step mood.js's `classify()` already proves the shape of:
+   * keyword buckets, first match wins, order most-specific-first. Bucketed
+   * rather than matched 1:1 against `GENRE_POOLS` so "Hip-Hop", "hip hop"
+   * and "trap" all land the same place without enumerating every spelling.
+   */
+  const GENRE_KEYWORDS = [
+    ['urban', /\b(hip.?hop|rap|trap|grime|drill)\b/i],
+    ['electronic', /\b(edm|electronic|house|techno|trance|dubstep|dance|drum.?(and|&).?bass|dnb)\b/i],
+    ['smooth', /\b(r&b|rnb|soul|jazz|lo.?fi|ambient|chill)\b/i],
+    ['intense', /\b(rock|metal|punk|hardcore|grunge)\b/i],
+    ['organic', /\b(folk|country|acoustic|indie|singer.?songwriter|americana)\b/i],
+    ['global', /\b(latin|reggaeton|k.?pop|bollywood|afrobeat|desi|bhangra|devotional)\b/i],
+    ['classical', /\b(classical|orchestral|instrumental|symphon)\b/i],
+  ];
+
+  /** @param {string} genre raw text from genre.rs @returns {string} a GENRE_POOLS key */
+  function classifyGenre(genre) {
+    const text = String(genre || '').toLowerCase();
+    for (const [key, re] of GENRE_KEYWORDS) {
+      if (re.test(text)) return key;
+    }
+    return 'pop'; // unrecognised or actually "pop" — same bucket, same reasoning as mood's neutral fallback
+  }
+
+  /** Which RANDOM_POOL presets suit each genre bucket — same shape as MOOD_POOLS. */
+  const GENRE_POOLS = {
+    urban: ['concert', 'stage', 'geometry'],
+    electronic: ['concert', 'geometry', 'starfield'],
+    smooth: ['liquid', 'vinyl', 'heatmap'],
+    intense: ['wormhole', 'concert', 'geometry'],
+    organic: ['vinyl', 'heatmap', 'liquid'],
+    global: ['concert', 'starfield', 'stage'],
+    classical: ['liquid', 'heatmap', 'vinyl'],
+    pop: ['starfield', 'vinyl', 'liquid'],
+  };
+
+  /**
    * The look for a given track — random across songs, identical every time
-   * you play the same one, optionally biased toward the song's mood
-   * character without losing that determinism: same (track, mood) always
-   * resolves to the same look.
+   * you play the same one, optionally biased toward the song's mood and/or
+   * genre character without losing that determinism: the same
+   * (track, mood, genre) always resolves to the same look.
+   *
+   * When both mood and genre are known, the chosen pool is their
+   * INTERSECTION — a look only survives when it fits both characters — with
+   * a fallback to whichever single axis is non-empty, and then to the mood
+   * pool alone if the intersection is empty (a mood match is the axis this
+   * app has trusted longer, and rejects fewer candidates than genre's wider
+   * bucket set does). Neither axis known falls through to the full pool —
+   * unchanged behaviour for a song whose mood/genre have not resolved yet
+   * (both are asynchronous, after lyrics) or when no LLM key is configured.
    *
    * Chosen by hashing the track identity rather than rolling dice and saving
    * the result. Same outcome, no storage to grow stale, and a song looks the
@@ -373,16 +421,30 @@
    *
    * @param {string} trackKey stable "artist|title" identity
    * @param {string} [moodKey] a MoodProfile key — 'calm'/'energetic'/'dark'/'bright'/'neutral'
+   * @param {string} [genreKey] raw genre text from genre.rs, e.g. "Hip-Hop"
    * @returns {Preset}
    */
-  function forTrack(trackKey, moodKey) {
+  function forTrack(trackKey, moodKey, genreKey) {
     const key = String(trackKey || '');
     if (!key) return byId(DEFAULT_ID);
     let hash = 0;
     for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-    const ids = MOOD_POOLS[moodKey];
-    const pool = ids ? RANDOM_POOL.filter((p) => ids.includes(p.id)) : null;
-    const chosen = pool && pool.length ? pool : RANDOM_POOL;
+
+    const moodIds = MOOD_POOLS[moodKey];
+    const moodPool = moodIds ? RANDOM_POOL.filter((p) => moodIds.includes(p.id)) : null;
+
+    const genreIds = genreKey ? GENRE_POOLS[classifyGenre(genreKey)] : null;
+    const genrePool = genreIds ? RANDOM_POOL.filter((p) => genreIds.includes(p.id)) : null;
+
+    let chosen;
+    if (moodPool && genrePool) {
+      const both = moodPool.filter((p) => genrePool.includes(p));
+      chosen = both.length ? both : moodPool;
+    } else {
+      chosen = moodPool || genrePool;
+    }
+    if (!chosen || !chosen.length) chosen = RANDOM_POOL;
+
     return chosen[hash % chosen.length];
   }
 
@@ -423,6 +485,7 @@
     byId,
     next,
     forTrack,
+    classifyGenre,
     RANDOM_POOL,
     SECOND_ENGINE,
     affordable,
