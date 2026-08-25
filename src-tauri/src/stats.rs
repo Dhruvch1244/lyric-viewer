@@ -148,15 +148,15 @@ fn aggregate(entries: &[PlayLogEntry], today: i64, genre_of: impl Fn(&str) -> Op
     }
 
     let mut top_artists: Vec<(&str, (i64, i64))> = artist_counts.into_iter().collect();
-    top_artists.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    top_artists.sort_by_key(|(_, (plays, _))| std::cmp::Reverse(*plays));
     top_artists.truncate(8);
 
     let mut top_songs: Vec<(String, String, i64)> = song_counts.into_values().collect();
-    top_songs.sort_by(|a, b| b.2.cmp(&a.2));
+    top_songs.sort_by_key(|(_, _, plays)| std::cmp::Reverse(*plays));
     top_songs.truncate(8);
 
     let mut top_genres: Vec<(String, i64)> = genre_counts.into_iter().collect();
-    top_genres.sort_by(|a, b| b.1.cmp(&a.1));
+    top_genres.sort_by_key(|(_, plays)| std::cmp::Reverse(*plays));
     top_genres.truncate(8);
 
     json!({
