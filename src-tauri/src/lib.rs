@@ -31,6 +31,7 @@ mod correct;
 mod crashlog;
 mod fingerprint;
 mod genius;
+mod genre;
 mod musicbrainz;
 mod jobs;
 mod kugou;
@@ -48,6 +49,7 @@ mod models;
 mod mood;
 mod netease;
 mod presets;
+mod stats;
 #[cfg(windows)]
 mod smtc;
 mod state;
@@ -201,6 +203,8 @@ pub fn run() {
             commands::misc::milkdrop_thumb_get,
             commands::misc::milkdrop_thumb_put,
             commands::misc::milkdrop_thumb_clear,
+            commands::misc::get_listening_stats,
+            commands::misc::clear_listening_history,
             commands::prefs::set_api_key,
             commands::lyrics_cmds::save_beatmap,
             commands::lyrics_cmds::save_heatmap,

@@ -136,6 +136,70 @@ impl Runnable for MoodJob {
     }
 }
 
+/// Emit a track's genre. A cached answer emits immediately; otherwise
+/// `genre::analyze` resolves it once (MusicBrainz, LLM fallback), the result
+/// is merged into the lyrics cache file, and it is emitted. Same shape as
+/// `resolve_mood` — a single scalar, cached once per song — deliberately kept
+/// as its own job rather than folded into `MoodJob`: the two have unrelated
+/// failure modes (MusicBrainz has no key or quota to run out of, an LLM
+/// does), so one being unavailable must not block the other.
+fn resolve_genre(app: &AppHandle, title: &str, artist: &str, key: &str, cue_texts: Vec<String>, cached_genre: Option<Value>) {
+    if let Some(g) = cached_genre {
+        let _ = app.emit("genre", json!({ "genre": g, "track": { "title": title, "artist": artist } }));
+        return;
+    }
+    jobs::submit(
+        GenreJob { app: app.clone(), title: title.to_string(), artist: artist.to_string(), key: key.to_string(), cue_texts },
+        Priority::Next,
+    );
+}
+
+/// The I/O-lane job behind `resolve_genre`. `Priority::Next` rather than
+/// `Now` — unlike mood (which the palette needs immediately) nothing on
+/// screen is waiting on genre, so it must not compete with the lyrics fetch
+/// or mood/attribution for the current song's own lookup slot.
+struct GenreJob {
+    app: AppHandle,
+    title: String,
+    artist: String,
+    key: String,
+    cue_texts: Vec<String>,
+}
+
+impl Runnable for GenreJob {
+    fn lane(&self) -> Lane {
+        Lane::Io
+    }
+
+    fn dedup_key(&self) -> String {
+        format!("genre:{}", self.key)
+    }
+
+    fn track(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+
+    fn run(self: Box<Self>, cancel: &CancelToken) {
+        let GenreJob { app, title, artist, key, cue_texts } = *self;
+        if cancel.cancelled() {
+            return;
+        }
+        let Some(genre) = crate::genre::analyze(&title, &artist, &cue_texts) else { return };
+        if let Some(path) = lyrics_cache_path(&app, &key) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
+                    cached["genre"] = json!(genre);
+                    let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+                }
+            }
+        }
+        if cancel.cancelled() {
+            return;
+        }
+        let _ = app.emit("genre", json!({ "genre": genre, "track": { "title": title, "artist": artist } }));
+    }
+}
+
 /// Emit per-line singer attribution. A cached answer emits immediately;
 /// otherwise the LLM works it out once (multi-artist tracks only), the result
 /// is merged into the lyrics cache, and it is emitted. No-op without a provider.
@@ -294,6 +358,7 @@ impl Runnable for LyricsJob {
                     let cue_texts = cue_texts_of(&cached);
                     let cached_mood = cached.get("mood").cloned();
                     let cached_attr = cached.get("attribution").cloned();
+                    let cached_genre = cached.get("genre").cloned();
                     let mut payload = cached;
                     payload["track"] = json!({ "title": title, "artist": artist });
                     payload["origin"] = json!("disk");
@@ -301,7 +366,8 @@ impl Runnable for LyricsJob {
                     payload["transliterationAvailable"] = json!(crate::llm::is_available());
                     let _ = app.emit("lyrics", payload);
                     resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), cached_mood);
-                    resolve_attribution(&app, &title, &artist, &key, cue_texts, cached_attr);
+                    resolve_attribution(&app, &title, &artist, &key, cue_texts.clone(), cached_attr);
+                    resolve_genre(&app, &title, &artist, &key, cue_texts, cached_genre);
                     return;
                 }
             }
@@ -358,7 +424,8 @@ impl Runnable for LyricsJob {
                 // Upgrade the hash palette to a mood-driven one, and work out who
                 // sings which line (both LLM, both cached, no-ops without a key).
                 resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), None);
-                resolve_attribution(&app, &title, &artist, &key, cue_texts, None);
+                resolve_attribution(&app, &title, &artist, &key, cue_texts.clone(), None);
+                resolve_genre(&app, &title, &artist, &key, cue_texts, None);
             }
             None => {
                 // No synced lyrics anywhere — check whether at least the real
@@ -1131,6 +1198,7 @@ impl Runnable for SpeculateJob {
     fn run(self: Box<Self>, _cancel: &CancelToken) {
         let SpeculateJob { app, current } = *self;
         let key = current.key.clone();
+        crate::stats::append_play(&app, &current.key, &current.title, &current.artist, current.duration_ms);
         crate::history::record_play(&app, current);
 
         let Some(next) = crate::history::predict_next(&app, &key) else { return };
@@ -1483,6 +1551,7 @@ pub(crate) fn list_synced(app: AppHandle) -> Value {
             "hasCues": has_cues,
             "hasBeatmap": v.get("beatmap").is_some(),
             "hasHeatmap": v.get("heatmap").and_then(|h| h.get("bins")).map(|b| b.is_array()).unwrap_or(false),
+            "genre": v.get("genre"),
         }));
     }
     out.sort_by_key(|v: &Value| v["title"].as_str().unwrap_or("").to_lowercase());

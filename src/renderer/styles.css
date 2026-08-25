@@ -2629,6 +2629,14 @@ body.engine-milkdrop .stage::before {
 }
 
 /* What is known about a song, at a glance: lyrics, beat map, heat map. */
+.library__genre {
+  margin-top: 0.15rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-faint);
+}
+
 .library__badges {
   margin-top: 0.25rem;
   display: flex;
@@ -2653,6 +2661,178 @@ body.engine-milkdrop .stage::before {
   margin: 0;
   color: var(--chrome-ink-dim);
   font-size: 0.85rem;
+}
+
+/* ---- Insights (stats.rs's listening-history log) ---- */
+
+.insights {
+  position: fixed;
+  inset: 6vh 6vw;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.4rem 1.6rem;
+  background: var(--chrome-surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: 14px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px -12px rgba(17, 17, 17, 0.18);
+  overflow-y: auto;
+}
+
+/* Same trap as `.insights__body` below, but here it would have meant the
+   whole panel rendering open at startup — `display: flex` above is an author
+   rule and always beats the UA default `[hidden] { display: none }`
+   regardless of specificity, so the initial `hidden` attribute in the markup
+   needs its own explicit override. Matches `.library[hidden]` / `.mdp[hidden]`. */
+.insights[hidden] {
+  display: none;
+}
+
+.insights__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.insights__title {
+  font-family: var(--chrome-serif);
+  font-weight: 400;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  margin: 0 auto 0 0;
+  color: var(--chrome-ink);
+}
+
+.insights__empty {
+  margin: 0;
+  color: var(--chrome-ink-dim);
+  font-size: 0.85rem;
+}
+
+.insights__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.6rem;
+}
+
+/* `display: flex` above otherwise outranks the UA `[hidden] { display: none }`
+   rule (a class selector beats an attribute selector), so the empty-state
+   message and the stats body would render on top of each other instead of
+   one replacing the other — caught by actually opening the panel with no
+   history yet, not by reading the CSS. */
+.insights__body[hidden] {
+  display: none;
+}
+
+.insights__stat-row {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.insights__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.insights__stat-value {
+  font-family: var(--chrome-serif);
+  font-size: 2rem;
+  line-height: 1;
+  color: var(--chrome-ink);
+}
+
+.insights__stat-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-faint);
+}
+
+.insights__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1.4rem;
+}
+
+.insights__heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-dim);
+  font-weight: 500;
+}
+
+.insights__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.insights__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.85rem;
+  color: var(--chrome-ink);
+}
+
+.insights__row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insights__row-count {
+  flex: none;
+  color: var(--chrome-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.insights__row--muted {
+  color: var(--chrome-ink-faint);
+  font-style: italic;
+}
+
+.insights__week {
+  max-width: 22rem;
+}
+
+.insights__weekday {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  height: 5rem;
+}
+
+.insights__weekday-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 0.35rem;
+}
+
+.insights__weekday-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: var(--chrome-accent, var(--chrome-ink-dim));
+}
+
+.insights__weekday-label {
+  font-size: 0.66rem;
+  color: var(--chrome-ink-faint);
 }
 
 /* ---- Transport ---- */

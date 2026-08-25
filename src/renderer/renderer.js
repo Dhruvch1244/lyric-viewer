@@ -52,6 +52,19 @@ const els = {
   libraryEmpty: document.getElementById('library-empty'),
   libraryWatchFolder: document.getElementById('library-watch-folder'),
   libraryWatchedList: document.getElementById('library-watched-list'),
+  insightsBtn: document.getElementById('btn-insights'),
+  insights: document.getElementById('insights'),
+  insightsClose: document.getElementById('insights-close'),
+  insightsRange: document.getElementById('insights-range'),
+  insightsEmpty: document.getElementById('insights-empty'),
+  insightsBody: document.getElementById('insights-body'),
+  insightsPlays: document.getElementById('insights-plays'),
+  insightsTime: document.getElementById('insights-time'),
+  insightsStreak: document.getElementById('insights-streak'),
+  insightsArtists: document.getElementById('insights-artists'),
+  insightsGenres: document.getElementById('insights-genres'),
+  insightsSongs: document.getElementById('insights-songs'),
+  insightsWeekday: document.getElementById('insights-weekday'),
   transport: document.getElementById('transport'),
   trPrev: document.getElementById('tr-prev'),
   trPlay: document.getElementById('tr-play'),
@@ -262,6 +275,8 @@ let pulse = 0;
 let baseEnergy = 0.35;
 /** Current song mood label, for the status line. */
 let currentMood = null;
+/** Current song genre (genre.rs — MusicBrainz, LLM fallback), library-badge only for now. */
+let currentGenre = null;
 /**
  * The visual profile derived from the song's mood + energy — motion character,
  * not just palette. Neutral until the sentiment pass lands. See mood.js.
@@ -5453,6 +5468,15 @@ window.player.onMood((data) => {
   applyLookForTrack(currentTrack);
 });
 
+window.player.onGenre((data) => {
+  if (!isForCurrentTrack(data.track)) return;
+  currentGenre = data.genre || null;
+  // Refresh the library card in place if the panel happens to be open while
+  // this resolves — a live-playing song's card is the one most likely to be
+  // looked at right now, and otherwise it would show blank until reopened.
+  if (els.library && !els.library.hidden) refreshSyncedList();
+});
+
 /**
  * Derive the visual profile from the current mood + energy and expose its key
  * to CSS. The renderer folds `moodProfile.motion` / `.flicker` into the motion
@@ -5841,6 +5865,29 @@ if (els.wallpaperBtn) {
   }
 }
 
+/* Clear listening history (stats.rs) — a real record of what's been played,
+   kept unlimited locally, so this is its explicit reversal. No confirm
+   dialog: the button's own label already says exactly what it does, and the
+   Settings panel is not a place a click lands by accident. */
+{
+  const clearBtn = document.getElementById('keybox-clear-history');
+  const clearStatus = document.getElementById('keybox-clear-history-status');
+  if (clearBtn && window.player && window.player.clearListeningHistory) {
+    clearBtn.addEventListener('click', async () => {
+      clearBtn.disabled = true;
+      try {
+        await window.player.clearListeningHistory();
+        if (clearStatus) clearStatus.textContent = 'cleared';
+        if (els.insights && !els.insights.hidden) refreshInsights();
+      } catch {
+        if (clearStatus) clearStatus.textContent = 'could not clear history';
+      } finally {
+        clearBtn.disabled = false;
+      }
+    });
+  }
+}
+
 /* Remote crash reporting toggle — opt-in, off by default (see crashlog.rs /
    web/worker/src/worker.js). Source of truth is the persisted pref, read
    back via getPrefs() on load rather than assumed on, same caution as the
@@ -6036,7 +6083,7 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, moreMenu,
 ].filter(Boolean);
 
 function anyPanelOpen() {
@@ -6747,6 +6794,7 @@ async function refreshSyncedList() {
       hasCues: Boolean(it.hasCues),
       hasBeatmap: Boolean(it.hasBeatmap),
       hasHeatmap: Boolean(it.hasHeatmap),
+      genre: typeof it.genre === 'string' ? it.genre : null,
       localPath: null,
     });
   }
@@ -6773,7 +6821,7 @@ function renderLibrary() {
   if (!els.libraryGrid) return;
   const term = (els.librarySearch && els.librarySearch.value || '').toLowerCase().trim();
   const items = term
-    ? libraryItems.filter((it) => `${it.title} ${it.artist}`.toLowerCase().includes(term))
+    ? libraryItems.filter((it) => `${it.title} ${it.artist} ${it.genre || ''}`.toLowerCase().includes(term))
     : libraryItems;
 
   els.libraryGrid.textContent = '';
@@ -6836,6 +6884,13 @@ function libraryCard(it) {
   artist.className = 'library__artist';
   artist.textContent = it.artist || 'Unknown artist';
 
+  let genreEl = null;
+  if (it.genre) {
+    genreEl = document.createElement('div');
+    genreEl.className = 'library__genre';
+    genreEl.textContent = it.genre;
+  }
+
   // What the app already knows about this song, at a glance.
   const badges = document.createElement('div');
   badges.className = 'library__badges';
@@ -6851,7 +6906,9 @@ function libraryCard(it) {
     badges.appendChild(b);
   }
 
-  meta.append(song, artist, badges);
+  meta.append(song, artist);
+  if (genreEl) meta.append(genreEl);
+  meta.append(badges);
   card.append(art, meta);
   return card;
 }
@@ -7175,6 +7232,109 @@ function openLibrary() {
 function closeLibrary() {
   if (els.library) els.library.hidden = true;
 }
+
+/* ------------------------------------------------------------- insights */
+/*
+  Listening stats, built on stats.rs's unlimited local play log. Fetched
+  fresh each time the panel opens or the range changes — this is a look-back
+  query over a log that only grows between opens, not something worth
+  keeping live-synced the way the library grid is.
+*/
+
+const MS_PER_HOUR = 3_600_000;
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function openInsights() {
+  if (!els.insights) return;
+  els.insights.hidden = false;
+  document.body.classList.add('show-cursor');
+  refreshInsights();
+}
+
+function closeInsights() {
+  if (els.insights) els.insights.hidden = true;
+}
+
+/** One `<li>` for a top-N list — a rank, a label, and a right-aligned count. */
+function insightRow(label, count) {
+  const li = document.createElement('li');
+  li.className = 'insights__row';
+  const name = document.createElement('span');
+  name.className = 'insights__row-label';
+  name.textContent = label;
+  const n = document.createElement('span');
+  n.className = 'insights__row-count';
+  n.textContent = count;
+  li.append(name, n);
+  return li;
+}
+
+async function refreshInsights() {
+  if (!els.insightsBody || !window.player.getListeningStats) return;
+  const rangeVal = els.insightsRange ? els.insightsRange.value : '';
+  const days = rangeVal ? Number(rangeVal) : null;
+  let stats = null;
+  try {
+    stats = await window.player.getListeningStats(days);
+  } catch { /* show whatever defaults render below */ }
+
+  const totalPlays = stats && stats.totalPlays || 0;
+  const empty = totalPlays === 0;
+  if (els.insightsEmpty) els.insightsEmpty.hidden = !empty;
+  els.insightsBody.hidden = empty;
+  if (empty) return;
+
+  if (els.insightsPlays) els.insightsPlays.textContent = String(totalPlays);
+  if (els.insightsTime) {
+    const hours = (stats.totalListeningMs || 0) / MS_PER_HOUR;
+    els.insightsTime.textContent = hours >= 10 ? `${Math.round(hours)}h` : `${hours.toFixed(1)}h`;
+  }
+  if (els.insightsStreak) els.insightsStreak.textContent = String(stats.streakDays || 0);
+
+  if (els.insightsArtists) {
+    els.insightsArtists.textContent = '';
+    for (const a of stats.topArtists || []) els.insightsArtists.appendChild(insightRow(a.artist, a.plays));
+  }
+  if (els.insightsGenres) {
+    els.insightsGenres.textContent = '';
+    const genres = stats.topGenres || [];
+    if (genres.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'insights__row insights__row--muted';
+      li.textContent = 'Not enough songs identified yet';
+      els.insightsGenres.appendChild(li);
+    } else {
+      for (const g of genres) els.insightsGenres.appendChild(insightRow(g.genre, g.plays));
+    }
+  }
+  if (els.insightsSongs) {
+    els.insightsSongs.textContent = '';
+    for (const s of stats.topSongs || []) els.insightsSongs.appendChild(insightRow(`${s.title} — ${s.artist || 'Unknown'}`, s.plays));
+  }
+
+  if (els.insightsWeekday) {
+    els.insightsWeekday.textContent = '';
+    const byWeekday = stats.playsByWeekday || [0, 0, 0, 0, 0, 0, 0];
+    const max = Math.max(1, ...byWeekday);
+    for (let i = 0; i < 7; i += 1) {
+      const col = document.createElement('div');
+      col.className = 'insights__weekday-col';
+      const bar = document.createElement('div');
+      bar.className = 'insights__weekday-bar';
+      bar.style.height = `${Math.round((byWeekday[i] / max) * 100)}%`;
+      bar.title = `${byWeekday[i]} play${byWeekday[i] === 1 ? '' : 's'}`;
+      const label = document.createElement('span');
+      label.className = 'insights__weekday-label';
+      label.textContent = WEEKDAY_LABELS[i];
+      col.append(bar, label);
+      els.insightsWeekday.appendChild(col);
+    }
+  }
+}
+
+if (els.insightsBtn) els.insightsBtn.addEventListener('click', openInsights);
+if (els.insightsClose) els.insightsClose.addEventListener('click', closeInsights);
+if (els.insightsRange) els.insightsRange.addEventListener('change', refreshInsights);
 
 /** Add files from disk to the library, and start playing them. */
 async function addLocalFiles(fromFolder) {

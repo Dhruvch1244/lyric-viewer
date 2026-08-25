@@ -67,6 +67,7 @@
     onTranslation: (cb) => on('translation', cb),
     onMood: (cb) => on('mood', cb),
     onAttribution: (cb) => on('attribution', cb),
+    onGenre: (cb) => on('genre', cb),
     onWallpaperPointer: (cb) => on('wallpaper-pointer', cb),
     onWallpaperPower: (cb) => on('wallpaper-power', cb),
     onOverlayPower: (cb) => on('overlay-power', cb),
@@ -168,6 +169,11 @@
     presyncList: (text) => call('presync_list', { text }),
     precomputeTracks: (tracks) => call('precompute_tracks', { tracks }, { status: 'error' }),
     listSynced: () => call('list_synced', {}, []),
+
+    // Listening stats (stats.rs) — unlimited local play log behind the
+    // Insights panel. `days` omitted covers the whole history.
+    getListeningStats: (days) => call('get_listening_stats', { days: days ?? null }, null),
+    clearListeningHistory: () => call('clear_listening_history', {}),
 
     /*
       Native song recording (audio.rs + the inference sidecar). The backend
