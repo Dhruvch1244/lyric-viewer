@@ -227,3 +227,38 @@ pub(crate) fn get_listening_stats(app: AppHandle, days: Option<i64>) -> Value {
 pub(crate) fn clear_listening_history(app: AppHandle) {
     crate::stats::clear(&app);
 }
+
+/// "About this song" — wiki.rs's Wikipedia lookup, on demand (unlike
+/// genre/mood/attribution, nobody wants this fetched for every song in the
+/// background). Cached into the same per-track lyrics-cache file those use,
+/// including a cached miss (`Value::Null`), so a song wiki genuinely has
+/// nothing on is not re-searched every time the panel opens.
+#[tauri::command]
+pub(crate) fn get_song_info(app: AppHandle, title: String, artist: String) -> Value {
+    use crate::commands::lyrics_cmds::{lyrics_cache_path, track_key};
+
+    let key = track_key(&artist, &title);
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(cached) = serde_json::from_str::<Value>(&text) {
+                if let Some(info) = cached.get("songInfo") {
+                    return info.clone();
+                }
+            }
+        }
+    }
+
+    let result = crate::wiki::song_info(&title, &artist)
+        .map(|s| json!({ "title": s.title, "extract": s.extract, "thumbnail": s.thumbnail }))
+        .unwrap_or(Value::Null);
+
+    if let Some(path) = lyrics_cache_path(&app, &key) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(mut cached) = serde_json::from_str::<Value>(&text) {
+                cached["songInfo"] = result.clone();
+                let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+            }
+        }
+    }
+    result
+}

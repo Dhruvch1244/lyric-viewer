@@ -175,6 +175,10 @@
     getListeningStats: (days) => call('get_listening_stats', { days: days ?? null }, null),
     clearListeningHistory: () => call('clear_listening_history', {}),
 
+    // "About this song" (wiki.rs) — on-demand Wikipedia lookup, cached
+    // per-song on the backend so reopening the panel costs nothing.
+    getSongInfo: (title, artist) => call('get_song_info', { title, artist }, null),
+
     /*
       Native song recording (audio.rs + the inference sidecar). The backend
       already runs the WASAPI loopback thread that feeds `native-audio`, so it

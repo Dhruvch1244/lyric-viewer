@@ -1600,6 +1600,55 @@ body.keybox-open .hud {
   color: var(--chrome-ink-faint);
 }
 
+.songinfo {
+  width: 22rem;
+  max-width: 70vw;
+}
+
+.songinfo__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.songinfo__title {
+  font-family: var(--chrome-serif);
+  font-size: 1.05rem;
+  color: var(--chrome-ink);
+}
+
+.songinfo__thumb {
+  width: 100%;
+  max-height: 10rem;
+  object-fit: cover;
+  border-radius: var(--chrome-radius-sm);
+  border: 1px solid var(--chrome-border);
+}
+
+.songinfo__thumb[hidden] {
+  display: none;
+}
+
+.songinfo__extract {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--chrome-ink);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.songinfo__attribution {
+  align-self: flex-end;
+  font-size: 0.66rem;
+  color: var(--chrome-ink-faint);
+}
+
+.songinfo__attribution[hidden] {
+  display: none;
+}
+
 .listbox__synced {
   display: flex;
   flex-direction: column;

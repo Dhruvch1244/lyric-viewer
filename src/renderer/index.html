@@ -18,7 +18,7 @@
          This is HuggingFace's own infrastructure changing under an
          allowlist written before Xet existed, not a bug here. -->
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-TzmFh45c44H05Ni+whdF2YUd4jerVgJw8OS7kYJQECU='; img-src 'self' data: blob:; font-src 'self'; media-src blob:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://hf.co https://*.hf.co;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-TzmFh45c44H05Ni+whdF2YUd4jerVgJw8OS7kYJQECU='; img-src 'self' data: blob: https://upload.wikimedia.org; font-src 'self'; media-src blob:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://hf.co https://*.hf.co;" />
     <!-- transformers.web.min.js has two static (unconditional) top-level
          bare-specifier imports buried in its chunks — `onnxruntime-web/webgpu`
          and `onnxruntime-common` — present regardless of whisper.js always
@@ -201,6 +201,7 @@
             <div class="more-menu__row">
             <button id="btn-presync" class="chip" type="button" title="Pre-sync a pasted track list" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="3" width="9.2" height="11.2" rx="1.3"/><rect x="6" y="1.4" width="4" height="2.4" rx="0.6"/></svg>Pre-sync</button>
             <button id="btn-insights" class="chip" type="button" title="Listening stats — top artists, genres and a daily streak" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 13.4V8.2M7 13.4V3M11.4 13.4V6.4"/></svg>Insights</button>
+            <button id="btn-song-info" class="chip" type="button" title="About this song and artist — from Wikipedia" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 5.1v.1"/></svg>About</button>
             <button id="btn-poster" class="chip" type="button" title="Cover art — pick a different one" aria-pressed="false">▣ Cover</button>
             <button id="btn-key" class="chip" type="button" title="Settings — keys, transcription, startup, diagnostics (K)" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg>Settings</button>
             <button id="btn-shortcuts" class="chip" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">? Shortcuts</button>
@@ -427,6 +428,21 @@
           <span id="presync-status" class="listbox__status" role="status"></span>
         </div>
       </div>
+
+      <!-- About this song/artist — wiki.rs's on-demand Wikipedia lookup.
+           Compact, not a full-screen panel: this is a paragraph of prose,
+           not a grid or a form. -->
+      <div id="song-info" class="listbox songinfo" hidden role="dialog" aria-modal="false" aria-label="About this song">
+        <div class="songinfo__head">
+          <span id="songinfo-title" class="songinfo__title">About</span>
+          <button id="songinfo-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+        </div>
+        <img id="songinfo-thumb" class="songinfo__thumb" alt="" hidden />
+        <p id="songinfo-extract" class="songinfo__extract"></p>
+        <p id="songinfo-status" class="listbox__status" role="status"></p>
+        <span id="songinfo-attribution" class="songinfo__attribution" hidden>via Wikipedia</span>
+      </div>
+
       <div id="hud-progress" class="progress">
         <div id="hud-progress-fill" class="progress__fill"></div>
       </div>

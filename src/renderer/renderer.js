@@ -65,6 +65,14 @@ const els = {
   insightsGenres: document.getElementById('insights-genres'),
   insightsSongs: document.getElementById('insights-songs'),
   insightsWeekday: document.getElementById('insights-weekday'),
+  songInfoBtn: document.getElementById('btn-song-info'),
+  songInfo: document.getElementById('song-info'),
+  songInfoClose: document.getElementById('songinfo-close'),
+  songInfoTitle: document.getElementById('songinfo-title'),
+  songInfoThumb: document.getElementById('songinfo-thumb'),
+  songInfoExtract: document.getElementById('songinfo-extract'),
+  songInfoStatus: document.getElementById('songinfo-status'),
+  songInfoAttribution: document.getElementById('songinfo-attribution'),
   transport: document.getElementById('transport'),
   trPrev: document.getElementById('tr-prev'),
   trPlay: document.getElementById('tr-play'),
@@ -6090,7 +6098,7 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, els.songInfo, moreMenu,
 ].filter(Boolean);
 
 function anyPanelOpen() {
@@ -7342,6 +7350,71 @@ async function refreshInsights() {
 if (els.insightsBtn) els.insightsBtn.addEventListener('click', openInsights);
 if (els.insightsClose) els.insightsClose.addEventListener('click', closeInsights);
 if (els.insightsRange) els.insightsRange.addEventListener('change', refreshInsights);
+
+/* ------------------------------------------------------------ song info */
+/* "About this song" — wiki.rs's on-demand Wikipedia lookup for the CURRENT
+   track. Fetched fresh each time the panel opens for a track (cached on the
+   backend, so a repeat open of the same song is instant). */
+
+let songInfoForKey = null; // trackLookKey the panel's content currently belongs to
+
+function closeSongInfo() {
+  if (els.songInfo) els.songInfo.hidden = true;
+  document.body.classList.remove('keybox-open');
+}
+
+async function openSongInfo() {
+  if (!els.songInfo || !window.player.getSongInfo) return;
+  // #song-info lives inside the HUD footer (same as #presync), which fades
+  // to opacity:0 on cursor idle unless this class is set — without it the
+  // panel's own `hidden` attribute is correctly cleared but it renders
+  // invisible the moment the mouse stops moving. Same fix presync already has.
+  document.body.classList.add('keybox-open');
+  if (!currentTrack || !currentTrack.title) {
+    if (els.songInfoStatus) els.songInfoStatus.textContent = 'nothing playing yet';
+    els.songInfo.hidden = false;
+    return;
+  }
+
+  els.songInfo.hidden = false;
+  const key = trackLookKey(currentTrack);
+  if (key === songInfoForKey) return; // already showing this song's info
+
+  if (els.songInfoTitle) els.songInfoTitle.textContent = currentTrack.title || 'About';
+  if (els.songInfoExtract) els.songInfoExtract.textContent = '';
+  if (els.songInfoThumb) els.songInfoThumb.hidden = true;
+  if (els.songInfoAttribution) els.songInfoAttribution.hidden = true;
+  if (els.songInfoStatus) els.songInfoStatus.textContent = 'looking it up…';
+
+  let info = null;
+  try {
+    info = await window.player.getSongInfo(currentTrack.title, currentTrack.artist || '');
+  } catch { /* status below covers it */ }
+
+  // The track may have changed while the request was in flight.
+  if (!currentTrack || trackLookKey(currentTrack) !== key) return;
+
+  if (info && info.extract) {
+    songInfoForKey = key;
+    if (els.songInfoTitle) els.songInfoTitle.textContent = info.title || currentTrack.title;
+    if (els.songInfoExtract) els.songInfoExtract.textContent = info.extract;
+    if (els.songInfoStatus) els.songInfoStatus.textContent = '';
+    if (els.songInfoAttribution) els.songInfoAttribution.hidden = false;
+    if (els.songInfoThumb) {
+      if (info.thumbnail) {
+        els.songInfoThumb.src = info.thumbnail;
+        els.songInfoThumb.hidden = false;
+      } else {
+        els.songInfoThumb.hidden = true;
+      }
+    }
+  } else if (els.songInfoStatus) {
+    els.songInfoStatus.textContent = 'nothing found on Wikipedia for this one';
+  }
+}
+
+if (els.songInfoBtn) els.songInfoBtn.addEventListener('click', openSongInfo);
+if (els.songInfoClose) els.songInfoClose.addEventListener('click', closeSongInfo);
 
 /** Add files from disk to the library, and start playing them. */
 async function addLocalFiles(fromFolder) {
