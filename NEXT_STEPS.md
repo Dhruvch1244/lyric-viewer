@@ -9,7 +9,7 @@ happened, profile before optimising) are still exactly right, even where the
 specific bug they came from is gone. Treat file-and-line references below as
 Electron-era unless a section explicitly says otherwise.
 
-## Current as of v0.48.0 — 2026-08-24
+## Current as of v0.49.0 — 2026-08-25
 
 The Tauri rewrite, the job engine (0.37.0) and library indexing (0.38.0)
 landed long after the v0.22.0 section below was written. `docs/JOB-ENGINE.md`
@@ -142,6 +142,22 @@ genuinely unresolved right now.
   reacting live to whether transcription is running), plus an explicit FPS
   cap (60/30/auto), both in Settings → Visuals. Verified through the actual
   postMessage boundary into MilkDrop's iframe, not just the JS logic.
+- **Genre, listening stats, genre-biased visuals, and an "About this song"
+  Wikipedia panel — all shipped (0.49.0).** `genre.rs` (MusicBrainz tags,
+  LLM fallback), `stats.rs` (a second, unlimited local play log behind a new
+  Insights panel — plays, listening time, streak, top artists/genres/songs),
+  `presets.js`'s mood-bias system extended to also bias by genre
+  (intersecting when both are known), and `wiki.rs` (keyless MediaWiki
+  search + REST summary, on-demand, for a compact "About" panel). Three real
+  bugs found only by running the new UI live, not by review: a
+  `[hidden]`-vs-`display:flex` CSS specificity trap (author CSS always beats
+  the UA default regardless of specificity — this codebase already has the
+  fix pattern on every other panel, just missed on the two new ones at
+  first), the About panel needing the same HUD-footer cursor-idle fix
+  `#presync` already has, and a CSP gap silently blocking the About panel's
+  thumbnail (no console error — CSP violations don't fire `window.onerror`).
+  All fixed and re-verified live via the perf harness's CDP tooling.
+  Deferred on purpose: nothing — this was the full scoped phase.
 
 ### Actually open
 

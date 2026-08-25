@@ -2,6 +2,46 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.49.0 — 2026-08-25
+
+- **Genre detection.** MusicBrainz recording-tag lookup first (keyless, same
+  request shape as the existing MusicBrainz artwork/credit search), an LLM
+  classification as a fallback for whatever MusicBrainz has never heard of.
+  Cached per song, the same way mood and per-line attribution already are.
+- **Listening stats — a new Insights panel.** A second, unlimited local play
+  log (separate from the existing 500-play predictor log, which is
+  untouched) records every play with a timestamp. The Insights panel (More
+  menu) shows total plays, hours listened, a daily streak, top
+  artists/genres/songs, and a day-of-week pattern. Settings gained a "Clear
+  my history" control — local-only, unlimited retention, so it stays
+  reversible on demand. Library cards now show a genre tag when known.
+- **Genre-biased visuals.** The preset picker's existing mood-bias system
+  (each song's look leans toward a curated subset for its mood, deterministic
+  per track) now also biases by genre, with mood and genre intersecting when
+  both are known. Free-form genre text is classified into a small set of
+  visual character buckets first (urban, electronic, smooth, intense,
+  organic, global, classical, pop).
+- **"About this song" — a Wikipedia panel, keyless.** Searches for a
+  song-specific article first, accepts it only if the artist's name actually
+  appears in the summary (a wrong disambiguation hit is worse than none),
+  otherwise falls back to the artist's own bio. On-demand, not fetched in the
+  background; cached per song once looked up.
+- Three real bugs found only by actually running the new UI, not by review:
+  a `[hidden]`-attribute-vs-`display:flex` CSS specificity trap on the
+  Insights panel (author CSS always beats the browser's default regardless
+  of specificity — the empty-state message and the stats body rendered
+  stacked on top of each other); the About panel's HUD-footer placement
+  needing the same cursor-idle-visibility fix `#presync` already has; and a
+  CSP gap silently blocking the About panel's thumbnail image (no console
+  error either — CSP violations don't fire `window.onerror`). All three
+  fixed and re-verified live via the perf harness's CDP tooling, with
+  screenshots.
+- Test counts: 210 JS (was 203), 429 Rust passing + 23 `#[ignore]`d workspace-
+  wide (was 406 + 21) — 2 of the new `#[ignore]`d Rust tests are live network
+  checks against the real Wikipedia API, run and passing this session, not
+  just unit-tested in isolation (artist bio + song article, both correct).
+  `cargo clippy --workspace --all-targets --no-deps -- -D warnings` clean.
+
 ## 0.48.0 — 2026-08-24
 
 - **A live bug, found from a screenshot and fixed the same session.** A
