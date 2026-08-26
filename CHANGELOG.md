@@ -2,6 +2,41 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.50.0 — 2026-08-26
+
+- **A real main-thread stall, root-caused and fixed.** Playing a local file
+  could freeze the entire app — every command, all rendering — for 40 to 85
+  seconds. Cause: `analyze_local_file`/`read_local_file` (a full symphonia
+  decode plus four DSP passes over the whole song) were plain
+  `#[tauri::command]`s, and a Tauri command without the `async` keyword runs
+  on the main thread. Fixed with `#[tauri::command(async)]`, matching the
+  pattern already used elsewhere in this codebase. The same audit caught the
+  same bug class in `search_lyrics`/`choose_lyrics_candidate` (blocking
+  LRCLIB requests, up to a 15s timeout) and `localcli_detect` (spawns a
+  `where` process per adapter) — all fixed the same way. Verified against
+  both a dev and a release build: round trips during local playback now stay
+  in single-digit milliseconds through the whole decode+analysis window,
+  instead of hanging.
+- **"Similar songs" — a new panel next to About.** On demand, lists
+  past-played songs from your local listening history whose mood and/or
+  genre match what's currently playing, most-recent first. Reuses the
+  existing unlimited listening log and per-track mood/genre cache — no new
+  storage. Matching mirrors the preset picker's own mood/genre
+  intersect-then-fallback order exactly, so "similar" means the same thing
+  here as it already does for a song's own visuals.
+- **"About this song" now shows itself.** The Wikipedia panel used to need a
+  click every time; it now pops open once per song on its own, whenever
+  Wikipedia actually has something — silent on a miss rather than opening to
+  say "nothing found."
+- **The perf harness no longer leaks orphaned app processes.** `stop()` used
+  to fire `taskkill` and hope; a `tauri dev` supervisor exiting before the
+  real app process meant an orphan could survive teardown and hold the next
+  run's DevTools port. `stop()` now resolves the real app PID from spawn
+  time and polls until it's actually confirmed gone.
+- Test counts: 210 JS (unchanged), 441 Rust passing + 23 `#[ignore]`d
+  workspace-wide (was 429 + 23). `cargo clippy --workspace --all-targets
+  --no-deps -- -D warnings` clean.
+
 ## 0.49.0 — 2026-08-25
 
 - **Genre detection.** MusicBrainz recording-tag lookup first (keyless, same
