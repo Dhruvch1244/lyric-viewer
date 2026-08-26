@@ -24,7 +24,13 @@ pub(crate) fn get_provider_status() -> Value {
 
 /// Which local developer CLIs (Claude/Gemini/Ollama/`gh models`/Antigravity)
 /// are installed right now, for the local-AI picker under the 🔑 panel.
-#[tauri::command]
+///
+/// `(async)` IS LOAD-BEARING, NOT DECORATION — same reasoning as
+/// `import_lyrics` in lyrics_cmds.rs. `localcli::detect` spawns a `where`
+/// process per adapter (each with its own multi-second timeout); without
+/// `(async)` a slow or hung `where` call freezes the whole app, not just the
+/// 🔑 panel that asked for it.
+#[tauri::command(async)]
 pub(crate) fn localcli_detect() -> Value {
     crate::localcli::detect()
 }

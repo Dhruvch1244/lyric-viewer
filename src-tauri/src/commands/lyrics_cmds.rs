@@ -1336,7 +1336,11 @@ pub(crate) fn clear_manual_lyrics(track: Value, app: AppHandle) {
 /// automatic scorer does. `hasSynced`/`hasPlain` let the panel show which
 /// results actually have timing before anything is picked, without shipping
 /// every candidate's full lyric text just to answer that.
-#[tauri::command]
+/// `(async)` IS LOAD-BEARING, NOT DECORATION — same reasoning as
+/// `import_lyrics` above. `lyrics::search` is a blocking `ureq` request with
+/// up to a 15s timeout; without `(async)` a slow LRCLIB response or a dead
+/// connection freezes the whole app for the duration, not just this panel.
+#[tauri::command(async)]
 pub(crate) fn search_lyrics(query: String) -> Value {
     let Some(results) = crate::lyrics::search(&query) else {
         return json!({ "status": "error", "message": "search failed — check your connection" });
@@ -1370,7 +1374,9 @@ pub(crate) fn search_lyrics(query: String) -> Value {
 /// against the running clock. The panel still shows plain-only results (see
 /// `search_lyrics`'s `hasPlain`) so a person can at least confirm LRCLIB has
 /// the song, even though picking one here does nothing yet.
-#[tauri::command]
+/// `(async)` for the same reason as `search_lyrics` — `lyrics::get_by_id` is
+/// another blocking `ureq` call to LRCLIB.
+#[tauri::command(async)]
 pub(crate) fn choose_lyrics_candidate(track: Value, id: i64, app: AppHandle) -> Value {
     let t = track_from_value(&track);
     if t.title.is_empty() {
