@@ -262,3 +262,16 @@ pub(crate) fn get_song_info(app: AppHandle, title: String, artist: String) -> Va
     }
     result
 }
+
+/// "Similar songs" — stats.rs's on-demand match against the local listening
+/// history, for the CURRENT track. Not cached (unlike genre/song-info):
+/// unlike a Wikipedia extract, the right answer can change on every call as
+/// more plays land in the log, and the scan itself is cheap (one JSONL read,
+/// no network).
+#[tauri::command]
+pub(crate) fn get_similar_songs(app: AppHandle, title: String, artist: String) -> Value {
+    use crate::commands::lyrics_cmds::track_key;
+
+    let key = track_key(&artist, &title);
+    crate::stats::similar_songs(&app, &key, 20)
+}

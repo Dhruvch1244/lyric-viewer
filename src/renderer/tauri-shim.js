@@ -179,6 +179,10 @@
     // per-song on the backend so reopening the panel costs nothing.
     getSongInfo: (title, artist) => call('get_song_info', { title, artist }, null),
 
+    // "Similar songs" (stats.rs::similar_songs) — past plays whose mood
+    // and/or genre match the current track, on demand like getSongInfo.
+    getSimilarSongs: (title, artist) => call('get_similar_songs', { title, artist }, []),
+
     /*
       Native song recording (audio.rs + the inference sidecar). The backend
       already runs the WASAPI loopback thread that feeds `native-audio`, so it

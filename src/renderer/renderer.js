@@ -73,6 +73,11 @@ const els = {
   songInfoExtract: document.getElementById('songinfo-extract'),
   songInfoStatus: document.getElementById('songinfo-status'),
   songInfoAttribution: document.getElementById('songinfo-attribution'),
+  similarBtn: document.getElementById('btn-similar'),
+  similar: document.getElementById('similar'),
+  similarClose: document.getElementById('similar-close'),
+  similarStatus: document.getElementById('similar-status'),
+  similarList: document.getElementById('similar-list'),
   transport: document.getElementById('transport'),
   trPrev: document.getElementById('tr-prev'),
   trPlay: document.getElementById('tr-play'),
@@ -6099,7 +6104,7 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, els.songInfo, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, els.songInfo, els.similar, moreMenu,
 ].filter(Boolean);
 
 function anyPanelOpen() {
@@ -7454,6 +7459,78 @@ async function maybeAutoShowSongInfo(track) {
   els.songInfo.hidden = false;
   renderSongInfo(info, key, track.title);
 }
+
+/* "Similar songs" — stats.rs's on-demand listening-history match for the
+   CURRENT track (same mood/genre intersect-then-fallback presets.js already
+   uses for visuals). Manual open only, unlike the Wikipedia panel above:
+   nobody asked for this one to interrupt playback on its own. */
+
+function closeSimilar() {
+  if (els.similar) els.similar.hidden = true;
+}
+
+/** One `<li>` for the similar-songs list — title/artist, and how long ago it
+ *  was last played (relative, since an absolute timestamp means nothing at a
+ *  glance for "you listened to this before"). */
+function similarRow(song) {
+  const li = document.createElement('li');
+  li.className = 'insights__row';
+  const name = document.createElement('span');
+  name.className = 'insights__row-label';
+  name.textContent = song.artist ? `${song.title} — ${song.artist}` : song.title;
+  const when = document.createElement('span');
+  when.className = 'insights__row-count';
+  when.textContent = relativeTime(song.lastPlayedMs);
+  li.append(name, when);
+  return li;
+}
+
+/** @param {number} ms epoch ms @returns {string} e.g. "3d ago", "just now" */
+function relativeTime(ms) {
+  const diff = Date.now() - ms;
+  if (!Number.isFinite(diff) || diff < 60_000) return 'just now';
+  const mins = Math.round(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+async function openSimilar() {
+  if (!els.similar || !window.player.getSimilarSongs) return;
+  els.similar.hidden = false;
+  if (!currentTrack || !currentTrack.title) {
+    if (els.similarStatus) els.similarStatus.textContent = 'nothing playing yet';
+    if (els.similarList) els.similarList.textContent = '';
+    return;
+  }
+
+  const key = trackLookKey(currentTrack);
+  if (els.similarStatus) els.similarStatus.textContent = 'looking through your history…';
+  if (els.similarList) els.similarList.textContent = '';
+
+  let songs = [];
+  try {
+    songs = await window.player.getSimilarSongs(currentTrack.title, currentTrack.artist || '');
+  } catch { /* status below covers it */ }
+
+  // The track may have changed while the request was in flight.
+  if (!currentTrack || trackLookKey(currentTrack) !== key) return;
+
+  if (!Array.isArray(songs) || songs.length === 0) {
+    if (els.similarStatus) {
+      els.similarStatus.textContent = 'nothing similar found yet — this needs the song\'s mood or genre to be known, and a few other songs in your history to compare against';
+    }
+    return;
+  }
+
+  if (els.similarStatus) els.similarStatus.textContent = '';
+  if (els.similarList) for (const song of songs) els.similarList.appendChild(similarRow(song));
+}
+
+if (els.similarBtn) els.similarBtn.addEventListener('click', openSimilar);
+if (els.similarClose) els.similarClose.addEventListener('click', closeSimilar);
 
 /** Add files from disk to the library, and start playing them. */
 async function addLocalFiles(fromFolder) {

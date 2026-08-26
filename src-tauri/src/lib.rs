@@ -207,6 +207,7 @@ pub fn run() {
             commands::misc::get_listening_stats,
             commands::misc::clear_listening_history,
             commands::misc::get_song_info,
+            commands::misc::get_similar_songs,
             commands::prefs::set_api_key,
             commands::lyrics_cmds::save_beatmap,
             commands::lyrics_cmds::save_heatmap,

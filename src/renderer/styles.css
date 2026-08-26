@@ -2884,6 +2884,55 @@ body.engine-milkdrop .stage::before {
   color: var(--chrome-ink-faint);
 }
 
+/* ---- Similar songs ---- */
+/* Same chrome as .insights (position/backdrop/blur); a smaller inset since
+   this is one list, not a multi-column dashboard. Rows reuse .insights__list/
+   .insights__row directly — that markup is already generic (label + a
+   right-aligned secondary value), not insights-specific. */
+
+.similar {
+  position: fixed;
+  inset: 12vh 20vw;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.4rem 1.6rem;
+  background: var(--chrome-surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: 14px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px -12px rgba(17, 17, 17, 0.18);
+  overflow-y: auto;
+}
+
+/* Same author-vs-UA-origin trap as .insights[hidden] — see that rule's
+   comment. Every `display:flex`-toggled panel in this file needs its own. */
+.similar[hidden] {
+  display: none;
+}
+
+.similar__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.similar__title {
+  font-family: var(--chrome-serif);
+  font-weight: 400;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  margin: 0 auto 0 0;
+  color: var(--chrome-ink);
+}
+
+.similar__empty {
+  margin: 0;
+  color: var(--chrome-ink-dim);
+  font-size: 0.85rem;
+}
+
 /* ---- Transport ---- */
 
 .transport {
