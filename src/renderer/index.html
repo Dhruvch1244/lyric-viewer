@@ -65,6 +65,15 @@
            side on the same baseline. The bars animate only while the track is
            actually playing, so the corner says "playing" without a word of text. -->
       <div class="now-playing">
+        <!-- Always-visible, top-left — the panel-chrome audit (2026-08-26)
+             found Settings was two clicks deep in the More menu and never
+             mentioned in the first-run welcome card, with no on-screen hint
+             it existed. Reuses btn-key's own open/close/aria-pressed logic
+             via a synthetic click rather than duplicating it. -->
+        <button id="btn-settings-corner" class="settings-corner" type="button"
+                title="Settings (K)" aria-label="Settings">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67L11.4 11.4M4.6 4.6L3.33 3.33"/></svg>
+        </button>
         <span id="np-icon" class="np-icon" aria-hidden="true"><i></i><i></i><i></i></span>
         <span id="np-title" class="np-title"></span>
         <span id="np-artist" class="np-artist"></span>
@@ -597,6 +606,7 @@
         <button id="poster-auto" class="chip chip--muted" type="button"
                 title="Forget the chosen cover and search again">Auto</button>
         <button id="poster-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+        <div id="poster-busy" class="busy-bar" hidden></div>
       </header>
       <div id="poster-grid" class="poster__grid"></div>
     </section>
@@ -618,6 +628,7 @@
         <button id="lyricsearch-run" class="chip" type="button">Search</button>
         <span id="lyricsearch-status" class="lyricsearch__status" role="status"></span>
         <button id="lyricsearch-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+        <div id="lyricsearch-busy" class="busy-bar" hidden></div>
       </header>
       <div id="lyricsearch-list" class="lyricsearch__list"></div>
     </section>
@@ -700,6 +711,7 @@
         <li><b>◈</b> changes the scene · <b>✳</b> swaps in a MilkDrop preset · <b>◐</b> how much of your desktop shows through</li>
         <li><b>अ</b> script · <b>EN</b> translation · <b><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg></b> lite mode for a steadier frame rate</li>
         <li><b><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="12" r="2"/><path d="M6.6 12V2.6L12.4 1.4V9"/></svg> Library</b> your songs — add files or a folder and play them here</li>
+        <li><b>⚙ Settings</b> top-left corner — AI provider keys, transcription, startup</li>
       </ul>
       <ul class="welcome__keys welcome__keys--hotkeys">
         <li><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>H</kbd> hide or show the overlay</li>

@@ -36,6 +36,7 @@ const els = {
   audioBtn: document.getElementById('btn-audio'),
   perfBtn: document.getElementById('btn-perf'),
   keyBtn: document.getElementById('btn-key'),
+  settingsCorner: document.getElementById('btn-settings-corner'),
   presyncBtn: document.getElementById('btn-presync'),
   presync: document.getElementById('presync'),
   presyncInput: document.getElementById('presync-input'),
@@ -106,6 +107,7 @@ const els = {
   poster: document.getElementById('poster'),
   posterGrid: document.getElementById('poster-grid'),
   posterStatus: document.getElementById('poster-status'),
+  posterBusy: document.getElementById('poster-busy'),
   posterAuto: document.getElementById('poster-auto'),
   posterClose: document.getElementById('poster-close'),
   lyricSearchBtn: document.getElementById('btn-lyrics-search'),
@@ -113,6 +115,7 @@ const els = {
   lyricSearchInput: document.getElementById('lyricsearch-input'),
   lyricSearchRun: document.getElementById('lyricsearch-run'),
   lyricSearchStatus: document.getElementById('lyricsearch-status'),
+  lyricSearchBusy: document.getElementById('lyricsearch-busy'),
   lyricSearchList: document.getElementById('lyricsearch-list'),
   lyricSearchClose: document.getElementById('lyricsearch-close'),
   welcome: document.getElementById('welcome'),
@@ -6705,6 +6708,13 @@ els.keyBtn.addEventListener('click', async () => {
 
 if (els.keyClose) els.keyClose.addEventListener('click', closeKeybox);
 
+/* Top-left, always-visible entry point (see .settings-corner in styles.css) —
+   just forwards to the real chip so it shares its open/close/mutual-exclusion
+   logic instead of duplicating it. */
+if (els.settingsCorner) {
+  els.settingsCorner.addEventListener('click', () => els.keyBtn.click());
+}
+
 /**
  * Fill the key panel's "Local AI" picker with the installed CLIs, on demand —
  * so a CLI can be chosen any time, not only after a cloud request has failed.
@@ -7014,31 +7024,36 @@ async function openPoster() {
 
   els.posterGrid.replaceChildren();
   els.posterStatus.textContent = 'searching…';
+  if (els.posterBusy) els.posterBusy.hidden = false;
 
   // Captured so a track change while the search is in flight cannot paint one
   // song's covers over another's.
   const asked = currentTrack;
-  let res;
   try {
-    res = await window.player.artworkCandidates(asked);
-  } catch (err) {
-    els.posterStatus.textContent = err.message || 'search failed';
-    return;
-  }
-  if (currentTrack !== asked || els.poster.hidden) return;
+    let res;
+    try {
+      res = await window.player.artworkCandidates(asked);
+    } catch (err) {
+      els.posterStatus.textContent = err.message || 'search failed';
+      return;
+    }
+    if (currentTrack !== asked || els.poster.hidden) return;
 
-  const list = (res && res.candidates) || [];
-  if (list.length === 0) {
-    els.posterStatus.textContent = res && res.message
-      ? res.message
-      : 'no covers found for this track';
-    return;
-  }
+    const list = (res && res.candidates) || [];
+    if (list.length === 0) {
+      els.posterStatus.textContent = res && res.message
+        ? res.message
+        : 'no covers found for this track';
+      return;
+    }
 
-  els.posterStatus.textContent = artworkChosen
-    ? `${list.length} found · using your pick`
-    : `${list.length} found · click one to use it`;
-  els.posterGrid.replaceChildren(...list.map((c) => posterCard(c, asked)));
+    els.posterStatus.textContent = artworkChosen
+      ? `${list.length} found · using your pick`
+      : `${list.length} found · click one to use it`;
+    els.posterGrid.replaceChildren(...list.map((c) => posterCard(c, asked)));
+  } finally {
+    if (els.posterBusy) els.posterBusy.hidden = true;
+  }
 }
 
 /**
@@ -7172,33 +7187,38 @@ async function runLyricSearch() {
   }
   els.lyricSearchList.replaceChildren();
   els.lyricSearchStatus.textContent = 'searching…';
+  if (els.lyricSearchBusy) els.lyricSearchBusy.hidden = false;
 
   // Captured so a query typed while an older search is still in flight can't
   // paint its results in after a newer one already replaced them.
   const asked = query;
-  let res;
   try {
-    res = await window.player.searchLyrics(asked);
-  } catch (err) {
-    els.lyricSearchStatus.textContent = (err && err.message) || 'search failed';
-    return;
-  }
-  if (els.lyricSearchInput.value.trim() !== asked || els.lyricSearch.hidden) return;
+    let res;
+    try {
+      res = await window.player.searchLyrics(asked);
+    } catch (err) {
+      els.lyricSearchStatus.textContent = (err && err.message) || 'search failed';
+      return;
+    }
+    if (els.lyricSearchInput.value.trim() !== asked || els.lyricSearch.hidden) return;
 
-  if (!res || res.status !== 'ok') {
-    els.lyricSearchStatus.textContent = (res && res.message) || 'search failed';
-    return;
+    if (!res || res.status !== 'ok') {
+      els.lyricSearchStatus.textContent = (res && res.message) || 'search failed';
+      return;
+    }
+    const list = res.candidates || [];
+    if (list.length === 0) {
+      els.lyricSearchStatus.textContent = 'nothing found for that search';
+      return;
+    }
+    const usable = list.filter((c) => c.hasSynced).length;
+    els.lyricSearchStatus.textContent = usable
+      ? `${list.length} found, ${usable} with timing · click one to use it`
+      : `${list.length} found, none with timing`;
+    els.lyricSearchList.replaceChildren(...list.map(lyricSearchRow));
+  } finally {
+    if (els.lyricSearchBusy) els.lyricSearchBusy.hidden = true;
   }
-  const list = res.candidates || [];
-  if (list.length === 0) {
-    els.lyricSearchStatus.textContent = 'nothing found for that search';
-    return;
-  }
-  const usable = list.filter((c) => c.hasSynced).length;
-  els.lyricSearchStatus.textContent = usable
-    ? `${list.length} found, ${usable} with timing · click one to use it`
-    : `${list.length} found, none with timing`;
-  els.lyricSearchList.replaceChildren(...list.map(lyricSearchRow));
 }
 
 /**
