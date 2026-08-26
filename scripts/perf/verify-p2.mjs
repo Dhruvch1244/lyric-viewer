@@ -193,8 +193,7 @@ async function main() {
   console.log(`Launching dev build with DevTools on :${PORT} (isolated perf identifier, not your real install)…`);
   const { child, stop } = launchApp({ port: PORT, build: 'dev', profileDir, verbose: false });
 
-  const teardown = () => stop();
-  process.on('SIGINT', () => { teardown(); process.exit(130); });
+  process.on('SIGINT', async () => { await stop(); process.exit(130); });
 
   const results = [];
   try {
@@ -231,10 +230,8 @@ async function main() {
     console.error(`\nHarness error: ${err.message}`);
     results.push({ label: 'harness', pass: false, detail: err.message });
   } finally {
-    teardown();
+    await stop();
   }
-
-  await sleep(1500);
 
   console.log('\n=== Summary ===');
   for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.label}`);

@@ -39,14 +39,11 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, basename, extname, resolve as resolvePath } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
 import { cpus, platform, release } from 'node:os';
 
 import { launchApp, REPO_ROOT } from './launch.mjs';
 import { attachToApp } from './cdp.mjs';
 
-const execFileAsync = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const DEFAULTS = { port: 9222, build: 'dev', durationMs: 120_000, intervalMs: 200, verbose: false };
@@ -99,44 +96,6 @@ async function assertPortFree(port) {
   }
 }
 
-/** Same reasoning as harness.mjs's findAppPid: `tauri dev` is a supervisor
- *  chain, and once cargo exits, `taskkill /T` on the top PID can no longer
- *  see the app as a descendant — resolving the real PID while the chain is
- *  still intact is what makes teardown deterministic. */
-async function findAppPid(rootPid) {
-  if (process.platform !== 'win32') return null;
-  try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-Command',
-        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress',
-      ],
-      { maxBuffer: 64 * 1024 * 1024 }
-    );
-    const all = JSON.parse(stdout);
-    const children = new Map();
-    for (const p of all) {
-      if (!children.has(p.ParentProcessId)) children.set(p.ParentProcessId, []);
-      children.get(p.ParentProcessId).push(p);
-    }
-    const byPid = new Map(all.map((p) => [p.ProcessId, p]));
-    const queue = [rootPid];
-    const seen = new Set();
-    while (queue.length) {
-      const pid = queue.pop();
-      if (seen.has(pid)) continue;
-      seen.add(pid);
-      if (byPid.get(pid)?.Name && /^lyric-overlay\.exe$/i.test(byPid.get(pid).Name)) return pid;
-      for (const child of children.get(pid) || []) queue.push(child.ProcessId);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 function median(values) {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -180,12 +139,7 @@ async function main() {
   console.log(`Launching ${args.build} build with DevTools on :${args.port}…`);
   const { child, stop } = launchApp({ port: args.port, build: args.build, profileDir, verbose: args.verbose });
 
-  let appPid = null;
   let interrupted = false;
-  const teardown = () => {
-    if (appPid) spawn('taskkill', ['/PID', String(appPid), '/T', '/F'], { stdio: 'ignore' });
-    stop();
-  };
   process.on('SIGINT', () => {
     interrupted = true;
   });
@@ -194,7 +148,6 @@ async function main() {
   const samples = [];
   try {
     const { session: cdp } = await attachToApp(args.port, 15 * 60_000);
-    appPid = await findAppPid(child.pid);
 
     let trackMeta = null;
     if (args.track) {
@@ -259,10 +212,9 @@ async function main() {
     console.error(`\nstartup.mjs failed: ${err.message}`);
     exitCode = 1;
   } finally {
-    teardown();
+    await stop();
   }
 
-  await sleep(1500);
   process.exit(exitCode);
 }
 

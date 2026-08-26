@@ -39,24 +39,16 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
 import { launchApp, REPO_ROOT } from './launch.mjs';
 import { attachToApp } from './cdp.mjs';
 
-const execFileAsync = promisify(execFile);
-
 /*
   Rotate the port per batch rather than reusing one. `launch.mjs`'s `stop()`
-  taskkills the `tauri dev` supervisor's PID tree, but `tauri dev` is exactly
-  that — a supervisor — and startup.mjs's own README documents the same trap:
-  once cargo exits, the real `lyric-overlay.exe` it launched is no longer a
-  descendant of the killed PID, so it can survive `stop()` as an orphan still
-  holding its DevTools port. Confirmed live here too (a `.perf`-identifier
-  `lyric-overlay.exe` outlived the first smoke-test's teardown). A new port
-  per batch means the next launch can never silently attach to that orphan
-  instead of its own fresh process; `killOrphan` below is the belt-and-braces
-  cleanup on top.
+  now resolves and kills the real `lyric-overlay.exe` PID directly (not just
+  the `tauri dev` supervisor tree) and verifies it's actually gone before
+  returning, but a fresh port per batch is still cheap insurance: it means
+  the next launch can never silently attach to a leftover instance even if
+  teardown somehow didn't finish in time.
 */
 // 9222/9223/9224/9226 are known to collide with other perf/verification runs
 // on this machine (confirmed live: batch 2 picked 9226 and silently never got
@@ -76,40 +68,6 @@ async function nextPort() {
   throw new Error('could not find a free DevTools port after 20 tries');
 }
 
-/** Walk the process tree from the launcher PID to find the real app exe, the
- *  same way startup.mjs does, and kill it directly — `stop()` alone can miss
- *  it once cargo has exited and the exe is no longer its descendant. */
-async function killOrphan(rootPid) {
-  if (process.platform !== 'win32') return;
-  try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'],
-      { maxBuffer: 64 * 1024 * 1024 }
-    );
-    const all = JSON.parse(stdout);
-    const children = new Map();
-    for (const p of all) {
-      if (!children.has(p.ParentProcessId)) children.set(p.ParentProcessId, []);
-      children.get(p.ParentProcessId).push(p);
-    }
-    const byPid = new Map(all.map((p) => [p.ProcessId, p]));
-    const queue = [rootPid];
-    const seen = new Set();
-    while (queue.length) {
-      const pid = queue.pop();
-      if (seen.has(pid)) continue;
-      seen.add(pid);
-      if (byPid.get(pid)?.Name && /^lyric-overlay\.exe$/i.test(byPid.get(pid).Name)) {
-        spawn('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
-        return;
-      }
-      for (const child of children.get(pid) || []) queue.push(child.ProcessId);
-    }
-  } catch {
-    // Best-effort cleanup; the next batch's fresh port makes this non-fatal either way.
-  }
-}
 const RUN_DIR = join(REPO_ROOT, 'scripts', 'perf', 'runs');
 const SURVEY_PATH = join(RUN_DIR, 'milkdrop-survey.json');
 const INDEX_PATH = join(REPO_ROOT, 'src', 'renderer', 'vendor', 'presets', 'index.json');
@@ -270,7 +228,7 @@ async function scoreOne(session, name) {
 async function runBatch(batchNames, state) {
   const port = await nextPort();
   const profileDir = join(RUN_DIR, 'curate-profile');
-  const { child, stop } = launchApp({ port, build: 'dev', profileDir, verbose: false });
+  const { stop } = launchApp({ port, build: 'dev', profileDir, verbose: false });
   try {
     const { session } = await attachToApp(port, 360_000); // cold cargo compile, possibly behind another build's lock
     const engineUp = await waitForMilkdropEngine(session);
@@ -288,9 +246,7 @@ async function runBatch(batchNames, state) {
     saveSurvey(state);
     return true;
   } finally {
-    stop();
-    await killOrphan(child.pid);
-    await new Promise((r) => setTimeout(r, 1500)); // let the port and any child processes actually release
+    await stop();
   }
 }
 

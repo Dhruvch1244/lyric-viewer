@@ -63,7 +63,6 @@ try {
     console.log(`  ${outPath}`);
   }
 } finally {
-  stop();
+  await stop();
 }
-await new Promise((r) => setTimeout(r, 1000));
 process.exit(0);

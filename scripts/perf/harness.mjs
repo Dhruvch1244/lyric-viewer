@@ -31,7 +31,7 @@
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cpus, platform, release } from 'node:os';
 
@@ -197,28 +197,6 @@ async function sampleProcessTree(rootPid) {
 }
 
 /**
- * The app's own PID, found by descending from the process we spawned.
- *
- * `tauri dev` is a supervisor chain — node runs the CLI, which runs cargo,
- * which runs the app — and killing the top of it does not reliably take the
- * app with it: once cargo exits, `taskkill /T` walking the live tree can no
- * longer see the app as a descendant, and an always-on-top overlay is left on
- * screen holding the DevTools port. Resolving the real PID while the chain is
- * still intact is what makes teardown deterministic.
- *
- * @param {number} rootPid
- * @returns {Promise<number|null>}
- */
-async function findAppPid(rootPid) {
-  try {
-    const tree = await processTree(rootPid);
-    return tree.find((p) => /^lyric-overlay\.exe$/i.test(p.Name))?.ProcessId ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Refuse to run when something already holds the DevTools port.
  *
  * Without this the harness attaches to whatever is already there — which in
@@ -364,20 +342,14 @@ async function main() {
     finish. An orphaned always-on-top overlay is not just untidy: it keeps the
     DevTools port, so the NEXT run silently attaches to it.
   */
-  let appPid = null;
-  const teardown = () => {
-    if (appPid) spawn('taskkill', ['/PID', String(appPid), '/T', '/F'], { stdio: 'ignore' });
-    stop();
-  };
-  process.on('SIGINT', () => {
-    teardown();
+  process.on('SIGINT', async () => {
+    await stop();
     process.exit(130);
   });
 
   let exitCode = 0;
   try {
     let { session: cdp } = await attachToApp(args.port, 15 * 60_000);
-    appPid = await findAppPid(child.pid);
 
     /*
       PERF_DEBUG is read once at load (renderer.js), and without it every
@@ -441,11 +413,9 @@ async function main() {
     console.error(`\nHarness failed: ${err.message}`);
     exitCode = 1;
   } finally {
-    teardown();
+    await stop();
   }
 
-  // The taskkill above is asynchronous; give it a moment before exiting.
-  await sleep(1500);
   process.exit(exitCode);
 }
 
