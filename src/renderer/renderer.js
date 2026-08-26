@@ -5277,6 +5277,7 @@ window.player.onTrack((track) => {
   flushHeatmap();                 // ...including the shape of it
   flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
+  maybeAutoShowSongInfo(track);   // pop "About this song" open once, if Wikipedia has it
   durationMs = track.durationMs || 0;
   lastProgressPct = -1;           // force the bar to redraw for the new song
   // The previous song's beat positions are meaningless here, and applying
@@ -7354,13 +7355,33 @@ if (els.insightsRange) els.insightsRange.addEventListener('change', refreshInsig
 /* ------------------------------------------------------------ song info */
 /* "About this song" — wiki.rs's on-demand Wikipedia lookup for the CURRENT
    track. Fetched fresh each time the panel opens for a track (cached on the
-   backend, so a repeat open of the same song is instant). */
+   backend, so a repeat open of the same song is instant). Also auto-shown
+   once per song via maybeAutoShowSongInfo below, driven from onTrack. */
 
 let songInfoForKey = null; // trackLookKey the panel's content currently belongs to
+const songInfoAutoShown = new Set(); // trackLookKeys already offered an auto-show this session
 
 function closeSongInfo() {
   if (els.songInfo) els.songInfo.hidden = true;
   document.body.classList.remove('keybox-open');
+}
+
+/** Paint a resolved Wikipedia summary into the panel's DOM. Shared by the
+ *  manual open button and the per-song auto-show below. */
+function renderSongInfo(info, key, fallbackTitle) {
+  songInfoForKey = key;
+  if (els.songInfoTitle) els.songInfoTitle.textContent = info.title || fallbackTitle;
+  if (els.songInfoExtract) els.songInfoExtract.textContent = info.extract;
+  if (els.songInfoStatus) els.songInfoStatus.textContent = '';
+  if (els.songInfoAttribution) els.songInfoAttribution.hidden = false;
+  if (els.songInfoThumb) {
+    if (info.thumbnail) {
+      els.songInfoThumb.src = info.thumbnail;
+      els.songInfoThumb.hidden = false;
+    } else {
+      els.songInfoThumb.hidden = true;
+    }
+  }
 }
 
 async function openSongInfo() {
@@ -7395,19 +7416,7 @@ async function openSongInfo() {
   if (!currentTrack || trackLookKey(currentTrack) !== key) return;
 
   if (info && info.extract) {
-    songInfoForKey = key;
-    if (els.songInfoTitle) els.songInfoTitle.textContent = info.title || currentTrack.title;
-    if (els.songInfoExtract) els.songInfoExtract.textContent = info.extract;
-    if (els.songInfoStatus) els.songInfoStatus.textContent = '';
-    if (els.songInfoAttribution) els.songInfoAttribution.hidden = false;
-    if (els.songInfoThumb) {
-      if (info.thumbnail) {
-        els.songInfoThumb.src = info.thumbnail;
-        els.songInfoThumb.hidden = false;
-      } else {
-        els.songInfoThumb.hidden = true;
-      }
-    }
+    renderSongInfo(info, key, currentTrack.title);
   } else if (els.songInfoStatus) {
     els.songInfoStatus.textContent = 'nothing found on Wikipedia for this one';
   }
@@ -7415,6 +7424,36 @@ async function openSongInfo() {
 
 if (els.songInfoBtn) els.songInfoBtn.addEventListener('click', openSongInfo);
 if (els.songInfoClose) els.songInfoClose.addEventListener('click', closeSongInfo);
+
+/**
+ * Pop the "About this song" panel open by itself, once per song, whenever
+ * Wikipedia actually has something to say — the button above stays for a
+ * manual re-look, but nobody should have to click it just to see whether
+ * this song has a Wikipedia entry. Silent on a miss: an empty/failed lookup
+ * auto-opening a panel that just says "nothing found" would be a popup for
+ * no reason, so a miss just leaves the chip alone for a manual check.
+ */
+async function maybeAutoShowSongInfo(track) {
+  if (!els.songInfo || !window.player.getSongInfo || !track || !track.title) return;
+  const key = trackLookKey(track);
+  if (songInfoAutoShown.has(key)) return; // already offered this song a turn
+  songInfoAutoShown.add(key);
+
+  let info = null;
+  try {
+    info = await window.player.getSongInfo(track.title, track.artist || '');
+  } catch {
+    return;
+  }
+
+  // The song may have moved on while the lookup was in flight.
+  if (!currentTrack || trackLookKey(currentTrack) !== key) return;
+  if (!info || !info.extract) return;
+
+  document.body.classList.add('keybox-open'); // same anti-idle-fade fix openSongInfo uses
+  els.songInfo.hidden = false;
+  renderSongInfo(info, key, track.title);
+}
 
 /** Add files from disk to the library, and start playing them. */
 async function addLocalFiles(fromFolder) {
