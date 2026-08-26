@@ -47,3 +47,6 @@ scripts/perf/runs/
 # depend on a specific track being present: point tests at a path via an env
 # var (see sidecar/tests/real_transcription.rs) rather than committing audio.
 songs/
+
+# JetBrains IDE project config — machine-local, not shared.
+.idea/
