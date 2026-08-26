@@ -2,6 +2,35 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.51.0 — 2026-08-27
+
+- **Settings could not be closed.** A live panel-chrome audit found Settings
+  was the one panel in the app reachable only via Esc or re-clicking its own
+  chip — every other panel already had an explicit ✕. Fixed, and Pre-sync
+  got the same header treatment.
+- **Settings, Pre-sync, and Song-info could stack directly on top of each
+  other.** All three float in the same anchored screen slot with nothing
+  stopping two from opening at once — reproducible on the app's own default
+  path (open a track, let "About this song" auto-show, then open Settings).
+  Cover art, MilkDrop presets, and Search-lyrics share an identical
+  right-rail slot with the same bug, caught while fixing the first. Both
+  families now close whichever sibling is open before showing another.
+- **Search-lyrics and Cover art now show a busy indicator while searching.**
+  Both used to give zero feedback during a real, sometimes slow LRCLIB/
+  artwork network search — a blank panel indistinguishable from broken. A
+  small shared sweep indicator now covers both, opt-in per panel.
+- **Settings is now a persistent, always-visible chip, top-left.** It gates
+  every AI feature (translation, transliteration, mood) but lived two clicks
+  deep in the More menu with no on-screen hint it existed, and was never
+  mentioned in the first-run welcome card — both fixed.
+- Verified live against the real app over Chrome DevTools Protocol, not just
+  read from source: the close button, the panel-collision fix, the busy
+  indicator's full real-network round trip, and the new corner entry point
+  were each driven and screenshotted against a running `tauri dev` build.
+- Test counts: 210 JS (unchanged), 441 Rust passing + 23 `#[ignore]`d
+  workspace-wide (unchanged — this release is renderer-only). `cargo clippy
+  --workspace --all-targets --no-deps -- -D warnings` clean.
+
 ## 0.50.0 — 2026-08-26
 
 - **A real main-thread stall, root-caused and fixed.** Playing a local file
