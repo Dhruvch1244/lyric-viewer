@@ -1430,7 +1430,11 @@ body.keybox-open .hud {
   max-height: 78vh;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.9rem 1rem;
+  /* 1rem 1.1rem, not this family's old 0.9rem 1rem — matches the other two
+     anchored flyouts (Pre-sync, Song-info) that share this slot; the
+     mismatch was one of the panel-chrome audit's padding-consistency
+     findings (2026-08-26). */
+  padding: 1rem 1.1rem;
   background: var(--chrome-surface);
   border: 1px solid var(--chrome-border);
   border-radius: var(--chrome-radius);
@@ -1448,10 +1452,18 @@ body.keybox-open .hud {
   color: var(--chrome-ink-dim);
 }
 
-/* The panel names itself. It is reachable from one unlabelled chip among
-   nineteen, so arriving without a heading leaves you guessing what you opened. */
-.keybox__title {
+/* The panel names itself, and — since the audit above — closes itself too:
+   this was the one panel in the app reachable only via Esc or re-clicking
+   the chip that opened it, with no visible affordance for either. */
+.keybox__head {
   flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.keybox__title {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--chrome-ink);
@@ -1561,6 +1573,22 @@ body.keybox-open .hud {
 
 .listbox[hidden] {
   display: none;
+}
+
+/* Pre-sync's own head row — same pattern as .songinfo__head/.keybox__head:
+   a title plus an explicit ✕, since this panel shares its anchor slot with
+   Settings and Song-info and used to be reachable only by Esc. */
+.listbox__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.listbox__title {
+  font-family: var(--chrome-serif);
+  font-size: 1.05rem;
+  color: var(--chrome-ink);
 }
 
 .listbox__label {

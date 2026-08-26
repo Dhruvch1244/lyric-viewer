@@ -247,7 +247,10 @@
            key icon. Grouped into sections for the same reason — a flat list of
            nine unrelated controls is a list, not a settings screen. -->
       <div id="keybox" class="keybox" hidden role="dialog" aria-modal="false" aria-label="Settings">
-        <span class="keybox__title">Settings</span>
+        <div class="keybox__head">
+          <span class="keybox__title">Settings</span>
+          <button id="keybox-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+        </div>
 
         <div class="keybox__section">
           <span class="keybox__heading">AI provider</span>
@@ -421,6 +424,10 @@
            "Artist - Title" lines (one per line) to fetch + cache their synced
            lyrics ahead of time, so they play instantly and offline later. -->
       <div id="presync" class="listbox" hidden role="dialog" aria-modal="true" aria-label="Pre-sync tracks">
+        <div class="listbox__head">
+          <span class="listbox__title">Pre-sync tracks</span>
+          <button id="presync-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+        </div>
         <label class="listbox__label" for="presync-input">Paste tracks — one “Artist - Title” per line</label>
         <textarea id="presync-input" class="listbox__input" rows="6" spellcheck="false"
                   placeholder="Seedhe Maut - Nanchaku&#10;DIVINE - Mera Bhai&#10;KR$NA - Freeverse Feast"></textarea>

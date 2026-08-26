@@ -373,6 +373,7 @@ function closeMilkdropPanel() {
 
 function openMilkdropPanel() {
   if (!els.mdPanel || !window.MilkDrop) return;
+  if (typeof closeRailPanels === 'function') closeRailPanels(els.mdPanel);
   els.mdPanel.hidden = false;
   document.body.classList.add('show-cursor');
   els.mdBtn.setAttribute('aria-pressed', 'true');

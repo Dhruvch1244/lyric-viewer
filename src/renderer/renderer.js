@@ -41,6 +41,7 @@ const els = {
   presyncInput: document.getElementById('presync-input'),
   presyncRun: document.getElementById('presync-run'),
   presyncStatus: document.getElementById('presync-status'),
+  presyncClose: document.getElementById('presync-close'),
   libraryBtn: document.getElementById('btn-library'),
   library: document.getElementById('library'),
   libraryGrid: document.getElementById('library-grid'),
@@ -145,6 +146,7 @@ const els = {
   localcliOptions: document.getElementById('localcli-options'),
   localcliDismiss: document.getElementById('localcli-dismiss'),
   keybox: document.getElementById('keybox'),
+  keyClose: document.getElementById('keybox-close'),
   keyInput: document.getElementById('keybox-input'),
   keySave: document.getElementById('keybox-save'),
   keyStatus: document.getElementById('keybox-status'),
@@ -6652,9 +6654,43 @@ function closeKeybox() {
   document.body.classList.remove('keybox-open');
 }
 
+/*
+  Settings, Pre-sync, and Song-info all float in the same anchored slot
+  (`.keybox`/`.listbox`: `position: absolute; left: 3vw; bottom: 8vh`) with
+  nothing to stop two from showing at once — the panel-chrome audit
+  (2026-08-26) caught this live: opening Settings while the auto-shown "About
+  this song" card was still up stacked one directly on the other, scrollbar
+  over text, on the app's own default path. `closeKeybox`/`closePresync`/
+  `closeSongInfo` are all safe to call on an already-closed panel (they just
+  set `hidden` again), so this can run unconditionally before any of the
+  three opens without checking which one, if any, is currently up. */
+function closeAnchoredFlyouts() {
+  closeKeybox();
+  closePresync();
+  closeSongInfo();
+}
+
+/*
+  Cover art, MilkDrop presets, and Search-lyrics all dock at the same
+  right-rail anchor (`.poster`/`.mdp`/`.lyricsearch`: `position: fixed;
+  top: 8vh; bottom: 14vh; right: 3vw`) — deliberately, per .mdp's own comment,
+  so whichever one is open sits beside the live backdrop for comparison.
+  Nothing stopped two from showing there at once, the same collision bug the
+  anchored flyouts above had. Route every rail-panel open through here first;
+  `except` is the panel about to open, so its own close is skipped.
+*/
+function closeRailPanels(except) {
+  if (els.poster && els.poster !== except) closePoster();
+  if (els.lyricSearch && els.lyricSearch !== except) closeLyricSearch();
+  if (els.mdPanel && els.mdPanel !== except && typeof closeMilkdropPanel === 'function') {
+    closeMilkdropPanel();
+  }
+}
+
 els.keyBtn.addEventListener('click', async () => {
   const willShow = els.keybox.hasAttribute('hidden');
   if (willShow) {
+    closeAnchoredFlyouts();
     els.keybox.removeAttribute('hidden');
     // Pin the HUD open so the cursor-idle fade doesn't hide the input mid-type.
     document.body.classList.add('keybox-open');
@@ -6666,6 +6702,8 @@ els.keyBtn.addEventListener('click', async () => {
     closeKeybox();
   }
 });
+
+if (els.keyClose) els.keyClose.addEventListener('click', closeKeybox);
 
 /**
  * Fill the key panel's "Local AI" picker with the installed CLIs, on demand —
@@ -6963,6 +7001,7 @@ function closePoster() {
 
 async function openPoster() {
   if (!els.poster) return;
+  closeRailPanels(els.poster);
   els.poster.hidden = false;
   document.body.classList.add('show-cursor');
   if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'true');
@@ -7112,6 +7151,7 @@ function closeLyricSearch() {
 
 function openLyricSearch() {
   if (!els.lyricSearch) return;
+  closeRailPanels(els.lyricSearch);
   els.lyricSearch.hidden = false;
   document.body.classList.add('show-cursor');
   if (els.lyricSearchBtn) els.lyricSearchBtn.setAttribute('aria-pressed', 'true');
@@ -7391,6 +7431,7 @@ function renderSongInfo(info, key, fallbackTitle) {
 
 async function openSongInfo() {
   if (!els.songInfo || !window.player.getSongInfo) return;
+  closeAnchoredFlyouts();
   // #song-info lives inside the HUD footer (same as #presync), which fades
   // to opacity:0 on cursor idle unless this class is set — without it the
   // panel's own `hidden` attribute is correctly cleared but it renders
@@ -7455,6 +7496,7 @@ async function maybeAutoShowSongInfo(track) {
   if (!currentTrack || trackLookKey(currentTrack) !== key) return;
   if (!info || !info.extract) return;
 
+  closeAnchoredFlyouts();
   document.body.classList.add('keybox-open'); // same anti-idle-fade fix openSongInfo uses
   els.songInfo.hidden = false;
   renderSongInfo(info, key, track.title);
@@ -7747,6 +7789,7 @@ if (window.LocalPlayer) {
 els.presyncBtn.addEventListener('click', () => {
   const willShow = els.presync.hasAttribute('hidden');
   if (willShow) {
+    closeAnchoredFlyouts();
     els.presync.removeAttribute('hidden');
     document.body.classList.add('keybox-open'); // pin the HUD open while typing
     els.presyncInput.focus();
@@ -7755,6 +7798,8 @@ els.presyncBtn.addEventListener('click', () => {
     closePresync();
   }
 });
+
+if (els.presyncClose) els.presyncClose.addEventListener('click', closePresync);
 
 els.presyncRun.addEventListener('click', async () => {
   const text = els.presyncInput.value.trim();
