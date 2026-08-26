@@ -220,7 +220,15 @@ pub(crate) fn analyze_local_file_value(path: &str) -> Value {
     out
 }
 
-#[tauri::command]
+/// `(async)` IS LOAD-BEARING, NOT DECORATION — same reasoning as
+/// `import_lyrics` in lyrics_cmds.rs. A command without the `async` keyword
+/// runs on Tauri's main thread, and `analyze_local_file_value` is a full
+/// symphonia decode plus four DSP passes (envelope/onset, beat tracking, key,
+/// structure, loudness) over a whole song — tens of seconds in a debug build.
+/// Without this, that work blocked the main thread for the duration, freezing
+/// every other command (including totally unrelated ones) and the UI itself
+/// for as long as it ran. `(async)` moves it to a worker thread.
+#[tauri::command(async)]
 pub(crate) fn analyze_local_file(path: String) -> Value {
     analyze_local_file_value(&path)
 }
@@ -289,7 +297,13 @@ pub(crate) fn open_local_folder(app: AppHandle) -> Value {
 
 /// Read a local file's raw bytes. Returned as a binary Response, which the
 /// webview receives as an ArrayBuffer for `new Blob([raw])` playback + decode.
-#[tauri::command]
+///
+/// `(async)` for the same main-thread reason as `analyze_local_file` above —
+/// a multi-minute FLAC is tens of megabytes, and a synchronous read of that
+/// on a slow disk is exactly the kind of stall this pattern exists to avoid,
+/// even though the common case (a small/cached file) is fast enough that
+/// this bug was never the one actually measured.
+#[tauri::command(async)]
 pub(crate) fn read_local_file(file_path: String) -> tauri::ipc::Response {
     let bytes = std::fs::read(&file_path).unwrap_or_default();
     tauri::ipc::Response::new(bytes)
