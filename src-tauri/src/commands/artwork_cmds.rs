@@ -20,6 +20,12 @@ pub(crate) fn artwork_choice_path(app: &AppHandle, key: &str) -> Option<std::pat
 /// lyric fetch on purpose: they share a track (so one `cancel_track` stops
 /// both) but not a dedup key, so a miss on one never suppresses the other.
 pub(crate) fn resolve_artwork(app: AppHandle, title: String, artist: String, duration_ms: i64) {
+    // Same canonicalization as resolve_lyrics (lyrics_cmds.rs) — both are
+    // called back to back with the same raw title/artist (watchers.rs,
+    // playback.rs) and must land on the same track_key, or lyrics and
+    // artwork for one song split into two cache entries.
+    let title = crate::lyrics::clean_title(&title);
+    let artist = crate::lyrics::clean_artist(&artist);
     let key = track_key(&artist, &title);
     jobs::submit(ArtworkJob { app, title, artist, duration_ms, key }, Priority::Now);
 }

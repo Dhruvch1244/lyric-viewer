@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const LRCLIB_SEARCH: &str = "https://lrclib.net/api/search";
+const LRCLIB_GET: &str = "https://lrclib.net/api/get";
 const USER_AGENT: &str = "lyric-overlay/0.25.0 (personal project)";
 
 /// The track we are looking up.
@@ -247,10 +248,39 @@ pub fn parse_lrc(lrc: &str) -> Vec<Cue> {
     out
 }
 
+/// LRCLIB's exact-match lookup (`/api/get`) — takes track/artist/duration and
+/// returns 404 (→ `None` here) unless it finds a precise match, instead of
+/// `/api/search`'s free-text fuzzy ranking. Skipped entirely without a
+/// duration: that's what makes `/api/get` trustworthy over a title/artist
+/// alone, and a title/artist match with no duration to confirm it is exactly
+/// the ambiguous case `/api/search` + `score_candidate`'s version-tag penalty
+/// already exist to handle.
+fn lrclib_get_exact(track: &Track) -> Option<Value> {
+    if track.duration_ms <= 0 {
+        return None;
+    }
+    let resp = ureq::get(LRCLIB_GET)
+        .set("User-Agent", USER_AGENT)
+        .query("track_name", &clean_title(&track.title))
+        .query("artist_name", &clean_artist(&track.artist))
+        .query("duration", &(track.duration_ms / 1000).to_string())
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .ok()?;
+    resp.into_json().ok()
+}
+
 /// Fetch *plain* (unsynced) lyrics — LRCLIB's plain catalogue is far larger than
 /// its synced one. Used with a transcription's timings (see align.rs) to sync a
 /// song that has the real words but no timing.
 pub fn fetch_plain(track: &Track) -> Option<String> {
+    if let Some(exact) = lrclib_get_exact(track) {
+        if let Some(plain) = exact.get("plainLyrics").and_then(|v| v.as_str()) {
+            if !plain.trim().is_empty() {
+                return Some(plain.to_string());
+            }
+        }
+    }
     let query = format!("{} {}", clean_title(&track.title), track.artist);
     let query = query.trim();
     if query.is_empty() {
@@ -329,6 +359,21 @@ pub fn get_by_id(id: i64) -> Option<Value> {
 
 /// Look up synced lyrics for a track. Returns (cues, source label) or None.
 pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
+    if let Some(exact) = lrclib_get_exact(track) {
+        if let Some(synced) = exact.get("syncedLyrics").and_then(|v| v.as_str()) {
+            let cues = parse_lrc(synced);
+            if !cues.is_empty() {
+                let source = serde_json::json!({
+                    "id": exact.get("id"),
+                    "trackName": exact.get("trackName"),
+                    "artistName": exact.get("artistName"),
+                    "duration": exact.get("duration"),
+                    "score": "exact",
+                });
+                return Some((cues, source));
+            }
+        }
+    }
     let query = format!("{} {}", clean_title(&track.title), track.artist);
     let query = query.trim();
     if query.is_empty() {
@@ -415,6 +460,16 @@ mod tests {
         assert!(score_candidate(&cand, &track) < 0.0);
     }
 
+    #[test]
+    fn lrclib_get_exact_skips_without_duration() {
+        // No network call should be attempted (and none happens in a unit
+        // test run) when duration is unknown — the whole point of /api/get
+        // over /api/search is disambiguating by duration, so without one
+        // this falls straight through to the fuzzy-search callers instead.
+        let track = Track { title: "X".into(), artist: "Y".into(), duration_ms: 0 };
+        assert!(lrclib_get_exact(&track).is_none());
+    }
+
     // Live network test — run explicitly with `cargo test -- --ignored`.
     #[test]
     #[ignore]
@@ -428,7 +483,27 @@ mod tests {
         assert!(result.is_some(), "expected LRCLIB to have Blinding Lights");
         let (cues, source) = result.unwrap();
         assert!(cues.len() > 5, "expected multiple synced lines, got {}", cues.len());
+        assert_eq!(source.get("score").and_then(|v| v.as_str()), Some("exact"), "expected the /api/get exact-match path, got {source}");
         eprintln!("matched: {source}");
         eprintln!("first line: [{}ms] {}", cues[0].time_ms, cues[0].text);
+    }
+
+    // Live network test — a title LRCLIB also has a live/remix cut of, to
+    // confirm the exact-match endpoint (title+artist+duration) lands on the
+    // studio recording instead of the fuzzy-search path picking the wrong
+    // version. Run explicitly with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_fetch_prefers_exact_duration_over_a_live_version() {
+        // Studio "Yellow" by Coldplay is ~4:26; a "Yellow (Live)" cut on
+        // LRCLIB runs to a different length, so an exact duration match
+        // should not be confusable with it.
+        let track = Track { title: "Yellow".into(), artist: "Coldplay".into(), duration_ms: 266_000 };
+        let result = fetch_synced(&track);
+        assert!(result.is_some(), "expected LRCLIB to have Yellow");
+        let (_, source) = result.unwrap();
+        assert_eq!(source.get("score").and_then(|v| v.as_str()), Some("exact"), "expected the /api/get exact-match path, got {source}");
+        let matched_title = source.get("trackName").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(!matched_title.to_lowercase().contains("live"), "matched a live version: {matched_title}");
     }
 }

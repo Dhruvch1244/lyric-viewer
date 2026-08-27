@@ -287,6 +287,13 @@ impl Runnable for AttributionJob {
 /// `finalize_transcription`) read it immediately — it must not sit behind a
 /// queue, however short.
 pub(crate) fn resolve_lyrics(app: AppHandle, title: String, artist: String, duration_ms: i64) {
+    // Canonicalize once, here, before this identity fans out to the cache
+    // key, CurTrack/tray, and history/stats — see clean_title/clean_artist
+    // doc comments in lyrics.rs. Every caller (SMTC, local playback, manual
+    // correction) goes through this function, so cleaning at the call sites
+    // instead would need remembering to do it in every one of them.
+    let title = crate::lyrics::clean_title(&title);
+    let artist = crate::lyrics::clean_artist(&artist);
     let key = track_key(&artist, &title);
     // Abandon the previous song's outstanding lookups before starting this
     // one's. Every track-change path reaches here, so this is the one place
