@@ -92,7 +92,13 @@
       top:calc(14px + env(safe-area-inset-top));
       right:calc(14px + env(safe-area-inset-right));
       z-index:60;
+      transition:transform .25s ease,opacity .25s ease;
     }
+    /* Fixed positioning means it never leaves the viewport, so on a page
+       this long it would otherwise sit permanently on top of body text
+       once you scroll into it. Hide on scroll-down, show on scroll-up or
+       near the top — same pattern most mobile sites use for this reason. */
+    .mnav.is-scroll-hidden{transform:translateY(-140%);opacity:0;pointer-events:none;}
     .mnav-pill{
       display:flex;align-items:center;gap:10px;padding:9px 10px 9px 14px;
       background:rgba(9,7,14,.72);border:1px solid var(--line);border-radius:99px;
@@ -302,6 +308,27 @@
     mnav.querySelectorAll('.mnav-menu a').forEach(function(a){
       a.addEventListener('click', close);
     });
+
+    // Hide on scroll-down, show on scroll-up or near the top — a fixed
+    // pill this size would otherwise sit on top of body text once you
+    // scroll past the hero.
+    var lastY = window.scrollY;
+    var ticking = false;
+    function onScroll(){
+      var y = window.scrollY;
+      if (!mnav.classList.contains('is-open')) {
+        if (y < 40 || y < lastY) {
+          mnav.classList.remove('is-scroll-hidden');
+        } else if (y > lastY) {
+          mnav.classList.add('is-scroll-hidden');
+        }
+      }
+      lastY = y;
+      ticking = false;
+    }
+    window.addEventListener('scroll', function(){
+      if (!ticking) { requestAnimationFrame(onScroll); ticking = true; }
+    }, { passive: true });
   })();
 </script>
 
