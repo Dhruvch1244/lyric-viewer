@@ -112,7 +112,12 @@ pub(crate) fn artwork_candidates(app: AppHandle, track: Value) -> Value {
 }
 
 /// Download and remember a hand-picked cover; emit it as the current artwork.
-#[tauri::command]
+///
+/// Same defect as `artwork_candidates` above, missed when that one was
+/// fixed: `crate::artwork::fetch_one` is a real blocking network download,
+/// plus a `std::fs::write`, both on what would otherwise be Tauri's main
+/// thread. `(async)` is the fix.
+#[tauri::command(async)]
 pub(crate) fn choose_artwork(payload: Value, app: AppHandle) -> Value {
     let track = payload.get("track").cloned().unwrap_or(Value::Null);
     let url = payload.get("url").or_else(|| payload.get("fullUrl")).and_then(|v| v.as_str()).unwrap_or("");
@@ -134,7 +139,7 @@ pub(crate) fn choose_artwork(payload: Value, app: AppHandle) -> Value {
 }
 
 /// Forget a hand-picked cover and go back to the automatic pick.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn clear_artwork_choice(track: Value, app: AppHandle) {
     let t = track_from_value(&track);
     let key = track_key(&t.artist, &t.title);
