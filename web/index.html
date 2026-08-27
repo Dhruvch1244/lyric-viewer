@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lyric Overlay — beat-synced lyrics & a live visualizer for Windows</title>
 <meta name="description" content="Every lyric app is scrolling text. Every visualizer has no idea what's playing. Lyric Overlay is both — beat-synced lyrics over a live MilkDrop-class visualizer that reacts to whatever's on your PC. Free.">
 <link rel="canonical" href="https://lyricoverlay.dhruvchoudhary.com/">
@@ -39,7 +39,8 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"></noscript>
 <style>
   :root{
     --ink:#09070E; --ink-2:#0E0B15; --panel:#141019; --panel-2:#1A1522;
@@ -79,7 +80,53 @@
   .nav-links a:not(.btn){font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);}
   .nav-links a:not(.btn):hover{color:var(--text);}
   .nav-links .btn{padding:10px 18px;font-size:13.5px;}
-  @media(max-width:680px){.nav-links a:not(.btn){display:none;}}
+
+  /* mobile: swap the full-width bar for a floating top-right pill, since
+     hiding just the links (old behaviour) left Gallery/Features/Demo/
+     Privacy unreachable with no replacement. */
+  .mnav{display:none;}
+  @media(max-width:680px){
+    nav{display:none;}
+    .mnav{
+      display:block;position:fixed;
+      top:calc(14px + env(safe-area-inset-top));
+      right:calc(14px + env(safe-area-inset-right));
+      z-index:60;
+    }
+    .mnav-pill{
+      display:flex;align-items:center;gap:10px;padding:9px 10px 9px 14px;
+      background:rgba(9,7,14,.72);border:1px solid var(--line);border-radius:99px;
+      backdrop-filter:blur(10px);box-shadow:0 10px 30px -14px rgba(0,0,0,.6);
+    }
+    .mnav-pill svg{width:22px;height:22px;display:block;}
+    .mnav-toggle{
+      display:flex;align-items:center;justify-content:center;width:30px;height:30px;
+      background:transparent;border:0;padding:0;cursor:pointer;color:var(--text);
+    }
+    .mnav-toggle span,.mnav-toggle span::before,.mnav-toggle span::after{
+      content:"";display:block;width:16px;height:2px;background:currentColor;border-radius:2px;
+      transition:transform .2s ease,opacity .2s ease;
+    }
+    .mnav-toggle span{position:relative;}
+    .mnav-toggle span::before{position:absolute;top:-5px;}
+    .mnav-toggle span::after{position:absolute;top:5px;}
+    .mnav.is-open .mnav-toggle span{background:transparent;}
+    .mnav.is-open .mnav-toggle span::before{transform:translateY(5px) rotate(45deg);}
+    .mnav.is-open .mnav-toggle span::after{transform:translateY(-5px) rotate(-45deg);}
+    .mnav-menu{
+      display:none;position:absolute;top:calc(100% + 8px);right:0;min-width:180px;
+      flex-direction:column;padding:10px;gap:2px;
+      background:rgba(9,7,14,.9);border:1px solid var(--line);border-radius:14px;
+      backdrop-filter:blur(10px);box-shadow:0 16px 40px -16px rgba(0,0,0,.7);
+    }
+    .mnav.is-open .mnav-menu{display:flex;}
+    .mnav-menu a{
+      font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;
+      color:var(--muted);padding:10px 12px;border-radius:8px;
+    }
+    .mnav-menu a:hover{color:var(--text);background:rgba(255,255,255,.05);}
+    .mnav-menu a.btn{color:#0A0710;margin-top:4px;}
+  }
 
   /* ---------------- hero ---------------- */
   .hero{position:relative;min-height:94vh;display:flex;align-items:center;overflow:hidden;
@@ -219,6 +266,44 @@
     </div>
   </div>
 </nav>
+
+<div class="mnav" id="mnav">
+  <div class="mnav-pill">
+    <a href="#top" aria-label="Lyric Overlay">
+      <svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="mnb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF2E7E"/><stop offset=".5" stop-color="#9A6BFF"/><stop offset="1" stop-color="#28E0EC"/></linearGradient></defs><rect x="34" y="24" width="17" height="72" rx="8.5" fill="url(#mnb)"/><rect x="34" y="79" width="50" height="17" rx="8.5" fill="url(#mnb)"/><rect x="74" y="30" width="8" height="34" rx="4" fill="#28E0EC"/><rect x="86" y="22" width="8" height="42" rx="4" fill="#FF2E7E"/></svg>
+    </a>
+    <button class="mnav-toggle" id="mnavToggle" aria-label="Menu" aria-expanded="false" aria-controls="mnavMenu"><span></span></button>
+  </div>
+  <div class="mnav-menu" id="mnavMenu">
+    <a href="#gallery">Gallery</a>
+    <a href="#features">Features</a>
+    <a href="#demo">Demo</a>
+    <a href="privacy.html">Privacy</a>
+    <a class="btn" href="#download">Get it</a>
+  </div>
+</div>
+<script>
+  (function(){
+    var mnav = document.getElementById('mnav');
+    var toggle = document.getElementById('mnavToggle');
+    if (!mnav || !toggle) return;
+    function close(){ mnav.classList.remove('is-open'); toggle.setAttribute('aria-expanded','false'); }
+    function open(){ mnav.classList.add('is-open'); toggle.setAttribute('aria-expanded','true'); }
+    toggle.addEventListener('click', function(e){
+      e.stopPropagation();
+      mnav.classList.contains('is-open') ? close() : open();
+    });
+    document.addEventListener('click', function(e){
+      if (mnav.classList.contains('is-open') && !mnav.contains(e.target)) close();
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape') close();
+    });
+    mnav.querySelectorAll('.mnav-menu a').forEach(function(a){
+      a.addEventListener('click', close);
+    });
+  })();
+</script>
 
 <span id="top"></span>
 
