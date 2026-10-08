@@ -51,6 +51,8 @@ mod netease;
 mod presets;
 mod stats;
 mod wiki;
+#[cfg(target_os = "linux")]
+mod mpris;
 #[cfg(windows)]
 mod smtc;
 mod state;
@@ -120,8 +122,8 @@ pub fn run() {
             CRASH_REPORTING_ENABLED.store(prefs.crash_reporting_enabled, std::sync::atomic::Ordering::Relaxed);
             app.manage(Mutex::new(prefs));
             app.manage(Mutex::new(state::CurTrack::default()));
-            #[cfg(windows)]
-            app.manage(Mutex::<Option<smtc::Session>>::new(None));
+            #[cfg(any(windows, target_os = "linux"))]
+            app.manage(Mutex::<Option<state::Session>>::new(None));
             app.manage(commands::updater::UpdateStore(Mutex::new(json!({ "phase": "idle", "prompt": false }))));
 
             // Recording temp files a previous session left behind (audio.rs).

@@ -124,9 +124,9 @@ pub(crate) fn open_crash_log(app: AppHandle) -> Value {
 /// The frontend calls this once during boot, *after* `onTrack`/`onTick` are
 /// already registered — so unlike the poll loop's own push, this one is
 /// ordered by construction rather than by luck.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[tauri::command]
-pub(crate) fn resync_smtc(app: AppHandle, state: State<Mutex<Option<crate::smtc::Session>>>) {
+pub(crate) fn resync_smtc(app: AppHandle, state: State<Mutex<Option<crate::state::Session>>>) {
     let sample = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(s) = sample {
         // A fresh Option<String> each call: this is a resync, not a diff
@@ -138,7 +138,7 @@ pub(crate) fn resync_smtc(app: AppHandle, state: State<Mutex<Option<crate::smtc:
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 #[tauri::command]
 pub(crate) fn resync_smtc() {}
 

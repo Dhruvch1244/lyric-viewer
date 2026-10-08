@@ -1,6 +1,6 @@
 [package]
 name = "lyric-overlay"
-version = "0.51.0"
+version = "0.52.0"
 description = "Beat-aware synced lyric overlay for Windows (Tauri)"
 authors = ["Dhruv Choudhary"]
 license = "MIT"
@@ -92,6 +92,11 @@ ebur128 = "0.1"
 # The job journal and the lyric/track index (JOB-ENGINE section 4).
 # `bundled` compiles SQLite from source, adding no system dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# MPRIS "now playing" on Linux (mpris.rs) — the SMTC equivalent. Already in the
+# tree via Tauri's notification/tray stack, so this adds no new crate to build.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

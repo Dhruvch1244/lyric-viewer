@@ -37,22 +37,7 @@ const UNSET_TIMESTAMP_TICKS: i64 = 864_000_000_000;
 /// often than the timeline read — same split the script used.
 const PROPERTY_INTERVAL_MS: i64 = 1000;
 
-/// One SMTC sample. Mirrors the JSON object `smtc-poll.ps1` used to emit, so
-/// the consuming logic in `lib.rs` is unchanged.
-#[derive(Clone, Default)]
-pub struct Session {
-    pub source_app: String,
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub status: String,
-    pub position_ms: i64,
-    pub end_ms: i64,
-    /// Age of `position_ms` in ms when sampled; -1 when the source gave no
-    /// usable timestamp. Consumers project forward from this rather than
-    /// trusting a position that may be seconds stale.
-    pub staleness_ms: i64,
-}
+pub use crate::state::Session;
 
 /// Current UTC as 100ns ticks since 1601-01-01, the epoch WinRT `DateTime`
 /// uses. Derived from `SystemTime` rather than `GetSystemTimeAsFileTime` so

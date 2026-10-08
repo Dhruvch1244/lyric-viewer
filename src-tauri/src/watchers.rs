@@ -7,25 +7,27 @@
 
 use tauri::AppHandle;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::atomic::Ordering;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::Mutex;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use serde_json::json;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use tauri::{Emitter, Manager};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::commands::artwork_cmds::resolve_artwork;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::commands::lyrics_cmds::resolve_lyrics;
+#[cfg(any(windows, target_os = "linux"))]
+use crate::state::{Session, LOCAL_ACTIVE};
 #[cfg(windows)]
-use crate::state::{LOCAL_ACTIVE, WALLPAPER_ATTACHED, WALLPAPER_SURFACED, WALLPAPER_SUSPENDED};
+use crate::state::{WALLPAPER_ATTACHED, WALLPAPER_SURFACED, WALLPAPER_SUSPENDED};
 
 /// How often to sample the timeline. Unchanged from the old poller's default.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const SMTC_INTERVAL_MS: u64 = 250;
 
 /// Best-effort current position, projecting past SMTC's stale `positionMs` while
@@ -40,8 +42,8 @@ const SMTC_INTERVAL_MS: u64 = 250;
 /// the track. Only `staleness_ms == -1` (the source never set a timestamp at
 /// all, per smtc.rs) is actually untrustworthy; `end_ms` below is what
 /// keeps a legitimately large staleness from reporting past the track's end.
-#[cfg(windows)]
-fn estimate_position(s: &crate::smtc::Session) -> i64 {
+#[cfg(any(windows, target_os = "linux"))]
+fn estimate_position(s: &Session) -> i64 {
     if s.status != "Playing" {
         return s.position_ms;
     }
@@ -58,8 +60,8 @@ fn estimate_position(s: &crate::smtc::Session) -> i64 {
 /// one sample, exactly the shape the poll loop and `resync_smtc` both need —
 /// pulled out so there is exactly one place that builds these events rather
 /// than two copies that could quietly drift apart.
-#[cfg(windows)]
-pub(crate) fn emit_smtc_sample(app: &AppHandle, s: &crate::smtc::Session, current_key: &mut Option<String>) {
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) fn emit_smtc_sample(app: &AppHandle, s: &Session, current_key: &mut Option<String>) {
     let key = format!("{} {}", s.artist, s.title);
     if current_key.as_deref() != Some(key.as_str()) {
         *current_key = Some(key);
@@ -87,6 +89,61 @@ pub(crate) fn emit_smtc_sample(app: &AppHandle, s: &crate::smtc::Session, curren
     );
 }
 
+/// The sampling loop shared by every now-playing source (SMTC on Windows,
+/// MPRIS on Linux): sleep, stand down while a local file is playing, record
+/// the sample for `resync_smtc`, and emit `track` / `tick` / `idle`. Only how
+/// a `Session` is obtained differs per platform, so that is the one thing
+/// passed in — the dedup and error policy below must not drift between them.
+#[cfg(any(windows, target_os = "linux"))]
+fn run_poll_loop<E: std::fmt::Display>(
+    app: AppHandle,
+    tag: &str,
+    mut poll: impl FnMut() -> Result<Option<Session>, E>,
+) {
+    let mut current_key: Option<String> = None;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(SMTC_INTERVAL_MS));
+
+        // While a local file is playing, ignore the OS source entirely —
+        // otherwise its "no session" idle would clear the track the app is
+        // playing itself.
+        if LOCAL_ACTIVE.load(Ordering::Relaxed) {
+            continue;
+        }
+
+        let sample = match poll() {
+            Ok(s) => s,
+            // A transient hiccup is NOT "playback stopped" — emitting idle
+            // here would clear the track and re-trigger a full lyric lookup
+            // on a blip. Skip the tick and try again.
+            Err(err) => {
+                eprintln!("[{tag}] {err}");
+                continue;
+            }
+        };
+
+        // Recorded on every poll (not just changes) so a late-attaching
+        // frontend can pull the current state via resync_smtc instead of
+        // relying on having caught the one push event that announced it —
+        // see resync_smtc for why that one-shot push is not enough on its
+        // own now that this poll loop starts fast enough to sometimes win
+        // the race against the webview's own page load.
+        if let Some(state) = app.try_state::<Mutex<Option<Session>>>() {
+            *state.lock().unwrap_or_else(|e| e.into_inner()) = sample.clone();
+        }
+
+        match &sample {
+            None => {
+                if current_key.is_some() {
+                    current_key = None;
+                    let _ = app.emit("idle", ());
+                }
+            }
+            Some(s) => emit_smtc_sample(&app, s, &mut current_key),
+        }
+    }
+}
+
 /// Poll SMTC natively and stream state to the webview as `track` / `tick` /
 /// `idle` events. Runs on its own thread for the app's life.
 ///
@@ -112,54 +169,28 @@ pub(crate) fn start_smtc(app: AppHandle) {
                 return;
             }
         };
-
-        let mut current_key: Option<String> = None;
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(SMTC_INTERVAL_MS));
-
-            // While a local file is playing, ignore SMTC entirely — otherwise its
-            // "no session" idle would clear the track the app is playing itself.
-            if LOCAL_ACTIVE.load(Ordering::Relaxed) {
-                continue;
-            }
-
-            let sample = match watcher.poll() {
-                Ok(s) => s,
-                // A transient WinRT hiccup is NOT "playback stopped" — emitting
-                // idle here would clear the track and re-trigger a full lyric
-                // lookup on a blip. Skip the tick and try again.
-                Err(err) => {
-                    eprintln!("[smtc] {err}");
-                    continue;
-                }
-            };
-
-            // Recorded on every poll (not just changes) so a late-attaching
-            // frontend can pull the current state via resync_smtc instead of
-            // relying on having caught the one push event that announced it —
-            // see resync_smtc for why that one-shot push is not enough on its
-            // own now that this poll loop starts fast enough to sometimes win
-            // the race against the webview's own page load.
-            if let Some(state) = app.try_state::<Mutex<Option<crate::smtc::Session>>>() {
-                *state.lock().unwrap_or_else(|e| e.into_inner()) = sample.clone();
-            }
-
-            match &sample {
-                None => {
-                    if current_key.is_some() {
-                        current_key = None;
-                        let _ = app.emit("idle", ());
-                    }
-                }
-                Some(s) => emit_smtc_sample(&app, s, &mut current_key),
-            }
-        }
+        run_poll_loop(app, "smtc", move || watcher.poll());
     });
 }
 
-/// Now-playing detection is SMTC-specific, so non-Windows builds simply have
-/// none — same as before the port.
-#[cfg(not(windows))]
+/// Linux counterpart: any MPRIS player on the session bus (Spotify, Firefox,
+/// Chromium, VLC, mpv with mpris, ...). See mpris.rs.
+#[cfg(target_os = "linux")]
+pub(crate) fn start_smtc(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut watcher = match crate::mpris::Watcher::new() {
+            Ok(w) => w,
+            Err(err) => {
+                eprintln!("[mpris] session bus unavailable: {err}");
+                return;
+            }
+        };
+        run_poll_loop(app, "mpris", move || watcher.poll());
+    });
+}
+
+/// No now-playing source on other platforms.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn start_smtc(_app: AppHandle) {}
 
 /// The overlay's native window handle as a raw isize, for the wallpaper FFI.
@@ -301,12 +332,12 @@ pub(crate) fn start_power_watcher(app: AppHandle) {
 #[cfg(not(windows))]
 pub(crate) fn start_power_watcher(_app: AppHandle) {}
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 mod tests {
     use super::*;
 
-    fn session(status: &str, position_ms: i64, end_ms: i64, staleness_ms: i64) -> crate::smtc::Session {
-        crate::smtc::Session {
+    fn session(status: &str, position_ms: i64, end_ms: i64, staleness_ms: i64) -> Session {
+        Session {
             status: status.into(),
             position_ms,
             end_ms,

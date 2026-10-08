@@ -14,6 +14,24 @@ use tauri::{AppHandle, Emitter, Manager};
 /// down so its "no session" idle doesn't clear a locally-playing track.
 pub(crate) static LOCAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// One "now playing" sample from the OS: SMTC on Windows (`smtc.rs`), MPRIS
+/// on Linux (`mpris.rs`). Both produce this same shape so the poll loop in
+/// `watchers.rs` and everything downstream of it is platform-blind.
+#[derive(Clone, Default)]
+pub struct Session {
+    pub source_app: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub status: String,
+    pub position_ms: i64,
+    pub end_ms: i64,
+    /// Age of `position_ms` in ms when sampled; -1 when the source gave no
+    /// usable timestamp. Consumers project forward from this rather than
+    /// trusting a position that may be seconds stale.
+    pub staleness_ms: i64,
+}
+
 /// Set once in `run()`'s setup hook. `llm::convert()` is a pure function with
 /// no `AppHandle` of its own, called from four different modules — this is
 /// how it reaches back up to emit the local-CLI offer without every caller

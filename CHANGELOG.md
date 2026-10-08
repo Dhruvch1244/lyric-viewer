@@ -2,6 +2,13 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.52.0 — 2026-10-08
+
+- **Now-playing detection on Linux.** Detection was SMTC-only, so on Linux
+  no track was ever reported. It now reads MPRIS over the D-Bus session bus,
+  which covers Spotify, browsers, VLC, mpv and any other MPRIS player, and
+  feeds the same pipeline as SMTC. Windows behaviour is unchanged.
+
 ## 0.51.0 — 2026-08-27
 
 - **Settings could not be closed.** A live panel-chrome audit found Settings
