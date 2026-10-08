@@ -2,6 +2,19 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.53.0 — 2026-10-08
+
+- **Audio-reactive visuals on Linux.** "Auto Capture is unavailable" is gone:
+  the app now records the default output's monitor through `parec` (PulseAudio
+  or PipeWire) and feeds it through the same spectrum/waveform and song
+  recording path as Windows. Needs `parec` (package `pulseaudio-utils`).
+- **Launches on the NVIDIA card under Wayland.** WebKitGTK aborted with a
+  Wayland protocol error on NVIDIA's proprietary driver; the app now turns off
+  WebKit's DMABUF renderer when it is started on the discrete GPU (PRIME
+  offload), keeping GPU compositing. An explicit setting is respected.
+- **Linux launcher.** The deb/rpm desktop entry prefers the discrete GPU, and
+  now has real categories and a correct description.
+
 ## 0.52.0 — 2026-10-08
 
 - **Now-playing detection on Linux.** Detection was SMTC-only, so on Linux
