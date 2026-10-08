@@ -43,11 +43,11 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use std::io::Write;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use std::sync::Mutex;
 
 use tauri::AppHandle;
@@ -63,19 +63,19 @@ use tauri::AppHandle;
 /// Below this, a recording is not worth transcribing. Mirrors
 /// `capture.js`'s `MIN_USEFUL_SECONDS` — this replaces that JS-side capture,
 /// so it keeps the same threshold rather than inventing a new one.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const MIN_USEFUL_SECONDS: f64 = 20.0;
 
 /// Ceiling on one recording, mirroring `capture.js`'s `MAX_SECONDS` (12 min).
 /// Bounds disk use for a DJ set or a stream that never changes track — the
 /// recording made up to this point stays valid, it just stops growing.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const MAX_RECORDING_SECONDS: f64 = 12.0 * 60.0;
 
 /// Raw mono PCM at the capture's native sample rate, streamed to a temp file.
 /// Resampling to Whisper's 16 kHz happens once, after the fact, in
 /// `inference::resample_to_16k` — this only ever writes what it is given.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 struct RecordingSink {
     writer: std::io::BufWriter<std::fs::File>,
     path: std::path::PathBuf,
@@ -84,7 +84,7 @@ struct RecordingSink {
     max_samples: u64,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl RecordingSink {
     fn create(path: std::path::PathBuf, sample_rate: u32) -> std::io::Result<Self> {
         let file = std::fs::File::create(&path)?;
@@ -108,9 +108,9 @@ impl RecordingSink {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 static RECORDING: Mutex<Option<RecordingSink>> = Mutex::new(None);
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 static RECORDING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh path for one recording. Includes the process id and a counter —
@@ -118,7 +118,7 @@ static RECORDING_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// a second one while the first is active), but because a crashed previous
 /// session's temp file must never collide with a new one during the window
 /// between processes.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn recording_temp_path() -> std::path::PathBuf {
     let n = RECORDING_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("{RECORDING_PREFIX}{}-{n}.pcm", std::process::id()))
@@ -137,7 +137,7 @@ fn recording_temp_path() -> std::path::PathBuf {
 /// samples to a file about to be read as 48 kHz would not fail — it would
 /// produce a transcription whose timestamps drift silently, which is the one
 /// failure mode this pipeline has no way to notice.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn record_batch(samples: &[f32], rate: u32) {
     if let Ok(mut slot) = RECORDING.try_lock() {
         if let Some(sink) = slot.as_mut() {
@@ -225,7 +225,7 @@ pub fn set_waveform(enabled: bool) {
 // capture loop reads the flag back, while the tests run on every platform. Its
 // writer `set_waveform` needs no such treatment — that one is reached from a
 // cross-platform Tauri command.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub fn waveform_enabled() -> bool {
     WAVEFORM.load(Ordering::Relaxed)
 }
@@ -235,12 +235,12 @@ pub fn waveform_enabled() -> bool {
 /// same WASAPI thread `native-audio` frames already come from, so it fails if
 /// capture is not already running (nothing to tap) or a recording is already
 /// in progress (call `stop_recording` first).
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn start_recording() -> bool {
-    imp::start_recording()
+    common::start_recording()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn start_recording() -> bool {
     false
 }
@@ -250,12 +250,12 @@ pub fn start_recording() -> bool {
 /// worth transcribing (`MIN_USEFUL_SECONDS`, in which case the file is
 /// deleted here rather than left for the caller to notice and clean up).
 /// The caller owns the returned file: read it, resample it, delete it.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn stop_recording() -> Option<(std::path::PathBuf, u32)> {
-    imp::stop_recording()
+    common::stop_recording()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn stop_recording() -> Option<(std::path::PathBuf, u32)> {
     None
 }
@@ -265,12 +265,12 @@ pub fn stop_recording() -> Option<(std::path::PathBuf, u32)> {
 /// track. Unlike `stop_recording`, this never returns anything and never
 /// applies the length check: a discard is a discard regardless of how much
 /// was captured, and the temp file is always deleted.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn discard_recording() {
-    imp::discard_recording();
+    common::discard_recording();
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn discard_recording() {}
 
 /// Build one `native-audio` payload.
@@ -283,7 +283,7 @@ pub fn discard_recording() {}
 // Only the Windows capture loop calls this, but the tests below run on every
 // platform. Without the allow, CI's Linux `clippy -D warnings` fails on dead
 // code while building the lib target with `cfg(test)` off.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 fn build_payload(waveform: Option<&[u8]>, spectrum: &[u8]) -> serde_json::Value {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
@@ -295,52 +295,47 @@ fn build_payload(waveform: Option<&[u8]>, spectrum: &[u8]) -> serde_json::Value 
     serde_json::Value::Object(obj)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn start_capture(app: AppHandle) {
     WAVEFORM.store(true, Ordering::Relaxed);
     imp::start(app);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn stop_capture() {
-    imp::stop();
+    common::stop();
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn start_capture(_app: AppHandle) {
     WAVEFORM.store(true, Ordering::Relaxed);
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn stop_capture() {}
 
-#[cfg(windows)]
-mod imp {
+/// What the platform capture threads share: the capture flag, the recorder
+/// hooks, and the PCM -> byte-spectrum/waveform conversion that reproduces a
+/// Web Audio AnalyserNode. Only how raw samples are obtained differs per OS
+/// (WASAPI loopback on Windows, a `parec` monitor on Linux), so that is all
+/// `imp` contains.
+#[cfg(any(windows, target_os = "linux"))]
+mod common {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
-    use rustfft::{num_complex::Complex, FftPlanner};
+    use rustfft::num_complex::Complex;
     use tauri::{AppHandle, Emitter};
-
-    use windows::core::Result;
-    use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-        MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK,
-    };
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
-    };
 
     /// One-shot guard: `true` while the capture thread is (or should be) running.
     /// The thread polls it and exits when it flips to `false`.
-    static CAPTURING: AtomicBool = AtomicBool::new(false);
+    pub(super) static CAPTURING: AtomicBool = AtomicBool::new(false);
 
     /// The native device's sample rate, published by `run` once the device is
     /// open. `start_recording` (called from a command handler thread, not
     /// this one) reads it to size a `RecordingSink`. 0 means "not currently
     /// captured" — real capture rates are never 0, so it doubles as a flag.
-    static CAPTURE_SAMPLE_RATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    pub(super) static CAPTURE_SAMPLE_RATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     /// See `audio::start_recording`.
     pub(super) fn start_recording() -> bool {
@@ -388,11 +383,114 @@ mod imp {
         }
     }
 
-    const FFT: usize = 1024; // AnalyserNode fftSize
-    const BINS: usize = 512; // frequencyBinCount = fftSize / 2
-    const SMOOTH: f32 = 0.55; // smoothingTimeConstant, applied to linear magnitude
-    const EMIT_EVERY: Duration = Duration::from_millis(20); // ~50 Hz
-    const REPORT_EVERY: Duration = Duration::from_secs(3); // diagnostic heartbeat
+    pub(super) const FFT: usize = 1024; // AnalyserNode fftSize
+    pub(super) const BINS: usize = 512; // frequencyBinCount = fftSize / 2
+    pub(super) const SMOOTH: f32 = 0.55; // smoothingTimeConstant, applied to linear magnitude
+    pub(super) const EMIT_EVERY: Duration = Duration::from_millis(20); // ~50 Hz
+    pub(super) const REPORT_EVERY: Duration = Duration::from_secs(3); // diagnostic heartbeat
+
+    /// Blackman window, the same shape a Web Audio AnalyserNode applies before
+    /// its FFT — without it the spectrum leaks badly and the bands smear.
+    pub(super) fn blackman() -> [f32; FFT] {
+        let mut w = [0f32; FFT];
+        let n = FFT as f32 - 1.0;
+        for (i, wi) in w.iter_mut().enumerate() {
+            let a = 2.0 * std::f32::consts::PI * i as f32 / n;
+            *wi = 0.42 - 0.5 * a.cos() + 0.08 * (2.0 * a).cos();
+        }
+        w
+    }
+
+    /// Build the waveform + spectrum bytes and emit them. See the module doc
+    /// for why the spectrum is auto-gained rather than dB-scaled to a fixed
+    /// range, and why the waveform is omitted when nothing consumes it.
+    pub(super) fn emit_frame(
+        app: &AppHandle,
+        ring: &[f32; FFT],
+        widx: usize,
+        win: &[f32; FFT],
+        fft: &dyn rustfft::Fft<f32>,
+        mag: &mut [f32; BINS],
+        ceiling: &mut f32,
+    ) {
+        // The spectrum drives every consumer; the waveform has one, and it is
+        // often not running. Skip the byte conversion (and, below, the base64)
+        // when it is not wanted — the FFT input still needs every sample.
+        let want_waveform = super::waveform_enabled();
+
+        // Unwrap the circular buffer into chronological order.
+        let mut time_bytes = [128u8; FFT];
+        let mut buf = vec![Complex { re: 0.0f32, im: 0.0f32 }; FFT];
+        for i in 0..FFT {
+            let s = ring[(widx + i) % FFT];
+            if want_waveform {
+                // getByteTimeDomainData: 128 = zero-crossing, full-scale spans 0..255.
+                let t = (s * 128.0 + 128.0).clamp(0.0, 255.0);
+                time_bytes[i] = t as u8;
+            }
+            buf[i] = Complex { re: s * win[i], im: 0.0 };
+        }
+
+        fft.process(&mut buf);
+
+        let mut peak = 0f32;
+        for i in 0..BINS {
+            let m = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt();
+            mag[i] = SMOOTH * mag[i] + (1.0 - SMOOTH) * m;
+            if mag[i] > peak {
+                peak = mag[i];
+            }
+        }
+
+        // Auto-gain: rise instantly on a new peak, decay ~1.5%/frame (roughly
+        // a 1s half-life at 50Hz) so a quiet passage doesn't get amplified
+        // into visual noise, but a loud chorus after a quiet verse is picked
+        // up within a beat or two.
+        if peak > *ceiling {
+            *ceiling = peak;
+        } else {
+            *ceiling *= 0.985;
+        }
+        let ceil = ceiling.max(0.0005); // floor so near-silence can't divide by ~0
+
+        let mut freq_bytes = [0u8; BINS];
+        for i in 0..BINS {
+            freq_bytes[i] = (mag[i] / ceil * 255.0).clamp(0.0, 255.0) as u8;
+        }
+
+        let _ = app.emit(
+            "native-audio",
+            super::build_payload(want_waveform.then_some(&time_bytes[..]), &freq_bytes),
+        );
+    }
+
+    /// Ask the capture thread to exit. It polls the flag.
+    pub(super) fn stop() {
+        CAPTURING.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(windows)]
+mod imp {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use rustfft::FftPlanner;
+    use tauri::AppHandle;
+
+    use super::common::{
+        blackman, emit_frame, BINS, CAPTURE_SAMPLE_RATE, CAPTURING, EMIT_EVERY, FFT, REPORT_EVERY,
+    };
+
+    use windows::core::Result;
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
 
     pub fn start(app: AppHandle) {
         // If a capture is already live, do nothing (idempotent start).
@@ -405,22 +503,6 @@ mod imp {
             }
             CAPTURING.store(false, Ordering::SeqCst);
         });
-    }
-
-    pub fn stop() {
-        CAPTURING.store(false, Ordering::SeqCst);
-    }
-
-    /// Blackman window, the same shape a Web Audio AnalyserNode applies before
-    /// its FFT — without it the spectrum leaks badly and the bands smear.
-    fn blackman() -> [f32; FFT] {
-        let mut w = [0f32; FFT];
-        let n = FFT as f32 - 1.0;
-        for (i, wi) in w.iter_mut().enumerate() {
-            let a = 2.0 * std::f32::consts::PI * i as f32 / n;
-            *wi = 0.42 - 0.5 * a.cos() + 0.08 * (2.0 * a).cos();
-        }
-        w
     }
 
     unsafe fn run(app: &AppHandle) -> Result<()> {
@@ -574,68 +656,142 @@ mod imp {
         }
         sum / channels as f32
     }
+}
 
-    /// Build the waveform + spectrum bytes and emit them. See the module doc
-    /// for why the spectrum is auto-gained rather than dB-scaled to a fixed
-    /// range, and why the waveform is omitted when nothing consumes it.
-    fn emit_frame(
-        app: &AppHandle,
-        ring: &[f32; FFT],
-        widx: usize,
-        win: &[f32; FFT],
-        fft: &dyn rustfft::Fft<f32>,
-        mag: &mut [f32; BINS],
-        ceiling: &mut f32,
-    ) {
-        // The spectrum drives every consumer; the waveform has one, and it is
-        // often not running. Skip the byte conversion (and, below, the base64)
-        // when it is not wanted — the FFT input still needs every sample.
-        let want_waveform = super::waveform_enabled();
+/// Linux capture: record the default output's monitor source with `parec`
+/// (PulseAudio or PipeWire's pulse layer), mono float32 at a fixed rate, and
+/// feed it through the same DSP as Windows.
+///
+/// A child process rather than a PulseAudio/PipeWire crate: "std first", and
+/// `parec` already resolves `@DEFAULT_MONITOR@` to whatever the default sink
+/// is, including after the user switches output. A reader thread owns the
+/// pipe and the main loop polls with a timeout, because a blocking `read`
+/// would not notice `stop_capture` until the next sample arrived.
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::{Duration, Instant};
 
-        // Unwrap the circular buffer into chronological order.
-        let mut time_bytes = [128u8; FFT];
-        let mut buf = vec![Complex { re: 0.0f32, im: 0.0f32 }; FFT];
-        for i in 0..FFT {
-            let s = ring[(widx + i) % FFT];
-            if want_waveform {
-                // getByteTimeDomainData: 128 = zero-crossing, full-scale spans 0..255.
-                let t = (s * 128.0 + 128.0).clamp(0.0, 255.0);
-                time_bytes[i] = t as u8;
+    use rustfft::FftPlanner;
+    use tauri::AppHandle;
+
+    use super::common::{
+        blackman, emit_frame, BINS, CAPTURE_SAMPLE_RATE, CAPTURING, EMIT_EVERY, FFT, REPORT_EVERY,
+    };
+
+    /// Fixed rather than the device's own: `parec` resamples for us, and the
+    /// recorder needs one known rate to stamp on the file.
+    const RATE: u32 = 48_000;
+
+    pub fn start(app: AppHandle) {
+        if CAPTURING.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        std::thread::spawn(move || {
+            if let Err(err) = run(&app) {
+                eprintln!("[audio] monitor capture failed: {err} (is `parec` installed? it ships in pulseaudio-utils)");
             }
-            buf[i] = Complex { re: s * win[i], im: 0.0 };
-        }
+            CAPTURE_SAMPLE_RATE.store(0, Ordering::SeqCst);
+            CAPTURING.store(false, Ordering::SeqCst);
+        });
+    }
 
-        fft.process(&mut buf);
+    fn run(app: &AppHandle) -> std::io::Result<()> {
+        let mut child = Command::new("parec")
+            .args([
+                "--device=@DEFAULT_MONITOR@",
+                "--format=float32le",
+                "--rate=48000",
+                "--channels=1",
+                "--latency-msec=20",
+                "--client-name=lyric-overlay",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("parec has no stdout"))?;
+        CAPTURE_SAMPLE_RATE.store(RATE, Ordering::SeqCst);
+        eprintln!("[audio] monitor: capturing the default output at {RATE} Hz mono");
 
-        let mut peak = 0f32;
-        for i in 0..BINS {
-            let m = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt();
-            mag[i] = SMOOTH * mag[i] + (1.0 - SMOOTH) * m;
-            if mag[i] > peak {
-                peak = mag[i];
+        let (tx, rx) = mpsc::channel::<Vec<f32>>();
+        std::thread::spawn(move || {
+            let mut raw = [0u8; 4096];
+            // A read can end mid-float; carry the remainder to the next one.
+            let mut pending: Vec<u8> = Vec::new();
+            while let Ok(n) = stdout.read(&mut raw) {
+                if n == 0 {
+                    break; // parec exited
+                }
+                pending.extend_from_slice(&raw[..n]);
+                let whole = pending.len() / 4 * 4;
+                let samples: Vec<f32> = pending[..whole]
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                pending.drain(..whole);
+                if tx.send(samples).is_err() {
+                    break; // main loop is gone
+                }
+            }
+        });
+
+        let mut ring = [0f32; FFT];
+        let mut widx = 0usize;
+        let win = blackman();
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT);
+        let mut mag = [0f32; BINS];
+        let mut ceiling = 0.0005f32;
+        let mut last_emit = Instant::now();
+        let mut last_report = Instant::now();
+        let mut peak_since_report = 0f32;
+        let mut samples_since_report = 0u64;
+
+        let mut outcome = Ok(());
+        while CAPTURING.load(Ordering::SeqCst) {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(samples) => {
+                    for &s in &samples {
+                        peak_since_report = peak_since_report.max(s.abs());
+                        ring[widx] = s;
+                        widx = (widx + 1) % FFT;
+                    }
+                    super::record_batch(&samples, RATE);
+                    samples_since_report += samples.len() as u64;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    outcome = Err(std::io::Error::other("parec stopped producing audio"));
+                    break;
+                }
+            }
+
+            if last_emit.elapsed() >= EMIT_EVERY {
+                last_emit = Instant::now();
+                emit_frame(app, &ring, widx, &win, &*fft, &mut mag, &mut ceiling);
+            }
+            if last_report.elapsed() >= REPORT_EVERY {
+                eprintln!(
+                    "[audio] monitor: {samples_since_report} samples captured, peak={peak_since_report:.4}, agc ceiling={ceiling:.4}"
+                );
+                last_report = Instant::now();
+                peak_since_report = 0.0;
+                samples_since_report = 0;
             }
         }
 
-        // Auto-gain: rise instantly on a new peak, decay ~1.5%/frame (roughly
-        // a 1s half-life at 50Hz) so a quiet passage doesn't get amplified
-        // into visual noise, but a loud chorus after a quiet verse is picked
-        // up within a beat or two.
-        if peak > *ceiling {
-            *ceiling = peak;
-        } else {
-            *ceiling *= 0.985;
-        }
-        let ceil = ceiling.max(0.0005); // floor so near-silence can't divide by ~0
-
-        let mut freq_bytes = [0u8; BINS];
-        for i in 0..BINS {
-            freq_bytes[i] = (mag[i] / ceil * 255.0).clamp(0.0, 255.0) as u8;
-        }
-
-        let _ = app.emit(
-            "native-audio",
-            super::build_payload(want_waveform.then_some(&time_bytes[..]), &freq_bytes),
-        );
+        // Killing the child closes the pipe, which ends the reader thread.
+        let _ = child.kill();
+        let _ = child.wait();
+        eprintln!("[audio] monitor: capture stopped");
+        outcome
     }
 }
 

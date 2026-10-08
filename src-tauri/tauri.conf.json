@@ -32,6 +32,10 @@
     "active": true,
     "targets": ["nsis", "msi", "app", "dmg", "deb", "rpm", "appimage"],
     "createUpdaterArtifacts": true,
+    "linux": {
+      "deb": { "desktopTemplate": "linux/lyric-overlay.desktop" },
+      "rpm": { "desktopTemplate": "linux/lyric-overlay.desktop" }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
