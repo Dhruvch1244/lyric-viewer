@@ -643,6 +643,12 @@ mod imp {
 mod tests {
     use super::*;
 
+    /// Serialises the tests that call `record_batch`. It takes the process-
+    /// global RECORDING lock with `try_lock` and silently drops the packet on
+    /// contention, so two such tests running in parallel make the active one
+    /// lose samples at random (seen in CI).
+    static RECORDING_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn payload_carries_both_halves_when_the_waveform_is_wanted() {
         let time = [128u8; 4];
@@ -755,6 +761,7 @@ mod tests {
         // Guards the try_lock fast path the real capture thread relies on:
         // most packets arrive with no recording active, and this must not
         // panic, block, or require special-casing by the caller.
+        let _guard = RECORDING_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         record_batch(&[0.1, 0.2, -0.3], 48_000);
     }
 
@@ -765,11 +772,9 @@ mod tests {
         // static, the same lock, and the same MIN_USEFUL_SECONDS gate that
         // imp::stop_recording applies.
         //
-        // The ONLY test in this file that touches the RECORDING static — it
-        // is process-global, so a second test doing the same concurrently
-        // (Rust runs tests in parallel by default) would race it. If another
-        // test ever needs to, give both a serialising guard rather than
-        // trusting timing.
+        // RECORDING is process-global and Rust runs tests in parallel, so
+        // every test that calls record_batch holds RECORDING_TEST_GUARD.
+        let _guard = RECORDING_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let rate = 100u32;
         let path = recording_temp_path();
         {
