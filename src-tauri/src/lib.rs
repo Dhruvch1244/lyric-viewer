@@ -78,27 +78,30 @@ use tauri::Manager;
 pub(crate) use state::{maybe_offer_localcli, CRASH_REPORTING_ENABLED};
 
 /// WebKitGTK aborts with `Error 71 (Protocol error) dispatching to Wayland
-/// display` when it renders through NVIDIA's proprietary driver (reproduced
-/// on a hybrid Intel + GTX 1650 Ti laptop launched via `switcherooctl launch`).
-/// Turning off its DMABUF renderer avoids the crash while keeping GPU
-/// compositing; the heavier `WEBKIT_DISABLE_COMPOSITING_MODE` also works but
-/// drops to software, which defeats choosing the discrete card. Scoped to
-/// launches that actually target NVIDIA (the PRIME offload variables that
-/// switcheroo/GNOME set) so Intel/AMD launches keep the faster path, and it
-/// yields to an explicit user setting. Must run before the webview exists.
+/// display` when it renders through NVIDIA's proprietary driver, from
+/// egl-wayland's explicit-sync handling. Disabling just that avoids the crash.
+///
+/// This replaces an earlier `WEBKIT_DISABLE_DMABUF_RENDERER=1` workaround that
+/// also stopped the crash but was measured (frames presented to the compositor,
+/// via `WAYLAND_DEBUG`, 165 Hz panel, GTX 1650 Ti) at 6 fps — identical to
+/// forced software rendering — against 43 fps with the DMABUF path kept and
+/// only explicit sync off. Applied whenever NVIDIA's driver is loaded rather
+/// than only on PRIME-offload launches: the variable is read only by NVIDIA's
+/// EGL, so it does nothing on an Intel/AMD render path, and the crash also
+/// occurs when the compositor itself runs on the NVIDIA GPU. Yields to an
+/// explicit user setting. Must run before the webview exists.
 #[cfg(target_os = "linux")]
-fn apply_nvidia_webkit_workaround() {
-    let on_nvidia = std::env::var_os("__NV_PRIME_RENDER_OFFLOAD").is_some()
-        || std::env::var("__GLX_VENDOR_LIBRARY_NAME").is_ok_and(|v| v == "nvidia");
-    if on_nvidia && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+fn apply_nvidia_wayland_workaround() {
+    let nvidia_loaded = std::path::Path::new("/proc/driver/nvidia/version").exists();
+    if nvidia_loaded && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+        std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
-    apply_nvidia_webkit_workaround();
+    apply_nvidia_wayland_workaround();
 
     // The getDisplayMedia share-picker bypass for loopback audio is set via the
     // window's `additionalBrowserArgs` in tauri.conf.json — that is the path wry

@@ -2,6 +2,15 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.53.1 — 2026-10-08
+
+- **NVIDIA on Linux ran about 7x slower than it should.** 0.53.0 avoided the
+  Wayland startup crash by disabling WebKit's DMABUF renderer, which dropped
+  rendering to the software path: measured 6 fps (the same as forced software
+  rendering) on a GTX 1650 Ti, 165 Hz panel. The crash comes from egl-wayland's
+  explicit sync, so only that is disabled now and the GPU buffer path is kept:
+  43 fps, with the GPU actually busy.
+
 ## 0.53.0 — 2026-10-08
 
 - **Audio-reactive visuals on Linux.** "Auto Capture is unavailable" is gone:
