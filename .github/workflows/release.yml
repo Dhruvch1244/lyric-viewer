@@ -119,3 +119,61 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # Native Arch Linux package (packaging/arch/PKGBUILD), attached to the same
+  # draft release. Built in an archlinux container rather than on the Ubuntu
+  # runner so it links Arch's own webkit2gtk-4.1/GTK, not 22.04's — the .deb
+  # and AppImage above already cover "runs anywhere"; this is the one pacman
+  # installs and upgrades. After `build` so tauri-action has already created
+  # the draft release this uploads into.
+  arch:
+    needs: build
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    permissions:
+      contents: write
+    steps:
+      # git before checkout, or actions/checkout falls back to a REST tarball
+      # with no .git — and `git archive` below needs the repository.
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rust nodejs npm github-cli \
+            webkit2gtk-4.1 gtk3 libayatana-appindicator dbus hicolor-icon-theme
+
+      - uses: actions/checkout@v4
+
+      - name: Build package
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # A tag build packages the tag's version; a manual dispatch from a
+          # branch packages whatever version that tree declares.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)"
+          fi
+          cd packaging/arch
+          sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
+          # Pre-seed the source tarball so makepkg builds this exact checkout
+          # instead of downloading GitHub's tag archive.
+          git -C "$GITHUB_WORKSPACE" archive --prefix="lyric-viewer-$ver/" \
+            -o "$PWD/lyric-overlay-$ver.tar.gz" HEAD
+          # makepkg refuses to run as root.
+          useradd -m builder
+          chown -R builder:builder .
+          sudo -u builder makepkg --noconfirm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyric-overlay-arch
+          path: packaging/arch/*.pkg.tar.zst
+          if-no-files-found: error
+
+      - name: Attach to the draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" packaging/arch/*.pkg.tar.zst \
+            --repo "$GITHUB_REPOSITORY" --clobber

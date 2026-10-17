@@ -112,14 +112,15 @@ pub fn run() {
     // only. The Microsoft Store build (`--features store`) is a read-only
     // package updated by the Store itself, so the updater plugin is omitted
     // there — which also makes check_for_update()/install_update() silent
-    // no-ops via their `app.updater()` guards.
+    // no-ops via their `app.updater()` guards. `distro` (the Arch package)
+    // omits it for the same reason: pacman owns the binary and its updates.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
 
-    #[cfg(not(feature = "store"))]
+    #[cfg(not(any(feature = "store", feature = "distro")))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     // Same store exclusion as the updater above: Store builds use the AppX

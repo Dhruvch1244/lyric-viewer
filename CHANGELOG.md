@@ -2,6 +2,13 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- **Native Arch Linux package.** Releases now include a `.pkg.tar.zst` built
+  from `packaging/arch/PKGBUILD` in an Arch container, linked against Arch's
+  own WebKitGTK. Install with `pacman -U`; it leaves updates to pacman
+  (new `distro` cargo feature compiles out the self-updater).
+
 ## 0.53.1 — 2026-10-08
 
 - **NVIDIA on Linux ran about 7x slower than it should.** 0.53.0 avoided the

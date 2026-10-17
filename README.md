@@ -110,6 +110,25 @@ Produces a signed-by-updater (not Authenticode-signed — see
 `src-tauri/target/release/bundle/nsis/`. Tagged pushes (`v*`) build and publish
 this automatically for Windows, macOS and Linux via GitHub Actions.
 
+### Arch Linux (and Manjaro, EndeavourOS, ...)
+
+Each release also ships a native `lyric-overlay-<version>-x86_64.pkg.tar.zst`,
+built from source against Arch's own WebKitGTK:
+
+```sh
+sudo pacman -U lyric-overlay-*.pkg.tar.zst
+```
+
+Or build it yourself from `packaging/arch/PKGBUILD`:
+
+```sh
+cd packaging/arch && makepkg -si
+```
+
+The package has no self-updater (`--features distro`) — pacman owns the
+binary, so upgrade by installing the newer package. Audio-reactive mode needs
+`parec`, which comes with `libpulse`.
+
 ## Performance
 
 The backdrop is the main cost, so it's tuned to stay smooth:
