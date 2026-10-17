@@ -47,7 +47,6 @@ prepare() {
 build() {
   cd "$(_srcdir)"
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
   # --no-bundle: makepkg is the bundler here. Still runs beforeBuildCommand,
   # which vendors the Whisper/Demucs WASM runtimes into the embedded frontend.
   npx tauri build --no-bundle --features distro -- --locked
@@ -55,7 +54,7 @@ build() {
 
 package() {
   cd "$(_srcdir)"
-  install -Dm755 target/release/lyric-overlay "$pkgdir/usr/bin/lyric-overlay"
+  install -Dm755 src-tauri/target/release/lyric-overlay "$pkgdir/usr/bin/lyric-overlay"
 
   # Same desktop entry the deb/rpm bundles render from this template.
   sed -e 's/{{exec}}/lyric-overlay/g' \
