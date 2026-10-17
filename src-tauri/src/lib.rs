@@ -111,8 +111,9 @@ pub fn run() {
     // The GitHub self-updater is compiled in for the standalone (NSIS) build
     // only. The Microsoft Store build (`--features store`) is a read-only
     // package updated by the Store itself, so the updater plugin is omitted
-    // there — which also makes check_for_update()/install_update() silent
-    // no-ops via their `app.updater()` guards. `distro` (the Arch package)
+    // there, and check_for_update() returns early on the same features (it
+    // cannot rely on `app.updater()`, which panics when the plugin is absent).
+    // `distro` (the Arch package)
     // omits it for the same reason: pacman owns the binary and its updates.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

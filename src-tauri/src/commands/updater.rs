@@ -38,6 +38,13 @@ fn set_state(app: &AppHandle, state: Value) {
 /// does — reporting progress via the small pill the whole time.
 pub(crate) fn check_for_update(app: AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
+    // Must mirror the plugin gating in `run()`. `app.updater()` is not a
+    // fallible guard when the plugin was never registered: it panics inside
+    // Tauri's `state()` ("state() called before manage() for UpdaterState"),
+    // which every store/distro launch logged until this check existed.
+    if cfg!(any(feature = "store", feature = "distro")) {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         let Ok(updater) = app.updater() else { return };
         match updater.check().await {
