@@ -485,6 +485,26 @@ if (reducedMotionQuery) {
   else if (reducedMotionQuery.addListener) reducedMotionQuery.addListener(onChange);
 }
 
+/* --------------------------------------------------------- WebKitGTK (Linux) */
+/*
+  WebKitGTK re-rasterises every `backdrop-filter` region on each frame the
+  animated backdrop underneath changes, and the chrome has ~17 of them (HUD
+  pills, buttons, panels). Measured in the real app on Linux (GTX 1650 Ti +
+  UHD 630, Hyprland, WebKitGTK 2.54, rAF over 3s windows, three interleaved
+  runs each): 3 fps with the blurs, 54-55 fps with only the blurs removed —
+  dropping the WebGL swirl or the 2D backdrop instead moved it to 3-4 fps.
+  WebView2 composites the same blurs cheaply, so this stays Linux-only.
+
+  Visually near-free: the blurred surfaces are already ~94% opaque
+  (--chrome-surface), so the blur was barely visible through them anyway.
+  Detected by UA — WebKitGTK's has "Linux" and no Chromium token — and set on
+  <html> so styles.css can switch the blurs off in one rule.
+*/
+document.documentElement.classList.toggle(
+  'webkitgtk',
+  /\bLinux\b/.test(navigator.userAgent) && !/Chrome\//.test(navigator.userAgent),
+);
+
 /* Whether the overlay window is on screen. False after Ctrl+Alt+H or the tray's
    hide. Both render loops park on this — see the onVisibility handler. */
 let overlayVisible = true;

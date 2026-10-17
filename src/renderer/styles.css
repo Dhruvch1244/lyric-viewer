@@ -3065,3 +3065,12 @@ body.engine-milkdrop .stage::before {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* WebKitGTK repaints every backdrop-filter region per frame over the animated
+   backdrop: 3 fps with them, 54-55 fps without, measured in the real app on
+   Linux. The surfaces are ~94% opaque, so the blur was barely visible anyway.
+   `html.webkitgtk` is set in renderer.js — see the comment there. */
+html.webkitgtk * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
