@@ -1,0 +1,72 @@
+# Maintainer: Dhruv Choudhary <dhruvchoudhary306@gmail.com>
+#
+# Native Arch Linux package, built from source against Arch's own
+# webkit2gtk-4.1 — rather than repackaging the .deb, which is built on
+# Ubuntu 22.04 and links whatever that release ships. release.yml builds this
+# in an archlinux container on every v* tag and attaches the resulting
+# .pkg.tar.zst to the GitHub release; it also works as-is for a local build:
+#
+#   cd packaging/arch && makepkg -si
+#
+# Built with `--features distro`, which compiles out the GitHub self-updater:
+# pacman owns /usr/bin/lyric-overlay, so updates come from a newer package,
+# never from the app rewriting its own binary.
+
+pkgname=lyric-overlay
+pkgver=0.53.1
+pkgrel=1
+pkgdesc='Beat-aware synced lyric overlay with an audio-reactive backdrop'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Dhruvch1244/lyric-viewer'
+license=('MIT')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libayatana-appindicator' # tray icon (dlopen'd at runtime)
+  'dbus'                    # MPRIS now-playing + notifications
+  'hicolor-icon-theme'
+)
+makedepends=('rust' 'cargo' 'nodejs' 'npm' 'git')
+optdepends=('libpulse: audio-reactive mode (system audio capture via parec)')
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# The tarball is GitHub's tag archive. release.yml drops a `git archive` of
+# the tagged tree here under the same name instead, which makepkg uses
+# without downloading; its bytes differ from GitHub's, hence SKIP.
+sha256sums=('SKIP')
+
+_srcdir() { echo "$srcdir/lyric-viewer-$pkgver"; }
+
+prepare() {
+  cd "$(_srcdir)"
+  npm install --no-audit --no-fund
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$(_srcdir)"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # --no-bundle: makepkg is the bundler here. Still runs beforeBuildCommand,
+  # which vendors the Whisper/Demucs WASM runtimes into the embedded frontend.
+  npx tauri build --no-bundle --features distro -- --locked
+}
+
+package() {
+  cd "$(_srcdir)"
+  install -Dm755 target/release/lyric-overlay "$pkgdir/usr/bin/lyric-overlay"
+
+  # Same desktop entry the deb/rpm bundles render from this template.
+  sed -e 's/{{exec}}/lyric-overlay/g' \
+      -e 's/{{icon}}/lyric-overlay/g' \
+      -e 's/{{name}}/Lyric Overlay/g' \
+      src-tauri/linux/lyric-overlay.desktop |
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/lyric-overlay.desktop"
+
+  local icons=src-tauri/icons
+  install -Dm644 $icons/32x32.png      "$pkgdir/usr/share/icons/hicolor/32x32/apps/lyric-overlay.png"
+  install -Dm644 $icons/64x64.png      "$pkgdir/usr/share/icons/hicolor/64x64/apps/lyric-overlay.png"
+  install -Dm644 $icons/128x128.png    "$pkgdir/usr/share/icons/hicolor/128x128/apps/lyric-overlay.png"
+  install -Dm644 $icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/lyric-overlay.png"
+}

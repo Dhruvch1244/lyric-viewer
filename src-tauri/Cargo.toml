@@ -27,6 +27,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # as a read-only MSIX that the Store updates itself, so bundling the updater
 # there would only produce a broken "update available" path. See docs/MICROSOFT-STORE.md.
 store = []
+# `distro` compiles out the self-updater for builds a system package manager
+# installs (the Arch package, packaging/arch/PKGBUILD). The binary lives in
+# /usr/bin, owned by pacman: the updater could only fail to replace it, or
+# worse, replace it behind pacman's back. Unlike `store`, autostart stays —
+# on Linux it is a plain ~/.config/autostart entry, which works fine there.
+distro = []
 
 # Optimised release build. LTO + a single codegen unit trade compile time for a
 # smaller, faster binary; strip drops debug symbols. Unwinding is kept (no
