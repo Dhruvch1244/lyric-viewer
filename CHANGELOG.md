@@ -2,6 +2,18 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.54.1 — 2026-10-17
+
+- **Linux ran at 2-3 fps.** WebKitGTK repaints every frosted-glass
+  (`backdrop-filter`) region on each frame the animated backdrop changes, and
+  the controls have about 17 of them. Measured in the app on a GTX 1650 Ti +
+  UHD 630 laptop under Hyprland: 3 fps with the blurs, 54-55 fps without.
+  They are now off on Linux only; the panels behind them were already ~94%
+  opaque, so the look barely changes. Windows is unaffected.
+- **No more panic on every Arch package launch.** The startup update check
+  reached into the self-updater even in builds that compile it out, logging
+  `state() called before manage()`. It now skips the check there.
+
 ## 0.54.0 — 2026-10-17
 
 - **Native Arch Linux package.** Releases now include a `.pkg.tar.zst` built
