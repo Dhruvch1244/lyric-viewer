@@ -248,6 +248,41 @@ pub fn parse_lrc(lrc: &str) -> Vec<Cue> {
     out
 }
 
+/// Pause before each retry of a transient LRCLIB failure (see `call_lrclib`).
+const LRCLIB_RETRY_BACKOFF_MS: [u64; 2] = [800, 2000];
+
+/// Whether an LRCLIB failure is worth retrying: overload (503, observed live
+/// as `{"name":"ServerOverloaded"}`), rate limiting (429), other 5xx, and
+/// transport errors (DNS, reset, timeout). A 404 is a real "no such song"
+/// from `/api/get` and is never retried.
+fn is_transient_status(code: u16) -> bool {
+    code == 429 || (500..600).contains(&code)
+}
+
+/// Send an LRCLIB request, retrying transient failures twice with backoff.
+///
+/// Every call used to be `.call().ok()?`, which turned a momentary 503 into
+/// "no lyrics exist": LRCLIB was observed returning `ServerOverloaded` for
+/// `/api/search` and 200 for the same query seconds later, and the song stayed
+/// on "not found" until the track changed, since nothing re-asks. Worst case
+/// adds ~2.8s on a lookup that would otherwise have failed outright; a hit on
+/// the first try costs nothing extra.
+fn call_lrclib(req: ureq::Request) -> Option<ureq::Response> {
+    let mut attempt = 0;
+    loop {
+        let transient = match req.clone().call() {
+            Ok(resp) => return Some(resp),
+            Err(ureq::Error::Status(code, _)) => is_transient_status(code),
+            Err(ureq::Error::Transport(_)) => true,
+        };
+        if !transient || attempt >= LRCLIB_RETRY_BACKOFF_MS.len() {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(LRCLIB_RETRY_BACKOFF_MS[attempt]));
+        attempt += 1;
+    }
+}
+
 /// LRCLIB's exact-match lookup (`/api/get`) — takes track/artist/duration and
 /// returns 404 (→ `None` here) unless it finds a precise match, instead of
 /// `/api/search`'s free-text fuzzy ranking. Skipped entirely without a
@@ -259,14 +294,13 @@ fn lrclib_get_exact(track: &Track) -> Option<Value> {
     if track.duration_ms <= 0 {
         return None;
     }
-    let resp = ureq::get(LRCLIB_GET)
+    let resp = call_lrclib(ureq::get(LRCLIB_GET)
         .set("User-Agent", USER_AGENT)
         .query("track_name", &clean_title(&track.title))
         .query("artist_name", &clean_artist(&track.artist))
         .query("duration", &(track.duration_ms / 1000).to_string())
         .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .ok()?;
+    )?;
     resp.into_json().ok()
 }
 
@@ -286,12 +320,11 @@ pub fn fetch_plain(track: &Track) -> Option<String> {
     if query.is_empty() {
         return None;
     }
-    let resp = ureq::get(LRCLIB_SEARCH)
+    let resp = call_lrclib(ureq::get(LRCLIB_SEARCH)
         .set("User-Agent", USER_AGENT)
         .query("q", query)
         .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .ok()?;
+    )?;
     let results: Value = resp.into_json().ok()?;
     let arr = results.as_array()?;
     let mut best: Option<String> = None;
@@ -334,12 +367,11 @@ pub fn search(query: &str) -> Option<Vec<Value>> {
     if query.is_empty() {
         return None;
     }
-    let resp = ureq::get(LRCLIB_SEARCH)
+    let resp = call_lrclib(ureq::get(LRCLIB_SEARCH)
         .set("User-Agent", USER_AGENT)
         .query("q", query)
         .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .ok()?;
+    )?;
     let results: Value = resp.into_json().ok()?;
     Some(results.as_array()?.clone())
 }
@@ -349,11 +381,10 @@ pub fn search(query: &str) -> Option<Vec<Value>> {
 /// exists as a second round trip in case the candidate list a search panel is
 /// holding has gone stale by the time something in it is picked.
 pub fn get_by_id(id: i64) -> Option<Value> {
-    let resp = ureq::get(&format!("https://lrclib.net/api/get/{id}"))
+    let resp = call_lrclib(ureq::get(&format!("https://lrclib.net/api/get/{id}"))
         .set("User-Agent", USER_AGENT)
         .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .ok()?;
+    )?;
     resp.into_json().ok()
 }
 
@@ -380,12 +411,11 @@ pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
         return None;
     }
 
-    let resp = ureq::get(LRCLIB_SEARCH)
+    let resp = call_lrclib(ureq::get(LRCLIB_SEARCH)
         .set("User-Agent", USER_AGENT)
         .query("q", query)
         .timeout(std::time::Duration::from_secs(15))
-        .call()
-        .ok()?;
+    )?;
     let results: Value = resp.into_json().ok()?;
     let arr = results.as_array()?;
     if arr.is_empty() {
@@ -425,6 +455,15 @@ pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lrclib_retries_overload_and_rate_limit_but_not_a_miss() {
+        assert!(is_transient_status(503));
+        assert!(is_transient_status(502));
+        assert!(is_transient_status(429));
+        assert!(!is_transient_status(404));
+        assert!(!is_transient_status(400));
+    }
 
     #[test]
     fn clean_title_strips_noise_and_pipe_credits() {
