@@ -2,7 +2,7 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.54.0 — 2026-10-17
 
 - **Native Arch Linux package.** Releases now include a `.pkg.tar.zst` built
   from `packaging/arch/PKGBUILD` in an Arch container, linked against Arch's
