@@ -25,7 +25,20 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: {}
+  # A manual run with `tag` set is a full release, the same as pushing that
+  # tag: tauri-action creates the draft release for it, and GitHub creates the
+  # tag itself (on the commit this ran from) when the draft is published. For
+  # environments that can push branches but not tags. Without `tag` it is a
+  # dry run: everything builds, nothing is published.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create, e.g. v0.54.0 (empty = build only)'
+        required: false
+        default: ''
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
 
 jobs:
   build:
@@ -113,8 +126,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Lyric Overlay ${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'Lyric Overlay ${{ env.RELEASE_TAG }}'
           releaseBody: 'See CHANGELOG.md for details.'
           releaseDraft: true
           prerelease: false
@@ -146,10 +159,10 @@ jobs:
       - name: Build package
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          # A tag build packages the tag's version; a manual dispatch from a
-          # branch packages whatever version that tree declares.
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            ver="${GITHUB_REF_NAME#v}"
+          # A release packages its tag's version; a build-only dispatch
+          # packages whatever version the tree declares.
+          if [ -n "$RELEASE_TAG" ]; then
+            ver="${RELEASE_TAG#v}"
           else
             ver="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)"
           fi
@@ -171,9 +184,9 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to the draft release
-        if: github.ref_type == 'tag'
+        if: env.RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" packaging/arch/*.pkg.tar.zst \
+          gh release upload "$RELEASE_TAG" packaging/arch/*.pkg.tar.zst \
             --repo "$GITHUB_REPOSITORY" --clobber
