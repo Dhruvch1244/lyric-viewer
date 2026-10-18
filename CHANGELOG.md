@@ -2,6 +2,33 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.55.0 — 2026-10-18
+
+- **MilkDrop is the default look for new songs**, and every song opens on a
+  random preset from the whole 1755-preset catalogue instead of one of two
+  fixed starting points. The scene list has one MilkDrop entry instead of two.
+- **Shuffle draws from everything, at random.** With two liked presets the old
+  favourites-only pool alternated between exactly those two; likes now only
+  mark presets under ♥ in the browser, and hidden presets stay out.
+- **✳ MilkDrop is always on the bar.** It switches the song to MilkDrop if
+  needed and opens the preset browser (also `V`).
+- **Sharper backdrop.** The swirl field's resolution ladder only climbed above
+  77 fps, which a 60 Hz display, and WebKitGTK on any display, never reaches,
+  so it sat at 55% resolution stretched to fit. It now climbs whenever frames
+  hold the display's rate, up to full resolution: measured in the app, 60 fps
+  with the same 18-19 ms worst frame as before.
+- **Lyrics survive a flaky network.** A lookup that cannot reach LRCLIB now
+  says so and retries after 10, 30 and 60 seconds while the song plays,
+  instead of reporting "no synced lyrics found".
+- **"Couldn't find lyrics or a cover" popup** with one-click Search lyrics /
+  Find cover. The lyric search refills and runs for each new song, and the
+  cover picker takes free text.
+- **Claude CLI works on Linux and macOS.** The CLI choice was saved under the
+  Windows-only `%APPDATA%`, so connecting it was silently forgotten elsewhere.
+  `claude` is now also found in `~/.local/bin` when a desktop launch's PATH
+  lacks it. A Claude CLI card in the 🔑 panel has Connect, Test and a model
+  picker (Opus 5.5 by default); the API-key path moves to Opus 5.5 too.
+
 ## 0.54.1 — 2026-10-17
 
 - **Linux ran at 2-3 fps.** WebKitGTK repaints every frosted-glass

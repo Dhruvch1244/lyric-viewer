@@ -13,7 +13,7 @@
 # never from the app rewriting its own binary.
 
 pkgname=lyric-overlay
-pkgver=0.54.1
+pkgver=0.55.0
 pkgrel=1
 pkgdesc='Beat-aware synced lyric overlay with an audio-reactive backdrop'
 arch=('x86_64' 'aarch64')
