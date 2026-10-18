@@ -5048,6 +5048,11 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.56.0': [
+    '<b>The visuals hit on the beat</b> — MilkDrop now feels every kick, and changes preset on strong beats every ~15 seconds.',
+    '<b>New scenes</b> — Hyperspace, Club, Kaleidoscope, Spectrum 3D and Shader Mix. Press ◈ to cycle.',
+    '<b>Visual intensity</b> — Intense, Normal or Chill, in ⚙ settings.',
+  ],
   '0.55.0': [
     '<b>MilkDrop by default</b> — every new song opens on a random preset from all 1755, and shuffle picks from all of them too.',
     '<b>Sharper visuals</b> — the backdrop now renders at full resolution whenever your machine keeps up.',

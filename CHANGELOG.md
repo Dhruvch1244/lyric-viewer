@@ -2,6 +2,28 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## 0.56.0 — 2026-10-18
+
+- **The visuals hit on the beat.** MilkDrop was fed the raw system waveform,
+  and on a loud, mastered track kick frames were no louder than the frames
+  between them (measured: 0.89x), so presets barely reacted. The waveform is
+  now levelled and boosted on every detected kick: 1.73x on kick frames for
+  the same track.
+- **Visual intensity setting** (⚙): Intense (default) hits harder and changes
+  the MilkDrop preset on strong beats every ~15 seconds; Normal is the old
+  behaviour; Chill is gentle.
+- **New scenes:** Hyperspace, Club, Kaleidoscope and Spectrum 3D, plus Shader
+  Mix, which rotates through all 21 shaders — ten written for the app (also
+  Plasma Pulse, Ring Tunnel, Synthwave, Neon Rings, Shatter, Inferno) and
+  eleven MIT generators from Vidvox's ISF collection. They run on a new ISF
+  (Interactive Shader Format) engine, the format VDMX and Resolume use. Club
+  strobes on the beat, capped at the beat rate and softened by your OS's
+  Reduce Motion setting.
+- **Steadier sharpness.** The frame-rate estimate behind the resolution
+  controls could drift to 2x the real refresh rate on Linux, after which the
+  visuals stopped stepping back up to full resolution. Fixed; every scene
+  measured at a steady 60 fps at full resolution.
+
 ## 0.55.0 — 2026-10-18
 
 - **MilkDrop is the default look for new songs**, and every song opens on a
