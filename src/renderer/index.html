@@ -58,6 +58,10 @@
          and running two at once doubles GPU cost for nothing. -->
     <iframe id="milkdrop" title="MilkDrop visualiser" aria-hidden="true" hidden
             src="milkdrop.html" tabindex="-1" scrolling="no"></iframe>
+    <!-- The third engine: ISF shaders (shaders.js). A plain canvas, not a
+         frame like MilkDrop's: GLSL needs no 'unsafe-eval'. Same depth and the
+         same exclusivity as the other two. -->
+    <canvas id="shaderfx" aria-hidden="true" hidden></canvas>
     <canvas id="backdrop" aria-hidden="true"></canvas>
 
     <header id="topbar" class="topbar">
@@ -335,6 +339,15 @@
             <option value="high">High — sharpest (device pixel ratio)</option>
             <option value="standard">Standard — one CSS pixel per render pixel</option>
             <option value="performance">Performance — lower resolution, lighter</option>
+          </select>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">Visual intensity</span>
+          <select id="keybox-intensity" class="chip" title="How hard the visuals react to the beat, and how often MilkDrop changes preset">
+            <option value="intense">Intense — hard kicks, preset changes every ~15s</option>
+            <option value="normal">Normal — changes on drops (classic)</option>
+            <option value="chill">Chill — gentle, slow changes</option>
           </select>
         </div>
 
@@ -845,6 +858,8 @@
          actually runs. -->
     <script src="demucs.js"></script>
     <script src="milkdrop.js"></script>
+    <script src="vendor/isf.min.js"></script>
+    <script src="shaders.js"></script>
     <script src="presets.js"></script>
     <script src="swirl.js"></script>
     <script src="sprites.js"></script>

@@ -211,7 +211,7 @@
    *
    * @param {number} elapsedSeconds time since the last rendered frame
    */
-  function render(elapsedSeconds) {
+  function render(elapsedSeconds, shape) {
     if (!frame || !ready) return;
 
     let t = null;
@@ -219,11 +219,44 @@
     if (audio && audio.isActive && audio.isActive() && audio.timeDomain) {
       if (!timeBuf) timeBuf = new Uint8Array(1024);
       t = audio.timeDomain(timeBuf) ? timeBuf : null;
+      if (t && shape) shapeWaveform(t, shape);
     }
 
     // Sent as a plain array copy rather than transferred: a transfer detaches
     // the buffer here and it would have to be reallocated every frame.
     post({ type: 'render', t, elapsed: elapsedSeconds });
+  }
+
+  /** Slow-decaying peak of the raw waveform, for the auto-gain below. */
+  let wavePeak = 0.1;
+
+  /**
+   * Make the waveform Butterchurn sees answer the beat (see VIS_INTENSITY in
+   * renderer.js for why this exists): auto-gain it to `target` of full scale,
+   * then multiply by (1 + kickGain * kick) so a kick stands out from the
+   * running average every preset measures itself against. In place, on the
+   * buffer that is about to be posted; clipping on a big kick is fine — it is
+   * a control signal for the visuals, nobody listens to it.
+   *
+   * @param {Uint8Array} buf 128-centred time-domain bytes
+   * @param {{kick:number, target:number, kickGain:number}} shape
+   */
+  function shapeWaveform(buf, shape) {
+    let peak = 0;
+    for (let i = 0; i < buf.length; i += 1) {
+      const v = Math.abs(buf[i] - 128);
+      if (v > peak) peak = v;
+    }
+    peak /= 128;
+    // Rise at once, fall over ~3s, so a quiet bridge is not pumped up into
+    // noise on its first frame and a loud chorus is not clipped for long.
+    wavePeak = peak > wavePeak ? peak : wavePeak * 0.995 + peak * 0.005;
+    if (wavePeak < 0.01) return; // silence: leave it flat rather than amplify hiss
+    const gain = Math.min(8, (shape.target || 0.6) / wavePeak) * (1 + (shape.kickGain || 0) * (shape.kick || 0));
+    for (let i = 0; i < buf.length; i += 1) {
+      const v = 128 + (buf[i] - 128) * gain;
+      buf[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
   }
 
   /**

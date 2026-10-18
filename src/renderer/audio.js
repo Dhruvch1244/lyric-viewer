@@ -612,5 +612,18 @@
       analyser.getByteTimeDomainData(out);
       return true;
     },
+    /**
+     * Fill `out` with the live spectrum (0..255 per bin, low bins first) —
+     * what an ISF `audioFFT` input wants (shaders.js). Unlike the waveform,
+     * the spectrum is always in the native frame, so asking costs nothing.
+     *
+     * @param {Uint8Array} out
+     * @returns {boolean} whether anything was written
+     */
+    frequency: (out) => {
+      if (!running || !analyser || !out) return false;
+      analyser.getByteFrequencyData(out);
+      return true;
+    },
   };
 })();

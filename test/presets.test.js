@@ -111,6 +111,11 @@ test('a transparent-background preset still draws something', () => {
       assert.equal(typeof preset.milkdrop, 'string', `${preset.id} draws nothing`);
       continue;
     }
+    if (preset.engine === 'isf') {
+      // A named shader, or Shader Mix, which picks from the catalogue itself.
+      assert.ok(typeof preset.shader === 'string' || preset.id === 'shaders', `${preset.id} draws nothing`);
+      continue;
+    }
     const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
     assert.ok(on.length > 0, `${preset.id} has a transparent background and no layers`);
   }
@@ -121,7 +126,7 @@ test('every preset names an engine, and only known ones', () => {
   // second engine keep working — but an unknown string must never survive
   // normalisation, or the renderer silently draws nothing.
   for (const preset of VisualPresets.all) {
-    assert.ok(['swirl', 'milkdrop'].includes(preset.engine),
+    assert.ok(['swirl', 'milkdrop', 'isf'].includes(preset.engine),
       `${preset.id} has engine "${preset.engine}"`);
   }
 });

@@ -163,6 +163,17 @@ body.lang-devanagari .ln.is-active {
 
 #milkdrop[hidden] { display: none; }
 
+#shaderfx {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+#shaderfx[hidden] { display: none; }
+
 #backdrop {
   position: fixed;
   inset: 0;
@@ -1068,6 +1079,7 @@ body.mode-wallpaper .poster {
 .mode-compact .nudge,
 .mode-compact #swirl,
 .mode-compact #milkdrop,
+.mode-compact #shaderfx,
 .mode-compact #backdrop {
   display: none !important;
 }
@@ -2349,7 +2361,8 @@ body.keybox-open .hud {
   are neither, and white text over a bright fractal is unreadable in a way the
   app's own visuals never were.
 */
-body.engine-milkdrop .stage::before {
+body.engine-milkdrop .stage::before,
+body.engine-gpu .stage::before {
   content: '';
   position: fixed;
   left: 0;

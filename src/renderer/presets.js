@@ -245,6 +245,23 @@
       layers: {},
       swirl: {},
     },
+
+    /*
+      Shader looks — the third engine (shaders.js), ISF fragment shaders. Same
+      `soloLayer` + `transparentBg` reasoning as MilkDrop: the shader canvas is
+      the whole picture. Each named one is a single shader written for this
+      app (src/renderer/shaders/); "Shader Mix" moves through the whole shader
+      catalogue the way MilkDrop's shuffle moves through presets.
+
+      Club strobes. It is capped at the beat rate in the shader and softened
+      under the OS Reduce Motion setting, but it is a strobe; it is never
+      handed out at random (SECOND_ENGINE below) and only shows when chosen.
+    */
+    { id: 'hyperspace', name: 'Hyperspace', cost: 2, engine: 'isf', shader: 'Hyperspace', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'club', name: 'Club', cost: 2, engine: 'isf', shader: 'Club', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'kaleidoscope', name: 'Kaleidoscope', cost: 2, engine: 'isf', shader: 'Kaleidoscope', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'spectrum3d', name: 'Spectrum 3D', cost: 2, engine: 'isf', shader: 'Spectrum 3D', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'shaders', name: 'Shader Mix', cost: 2, engine: 'isf', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
   ];
 
   const DEFAULT_ID = 'liquid';
@@ -266,8 +283,11 @@
       transparentBg: Boolean(preset.transparentBg),
       /* Which engine draws this look. Defaulted rather than required so every
          preset written before there was a second engine keeps working. */
-      engine: preset.engine === 'milkdrop' ? 'milkdrop' : 'swirl',
+      engine: preset.engine === 'milkdrop' || preset.engine === 'isf' ? preset.engine : 'swirl',
       milkdrop: preset.milkdrop || null,
+      /* The ISF catalogue name a shader look shows; null for Shader Mix, which
+         picks its own (renderer.js shaderTargetFor). */
+      shader: preset.shader || null,
     };
   }
 

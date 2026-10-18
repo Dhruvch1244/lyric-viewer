@@ -1,0 +1,179 @@
+[
+ {
+  "name": "Hyperspace",
+  "file": "hyperspace.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Club",
+  "file": "club.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Kaleidoscope",
+  "file": "kaleidoscope.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Spectrum 3D",
+  "file": "spectrum3d.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Plasma Pulse",
+  "file": "plasma-pulse.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Ring Tunnel",
+  "file": "ring-tunnel.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Synthwave",
+  "file": "synthwave.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Neon Rings",
+  "file": "neon-rings.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Shatter",
+  "file": "shatter.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Inferno",
+  "file": "inferno.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Ridgelines",
+  "file": "vidvox/Ridgelines.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "speed": "level",
+   "gain": "kick",
+   "colorLow": "dark",
+   "colorHigh": "hue"
+  }
+ },
+ {
+  "name": "Simplex Noise",
+  "file": "vidvox/Simplex Noise.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "speed": "level",
+   "contrast": "kick",
+   "colorLow": "dark",
+   "colorHigh": "hue"
+  }
+ },
+ {
+  "name": "Worley Cells",
+  "file": "vidvox/Worley Cells.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "speed": "level",
+   "borderWidth": [
+    "kick",
+    0.3
+   ],
+   "cellColor1": "hue",
+   "cellColor2": "hueAlt"
+  }
+ },
+ {
+  "name": "Spiral",
+  "file": "vidvox/Spiral.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "rotation": "beat",
+   "width": [
+    "kick",
+    0.8
+   ],
+   "color1": "dark",
+   "color2": "hue"
+  }
+ },
+ {
+  "name": "Truchet Tile",
+  "file": "vidvox/Truchet Tile.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "tSize": [
+    "kick",
+    0.3
+   ],
+   "color1": "hue",
+   "color2": "dark"
+  }
+ },
+ {
+  "name": "Poly Star",
+  "file": "vidvox/Poly Star.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "buldge": "kick",
+   "pointRotation": "beat",
+   "starColor": "hue"
+  }
+ },
+ {
+  "name": "FFT Color Lines",
+  "file": "vidvox/FFT Color Lines.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "gainFFT": [
+    "kick",
+    0.5
+   ],
+   "color1": "hue",
+   "color2": "hueAlt"
+  }
+ },
+ {
+  "name": "Radial Spectrogram",
+  "file": "vidvox/Radial Spectrogram.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {}
+ },
+ {
+  "name": "Audio Waveform Shape",
+  "file": "vidvox/Audio Waveform Shape.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "audioGain": [
+    "kick",
+    0.6
+   ],
+   "waveColor1": "hue",
+   "waveColor2": "hueAlt"
+  }
+ },
+ {
+  "name": "FFT Spectrogram",
+  "file": "vidvox/FFT Spectrogram.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "color1": "hue",
+   "color2": "hueAlt"
+  }
+ },
+ {
+  "name": "FFT Filled Waveform",
+  "file": "vidvox/FFT Filled Waveform.fs",
+  "credit": "VIDVOX ISF-Files (MIT)",
+  "drive": {
+   "gain": [
+    "kick",
+    0.5
+   ],
+   "bottomColor": "hue",
+   "strokeColor": "hueAlt"
+  }
+ }
+]

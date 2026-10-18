@@ -161,6 +161,7 @@ const els = {
   canvas: document.getElementById('backdrop'),
   swirl: document.getElementById('swirl'),
   milkdrop: document.getElementById('milkdrop'),
+  shaderfx: document.getElementById('shaderfx'),
   hero: document.getElementById('np-hero'),
   heroTitle: document.getElementById('np-hero-title'),
   heroArtist: document.getElementById('np-hero-artist'),
@@ -449,6 +450,35 @@ function milkdropRenderScale() {
 */
 const FPS_CAP_MS = { auto: null, '60': 16, '30': 33 };
 let fpsCap = '60';
+
+/*
+  How hard the visuals answer the music — one setting for every engine.
+
+  "Intense" is the default because "the beat reactivity is very low" was the
+  complaint, and it had two measurable causes:
+
+    - MilkDrop got the raw system waveform. Butterchurn derives bass/mid/treb
+      as the instant level over its own running average, so a mastered,
+      side-chained track — loud all the time — barely rises above its average
+      on a kick, and most presets key off exactly that ratio. `mdKick` now
+      multiplies the waveform by (1 + mdKick * kick) on our own kick detector,
+      which is what makes a kick stand out from the average again; `mdTarget`
+      auto-gains it to a steady level first so a quiet master and a loud one
+      start from the same place.
+    - A preset could change only on a detected drop, at most every 42s. Plenty
+      of songs never produce a drop the detector recognises, so one preset ran
+      for the whole song. `beatSwitchMs` adds a change on a strong kick and
+      `maxHoldMs` a ceiling with or without audio.
+
+  `normal` is the pre-0.56 behaviour, kept exactly for anyone who liked it.
+*/
+const VIS_INTENSITY = {
+  chill:   { mdTarget: 0.45, mdKick: 0.3, dropSwitchMs: 90000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.16, flashGain: 0.7, pulseGain: 0.7 },
+  normal:  { mdTarget: 0.6,  mdKick: 0.8, dropSwitchMs: 42000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.10, flashGain: 1,   pulseGain: 1 },
+  intense: { mdTarget: 0.85, mdKick: 1.8, dropSwitchMs: 8000,  beatSwitchMs: 14000, maxHoldMs: 30000, kickFloor: 0.06, flashGain: 1.3, pulseGain: 1.45 },
+};
+let visIntensity = 'intense';
+function intensityCfg() { return VIS_INTENSITY[visIntensity] || VIS_INTENSITY.intense; }
 
 /* ------------------------------------------------------------ reduced motion */
 /*
@@ -1511,6 +1541,28 @@ let lastFrameAt = 0;
 */
 let vsyncMs = 16.7;
 
+/*
+  How vsyncMs is measured: the MEDIAN of each 60-frame window, tracked
+  downward. The first version eased toward any gap shorter than the estimate,
+  and WebKitGTK fires two callbacks back-to-back after every stall — measured in
+  the live app, that walked the estimate on a 60Hz screen down to 7.9ms, the
+  headroom test then needed 13ms frames, and the shader canvas never left its
+  starting rung. A window median ignores those pairs; the running minimum of
+  medians still refuses to mistake a sustained load-limited rate for the
+  display's own.
+*/
+const gapWindow = new Float32Array(60);
+let gapCount = 0;
+
+function noteFrameGap(gap) {
+  if (gap <= 2 || gap >= 100) return;
+  gapWindow[gapCount++] = gap;
+  if (gapCount < gapWindow.length) return;
+  gapCount = 0;
+  const median = Float32Array.from(gapWindow).sort()[gapWindow.length >> 1];
+  if (median < vsyncMs) vsyncMs = median;
+}
+
 /**
  * Whether frames are arriving at the display's full rate — room to spend on
  * more pixels. The 13ms floor keeps the old behaviour on high-refresh displays,
@@ -1606,14 +1658,10 @@ function isCompact() {
   return displayMode === 'bar' || displayMode === 'strip';
 }
 
-/**
- * Minimum seconds between beat-synced preset changes.
- *
- * Long, deliberately. Plane9's scene transitions are what make a visualiser
- * feel designed, but a MilkDrop preset needs time to develop — cutting every
- * drop in a four-on-the-floor track would be a strobe, not a sequence.
- */
-const MILKDROP_SWITCH_MS = 42000;
+/* Minimum time between beat-synced preset changes: per intensity now, see
+   VIS_INTENSITY (`dropSwitchMs`/`beatSwitchMs`/`maxHoldMs`). The old fixed
+   42s is `normal`. A preset still needs a few seconds to develop, so even
+   `intense` never cuts faster than every 8s. */
 
 /* Whether drops are allowed to change the MilkDrop preset (PERF-UX.md U6b).
    Defaults ON because that IS the behaviour the app has always had — this
@@ -2696,6 +2744,154 @@ function milkdropTargetFor(preset) {
   return pinnedMilkdrop() || milkdropChosen || seed;
 }
 
+/* ------------------------------------------------------- shader engine */
+/*
+  The ISF engine's side of the loop (shaders.js is the engine itself). Kept
+  next to applyEngine because it is the same decision: which engine owns the
+  screen, what it shows, when that changes.
+*/
+
+/** The live accent as a 0..1 hue, set by the backdrop loop each frame. */
+let shaderHue = 0;
+/** Which shader is loaded, and which one should be. */
+let shaderName = null;
+let shaderWanted = null;
+let shaderSeededFor = null;
+let lastShaderSwitchAt = 0;
+let shaderLoading = false;
+let shaderFailHandled = false;
+/** Resolution ladder for the shader canvas — same signal and probing as the swirl's. */
+const SHADER_SCALES = [0.5, 0.66, 0.85, 1.0];
+let shaderScale = 0.85;
+let lastShaderScaleAt = 0;
+const shaderRungBlockedUntil = [];
+let shaderSize = '';
+
+/** '#rrggbb' -> hue 0..1, for feeding the palette to shaders. */
+function hexHue(hex) {
+  const n = parseInt(String(hex).slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (d === 0) return 0;
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return ((h / 6) % 1 + 1) % 1;
+}
+
+function startShaderEngine(w, h) {
+  // Re-queried, not cached: ShaderFX.destroy() replaces the element.
+  els.shaderfx = document.getElementById('shaderfx');
+  if (!window.ShaderFX || !els.shaderfx) return;
+  els.shaderfx.hidden = false;
+  window.ShaderFX.init(els.shaderfx);
+  shaderName = null;
+  shaderSize = '';
+  window.ShaderFX.resize(w, h, liteMode ? 0.5 : shaderScale);
+}
+
+function stopShaderEngine() {
+  if (!window.ShaderFX || !els.shaderfx) return;
+  window.ShaderFX.destroy();
+  els.shaderfx = document.getElementById('shaderfx');
+  els.shaderfx.hidden = true;
+  shaderName = null;
+}
+
+/**
+ * Which shader this look shows. A named scene (Hyperspace, Club, ...) is that
+ * shader; "Shader Mix" starts on a random one per song and moves on with the
+ * same drop/beat/ceiling rules as MilkDrop's shuffle (VIS_INTENSITY).
+ */
+function shaderTargetFor(preset) {
+  if (preset.shader) return preset.shader;
+  const key = `${preset.id}|${currentTrack ? trackLookKey(currentTrack) : ''}`;
+  const names = window.ShaderFX.names();
+  if (key !== shaderSeededFor && names.length) {
+    shaderSeededFor = key;
+    shaderWanted = names[Math.floor(Math.random() * names.length)];
+  }
+  return shaderWanted;
+}
+
+function loadShader(name, now) {
+  if (!name || shaderLoading) return;
+  shaderLoading = true;
+  lastShaderSwitchAt = now;
+  window.ShaderFX.load(name).then((loaded) => {
+    shaderLoading = false;
+    // A shader that will not compile is skipped, not retried every frame.
+    shaderName = loaded || name;
+    if (loaded) setStatus(`Shader — ${loaded}`);
+  });
+}
+
+/** Swirl-style resolution governor for the shader canvas. */
+function applyShaderScale(now) {
+  const ceiling = liteMode ? 0 : SHADER_SCALES.length - 1;
+  let rung = SHADER_SCALES.indexOf(shaderScale);
+  if (rung < 0) rung = 2;
+  if (frameIntervalMs > 22 && rung > 0 && now - lastShaderScaleAt > 300) {
+    shaderRungBlockedUntil[rung] = now + 30000;
+    rung -= 1;
+    lastShaderScaleAt = now;
+  } else if (hasFrameHeadroom() && rung < ceiling && now - lastShaderScaleAt > 1000
+    && !(now < (shaderRungBlockedUntil[rung + 1] || 0))) {
+    rung += 1;
+    lastShaderScaleAt = now;
+  }
+  shaderScale = SHADER_SCALES[Math.min(rung, ceiling)];
+}
+
+function drawShaderEngine(preset, now, w, h) {
+  const fx = window.ShaderFX;
+  if (!fx) return;
+  if (fx.failed() && !shaderFailHandled) {
+    // No WebGL / the bundle did not load: same rescue as MilkDrop's.
+    shaderFailHandled = true;
+    presetId = defaultLookFor(currentTrack || {});
+    applyPresetLabel();
+    return;
+  }
+  const want = shaderTargetFor(preset);
+  if (want && want !== shaderName) loadShader(want, now);
+
+  // Shader Mix moves on like MilkDrop's shuffle.
+  if (!preset.shader && milkdropShuffle && shaderName && !shaderLoading) {
+    const vi = intensityCfg();
+    const held = now - lastShaderSwitchAt;
+    const kickNow = audioEnv && audioEnv.active ? audioEnv.kick : 0;
+    if ((dropFlash > 0.6 && held > vi.dropSwitchMs)
+        || (vi.beatSwitchMs > 0 && kickNow > 0.5 && held > vi.beatSwitchMs)
+        || (vi.maxHoldMs > 0 && held > vi.maxHoldMs)
+        || (!vi.maxHoldMs && held > 60000)) {
+      const names = fx.names().filter((n) => n !== shaderName);
+      if (names.length) shaderWanted = names[Math.floor(Math.random() * names.length)];
+    }
+  }
+
+  applyShaderScale(now);
+  const scale = liteMode ? 0.5 : shaderScale;
+  const size = `${Math.floor(w)}x${Math.floor(h)}:${scale}`;
+  if (size !== shaderSize) { shaderSize = size; fx.resize(w, h, scale); }
+
+  const live = audioEnv && audioEnv.active;
+  // Reduce Motion: the strobe and the kick punches are the part that hurts.
+  const calm = reducedMotion ? 0.3 : 1;
+  fx.render({
+    bass: live ? audioEnv.bass : 0.25 + intensity * 0.3,
+    mid: live ? audioEnv.mid : 0.2,
+    treble: live ? audioEnv.treble : 0.2,
+    level: live ? Math.min(1, audioEnv.level * 1.6) : intensity * 0.6,
+    // Without capture the lyric-driven beat flash is the best beat there is.
+    kick: (live ? audioEnv.kick : Math.min(1, beatFlash * 0.7)) * calm,
+    beat: beatPeriodMs > 0 ? (beatClockMs % beatPeriodMs) / beatPeriodMs : 0,
+    drop: dropFlash * calm,
+    hue: shaderHue,
+  });
+}
+
 /**
  * Put the right engine on screen, and draw it if it is the MilkDrop one.
  *
@@ -2711,12 +2907,25 @@ function milkdropTargetFor(preset) {
  */
 function applyEngine(preset, now, dt, w, h) {
   if (!window.MilkDrop || !els.milkdrop) return;
-  const wanted = preset.engine === 'milkdrop' ? 'milkdrop' : 'swirl';
+  const wanted = preset.engine === 'milkdrop' || preset.engine === 'isf' ? preset.engine : 'swirl';
 
   if (wanted !== activeEngine) {
+    const leaving = activeEngine;
     activeEngine = wanted;
     document.body.classList.toggle('engine-milkdrop', wanted === 'milkdrop');
-    if (wanted === 'milkdrop') {
+    // Both GPU engines get the same text scrim (styles.css): a bright shader is
+    // as unreadable behind white lyrics as a bright MilkDrop preset.
+    document.body.classList.toggle('engine-gpu', wanted !== 'swirl');
+    if (leaving === 'isf') stopShaderEngine();
+    if (wanted === 'isf') {
+      startShaderEngine(w, h);
+      if (leaving === 'milkdrop') {
+        window.MilkDrop.destroy();
+        els.milkdrop.hidden = true;
+        closeMilkdropPanel();
+        updateMilkdropLiveChips();
+      }
+    } else if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
       window.MilkDrop.resize(w, h, milkdropRenderScale());
@@ -2728,7 +2937,9 @@ function applyEngine(preset, now, dt, w, h) {
       milkdropName = window.MilkDrop.loadPreset(milkdropTargetFor(preset), 0);
       lastMilkdropSwitchAt = now;
       updateMilkdropLiveChips();
-    } else {
+    } else if (leaving === 'milkdrop') {
+      // Only when MilkDrop was actually up: destroy() reloads its frame, which
+      // is wasted work coming back from a shader look.
       window.MilkDrop.destroy();
       els.milkdrop.hidden = true;
       closeMilkdropPanel();
@@ -2736,6 +2947,7 @@ function applyEngine(preset, now, dt, w, h) {
     }
   }
 
+  if (activeEngine === 'isf') { drawShaderEngine(preset, now, w, h); return; }
   if (activeEngine !== 'milkdrop') return;
 
   // MilkDrop is the default look for new songs (defaultLookFor), so a frame
@@ -2788,8 +3000,13 @@ function applyEngine(preset, now, dt, w, h) {
     one. A per-track pin still wins, because a pin is an explicit "always this,
     for this song" and outranks a global mode.
   */
-  if (milkdropShuffle && !pinned
-      && dropFlash > 0.6 && now - lastMilkdropSwitchAt > MILKDROP_SWITCH_MS) {
+  const vi = intensityCfg();
+  const held = now - lastMilkdropSwitchAt;
+  const kickNow = audioEnv && audioEnv.active ? audioEnv.kick : 0;
+  const switchDue = (dropFlash > 0.6 && held > vi.dropSwitchMs)
+    || (vi.beatSwitchMs > 0 && kickNow > 0.5 && held > vi.beatSwitchMs)
+    || (vi.maxHoldMs > 0 && held > vi.maxHoldMs);
+  if (milkdropShuffle && !pinned && switchDue) {
     /* Hidden presets are excluded here, not only from the browser. This is
        where an unwanted preset actually turns up, so a veto that did not reach
        it would be a bookmark rather than a veto.
@@ -2830,7 +3047,11 @@ function applyEngine(preset, now, dt, w, h) {
     window.MilkDrop.resize(w, h, scale);
   }
 
-  window.MilkDrop.render(dt / 1000);
+  window.MilkDrop.render(dt / 1000, {
+    kick: audioEnv && audioEnv.active ? audioEnv.kick : 0,
+    target: vi.mdTarget,
+    kickGain: vi.mdKick,
+  });
 }
 
 function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
@@ -3463,8 +3684,7 @@ function drawBackdrop(now) {
     if (lastFrameAt) {
       const gap = now - lastFrameAt;
       if (gap < 100) frameIntervalMs += (gap - frameIntervalMs) * 0.05;
-      // Eased, not snapped, so one early-timestamped frame cannot halve it.
-      if (gap > 3 && gap < vsyncMs) vsyncMs += (gap - vsyncMs) * 0.1;
+      noteFrameGap(gap);
     }
     lastFrameAt = now;
 
@@ -3685,11 +3905,12 @@ function drawBackdrop(now) {
     // full drop moment (flash, confetti, hue jump, dancer multiplication).
     if (audioActive) {
       intensity = Math.max(intensity, Math.min(1, audioEnv.level * 1.6));
-      if (audioEnv.kick > 0.10) {
+      const vi = intensityCfg();
+      if (audioEnv.kick > vi.kickFloor) {
         // Snap to a solid flash even on a modest kick, so every thump lands
         // visibly instead of scaling faintly with a hot-mastered bass band.
-        beatFlash = Math.max(beatFlash, Math.min(1.15, 0.55 + audioEnv.kick * 0.6));
-        pulse = Math.max(pulse, 0.7 + audioEnv.kick * 1.2);   // harder body punch
+        beatFlash = Math.max(beatFlash, Math.min(1.15 * vi.flashGain, (0.55 + audioEnv.kick * 0.6) * vi.flashGain));
+        pulse = Math.max(pulse, (0.7 + audioEnv.kick * 1.2) * vi.pulseGain);   // harder body punch
         if (audioEnv.kick > 0.4) spawnRipple(audioEnv.kick * 1.15);
         if (window.Tempo) window.Tempo.note(now);   // feed the tempo estimator
       }
@@ -3782,6 +4003,7 @@ function drawBackdrop(now) {
 
     const accentLive = shiftHex(accent, bgHue);
     const tintLive = shiftHex(baseTint, bgHue * 0.5);
+    shaderHue = hexHue(accentLive);
 
     // Drive the lyric colour from the same live hue so the text recolours through
     // the song, and hand the beat pulse to CSS so the active line throbs in time.
@@ -6089,6 +6311,15 @@ if (els.wallpaperBtn) {
     });
   }
 
+  const intensitySelect = document.getElementById('keybox-intensity');
+  if (intensitySelect) {
+    intensitySelect.value = visIntensity;
+    intensitySelect.addEventListener('change', () => {
+      visIntensity = intensitySelect.value in VIS_INTENSITY ? intensitySelect.value : 'intense';
+      try { localStorage.setItem('visIntensity', visIntensity); } catch { /* ignore */ }
+    });
+  }
+
   const fpsSelect = document.getElementById('keybox-fps-cap');
   if (fpsSelect) {
     const saved = localStorage.getItem('fpsCap');
@@ -6283,6 +6514,8 @@ window.player.onDisplayMode(({ mode, insets }) => {
     */
     if (window.MilkDrop) window.MilkDrop.destroy();
     if (els.milkdrop) els.milkdrop.hidden = true;
+    if (activeEngine === 'isf') stopShaderEngine();   // same reasoning: free the context
+    document.body.classList.remove('engine-milkdrop', 'engine-gpu');
     activeEngine = 'swirl';
     els.swirl.style.display = 'none';
     els.canvas.style.display = 'none';
@@ -8155,6 +8388,8 @@ try {
   if (mq && (mq === 'auto' || mq in MD_QUALITY_SCALE)) mdQuality = mq;
   const fc = localStorage.getItem('fpsCap');
   if (fc && fc in FPS_CAP_MS) fpsCap = fc;
+  const vis = localStorage.getItem('visIntensity');
+  if (vis && vis in VIS_INTENSITY) visIntensity = vis;
   // No global preset any more — each song carries its own look (see
   // applyLookForTrack). Only explicit per-song overrides are stored.
 } catch { /* ignore */ }
