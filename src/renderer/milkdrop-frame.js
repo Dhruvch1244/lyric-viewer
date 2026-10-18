@@ -24,7 +24,7 @@
       {type:'missing', name}              asked for a preset it does not hold, and
                                           was sent no data for it
       {type:'thumb', name, url}           a preview, as a JPEG data URL
-      {type:'error', message}
+      {type:'error', message, fatal?}     fatal: init failed, the engine cannot run
 
   THE PARENT DRIVES THE CLOCK. The frame has no requestAnimationFrame of its
   own, on purpose: the overlay parks its render loops when it is hidden and
@@ -78,7 +78,7 @@
     }
     const bc = unwrap(window.butterchurn);
     if (!bc || !window.butterchurnPresets) {
-      post({ type: 'error', message: 'butterchurn bundles did not load' });
+      post({ type: 'error', message: 'butterchurn bundles did not load', fatal: true });
       return;
     }
 
@@ -106,7 +106,7 @@
       visualizer = bc.createVisualizer(ctx, canvas, { width: w, height: h, pixelRatio: 1 });
       post({ type: 'ready', names });
     } catch (err) {
-      post({ type: 'error', message: (err && err.message) || 'init failed' });
+      post({ type: 'error', message: (err && err.message) || 'init failed', fatal: true });
     }
   }
 

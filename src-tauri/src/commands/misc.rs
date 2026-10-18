@@ -41,6 +41,23 @@ pub(crate) fn localcli_status() -> Value {
     crate::localcli::consent()
 }
 
+/// Choose the Claude CLI model (one of `localcli::CLAUDE_MODELS`).
+#[tauri::command]
+pub(crate) fn localcli_set_model(model: String) -> Value {
+    crate::localcli::set_model(&model);
+    crate::localcli::consent()
+}
+
+/// Run one tiny prompt through a CLI for the settings card's Test button.
+/// `(async)` because it spawns the CLI and waits up to its 90s timeout.
+#[tauri::command(async)]
+pub(crate) fn localcli_test(id: String) -> Value {
+    match crate::localcli::test(&id) {
+        Ok(v) => json!({ "status": "ok", "result": v }),
+        Err(message) => json!({ "status": "error", "message": message }),
+    }
+}
+
 /// Record (or clear, or decline) the user's local-CLI choice.
 #[tauri::command]
 pub(crate) fn localcli_consent(id: Option<String>) -> Value {

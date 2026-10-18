@@ -224,6 +224,8 @@ pub fn run() {
             commands::misc::localcli_detect,
             commands::misc::localcli_status,
             commands::misc::localcli_consent,
+            commands::misc::localcli_set_model,
+            commands::misc::localcli_test,
             commands::updater::get_update_state,
             commands::updater::update_action,
             commands::lyrics_cmds::list_synced,

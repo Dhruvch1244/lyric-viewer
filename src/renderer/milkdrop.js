@@ -97,6 +97,8 @@
       // older corpus); both are worth a line, neither is worth a dialog.
       console.warn('[milkdrop] no preset named', msg.name);
     } else if (msg.type === 'error') {
+      // Only an init failure is fatal; a bad preset or a dropped frame is not.
+      if (msg.fatal) failed = true;
       console.warn('[milkdrop]', msg.message);
     }
   });
@@ -313,7 +315,7 @@
   window.MilkDrop = {
     init, loadPreset, render, resize, reconnect, destroy,
     thumbnail, endThumbnails,
-    names: () => names, isSupported, current: () => currentName,
+    names: () => names, isSupported, failed: () => failed, current: () => currentName,
     isResident: (name) => resident.has(name),
   };
 })();

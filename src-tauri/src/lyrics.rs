@@ -268,15 +268,32 @@ fn is_transient_status(code: u16) -> bool {
 /// adds ~2.8s on a lookup that would otherwise have failed outright; a hit on
 /// the first try costs nothing extra.
 fn call_lrclib(req: ureq::Request) -> Option<ureq::Response> {
+    call_lrclib_checked(req).ok().flatten()
+}
+
+/// LRCLIB could not be reached: every retry of a transient failure (overload,
+/// rate limit, DNS, reset, timeout) failed. Distinct from `Ok(None)`, which
+/// means LRCLIB answered and does not have the song.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreachable;
+
+/// `call_lrclib`, keeping "LRCLIB answered no" (`Ok(None)`, e.g. a 404) apart
+/// from "LRCLIB never answered" (`Err`). The caller that shows a status line
+/// needs the difference: reporting a dropped connection as "no synced lyrics
+/// found" told the user the song had none, and nothing asked again.
+fn call_lrclib_checked(req: ureq::Request) -> Result<Option<ureq::Response>, Unreachable> {
     let mut attempt = 0;
     loop {
         let transient = match req.clone().call() {
-            Ok(resp) => return Some(resp),
+            Ok(resp) => return Ok(Some(resp)),
             Err(ureq::Error::Status(code, _)) => is_transient_status(code),
             Err(ureq::Error::Transport(_)) => true,
         };
-        if !transient || attempt >= LRCLIB_RETRY_BACKOFF_MS.len() {
-            return None;
+        if !transient {
+            return Ok(None);
+        }
+        if attempt >= LRCLIB_RETRY_BACKOFF_MS.len() {
+            return Err(Unreachable);
         }
         std::thread::sleep(std::time::Duration::from_millis(LRCLIB_RETRY_BACKOFF_MS[attempt]));
         attempt += 1;
@@ -390,6 +407,14 @@ pub fn get_by_id(id: i64) -> Option<Value> {
 
 /// Look up synced lyrics for a track. Returns (cues, source label) or None.
 pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
+    fetch_synced_checked(track).ok().flatten()
+}
+
+/// `fetch_synced`, but `Err(Unreachable)` when the free-text search — the
+/// request every lookup that gets this far depends on — could not reach
+/// LRCLIB at all. An unreachable exact lookup alone is not reported: the
+/// search after it still answers for the song.
+pub fn fetch_synced_checked(track: &Track) -> Result<Option<(Vec<Cue>, Value)>, Unreachable> {
     if let Some(exact) = lrclib_get_exact(track) {
         if let Some(synced) = exact.get("syncedLyrics").and_then(|v| v.as_str()) {
             let cues = parse_lrc(synced);
@@ -401,23 +426,31 @@ pub fn fetch_synced(track: &Track) -> Option<(Vec<Cue>, Value)> {
                     "duration": exact.get("duration"),
                     "score": "exact",
                 });
-                return Some((cues, source));
+                return Ok(Some((cues, source)));
             }
         }
     }
     let query = format!("{} {}", clean_title(&track.title), track.artist);
     let query = query.trim();
     if query.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    let resp = call_lrclib(ureq::get(LRCLIB_SEARCH)
+    let Some(resp) = call_lrclib_checked(ureq::get(LRCLIB_SEARCH)
         .set("User-Agent", USER_AGENT)
         .query("q", query)
         .timeout(std::time::Duration::from_secs(15))
-    )?;
-    let results: Value = resp.into_json().ok()?;
-    let arr = results.as_array()?;
+    )? else {
+        return Ok(None);
+    };
+    // A body that does not parse is LRCLIB answering badly, not a miss.
+    let results: Value = resp.into_json().map_err(|_| Unreachable)?;
+    Ok(best_synced_match(results.as_array().map(Vec::as_slice).unwrap_or(&[]), track))
+}
+
+/// The best-scoring synced candidate from an LRCLIB search response, or None
+/// when nothing clears the match floor.
+fn best_synced_match(arr: &[Value], track: &Track) -> Option<(Vec<Cue>, Value)> {
     if arr.is_empty() {
         return None;
     }

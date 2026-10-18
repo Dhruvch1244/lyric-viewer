@@ -119,215 +119,47 @@ function milkdropAllowed() {
   return kept.length > 0 ? kept : all;
 }
 
-/*
-  A vetted shortlist of presets that reliably look good — grown from an
-  original hand-picked 10 to 150, machine-vetted rather than hand-picked one
-  by one (150 is well past the point where eyeballing each one is honest work).
-
-  The catalogue is 1754 presets contributed over twenty years, and a large
-  share of them are dim, broken on this renderer, or just ugly — so opening
-  MilkDrop on a *random* one, or cycling the whole set on the beat, lands on a
-  dud more often than not. That is what "the default MilkDrop sucks" was, and
-  it is exactly the regression growing this list has to not reintroduce.
-
-  HOW THIS LIST WAS BUILT (scripts/perf/curate-milkdrop-presets.mjs). Every
-  preset was loaded in the real engine and driven with a synthetic waveform
-  via the same `thumbnail()` preview path the browser panel already uses, then
-  scored on mean luminance and a texture (pixel-to-pixel gradient) metric —
-  catches near-black/blown-white frames and, separately, a flat/frozen render
-  that isn't black but also isn't drawing anything. 1754 surveyed, 1 failed to
-  compile, 1171 passed the broken/blank filter; these 150 are a *stratified*
-  sample across the upper part of that survivor pool (not a top-150-by-one-
-  metric list, to avoid overfitting to whatever the heuristic happens to
-  reward) — spot-checked by eye against the actual rendered frames before
-  landing here. Re-run that script (`survey` then `curate`) if the preset
-  corpus ever changes; both steps are documented at the top of the file.
-
-  They are the pool the automatic paths draw from until the user has liked
-  some of their own; the browser still offers all 1754.
-*/
-const MILKDROP_CURATED = [
-  "_Che + Geiss - Escape (Psychedelic Mix)",
-  "_Flexi, martin + geiss - painterly rogue wave strike (color emboss mix)",
-  "_Geiss - Reaction Diffusion (Relief Mix)",
-  "_Geiss - untitled",
-  "_geiss_experimental__LSB Bass Cubes",
-  "_geiss_experimental__wavefronts",
-  "_Mig_079",
-  "36",
-  "414 bowel rebranding pr whore skinned to the teeth shader serial killer common glut",
-  "A Twistin Infusion - Martin - shiny tunnel rewiredFX  Ft AdamFX InfusionFX (ElectricPoolFX)",
-  "Adam Fx 2 Zylot - Age of Science Fierceness BEAST2 - mash0000 - ethics is for weiner dogs - Geiss composite mix",
-  "AdamFX 2 Geiss - Mash-Up Sphere Xibit Graffiti Warp me Tydye",
-  "AdamFX 2 Geiss - Mash-Up Sphere Xibit Graffiti Warp me Tydye3",
-  "AdamFX 2 Geiss - Mash-Up Sphere Xibit Graffiti Warp me Tydye6",
-  "Aderrasi - Airhandler (Kali Mix) - Painterly (Geiss composite mix)",
-  "Aderrasi - Kevlar Ore Deposit",
-  "Aderrasi - Veil of Steel (Steel Storm) - mash0000 - bob ross finally loses it",
-  "Aderrasi - Visitor",
-  "Aderrasi + Geiss - Airhandler (Square Mix)",
-  "amandio c - pole - shf fab candiria pull ap5+ made to believe i don′t matter",
-  "bdrv + al shifter - feathers (angel wings)_phat_remix4 bdrv et  AL  rmxmix bdrv et.AL5",
-  "Bdrv Eo.S. - pulsecube BDRV et  AL  rmxmixx",
-  "Benjam and Zylot - Tie-Dye Supernova (Sunspots Mix) flx mrt - maybe go to the beach - drizzle′",
-  "beta106 - mash0000 - defocused bandwidth pulsating log",
-  "Bmelgren & Rovastar - Schisathing 2 - mash0000 - schrodinger′s dog massage",
-  "Bmelgren & Rovastar - Schisathing 6 - mash0001 - hellraiser′s molten consciousness",
-  "Cope - Passage (mandala mix)[Flexis kaleidoscope] - ap3 colonosc roam3",
-  "cope + martin - mother-of-pearl",
-  "EMPR - Random - Changing Polyevolution",
-  "Eo.S. - glowsticks v2 05 and proton lights (+Krash′s beat code) _Phat_remix02b",
-  "Eo.S. - heater core C_Phat′s_class + sparks_mix",
-  "Eo.S. - multisphere 01 B_Phat_Ra_mix (geiss flicker fix)",
-  "Eo.S. - pointfield 01 complex",
-  "Eo.S. - repeater 15 - kaleidoscope b",
-  "Eo.S.+Phat -Eater_v2",
-  "Eo.S.+Phat Emergent factors - Bitcore Tweak",
-  "fiShbRaiN - gandalf does it best (bccn Jelly V4)",
-  "flexi - alien canvas_001",
-  "Flexi - alien fader",
-  "flexi - bouncing balls [double mindblob neon mix]",
-  "Flexi - intention focus",
-  "Flexi - Milkcore",
-  "Flexi - piercing",
-  "Flexi - self-lubricating",
-  "flexi - the distant point between",
-  "Flexi - wild at range",
-  "flexi + amandio c - organic12-3d3",
-  "flexi + fishbrain - warpcraft [random mashup 3]",
-  "Flexi + Geiss - antagonizing beat detection codes",
-  "Flexi + Geiss - Bipolar vs. Reaction Diffusion mix",
-  "Flexi, Stahlregen, Nitorami + Shifter - shader authoring motivation set",
-  "Future Ligh Show AdamFX 2 martin - Flexi + Lodus + Geiss + Ludicrous speed + Baked + Hexocollie + Eos + Suksma + AdamFX Ft Che + Fishbrain + Bmelgren 4",
-  "Geiss - All-Spark - mash0000 - high on voltage",
-  "Geiss - Aurora 2",
-  "Geiss - Blur Mix 3",
-  "Geiss - Cauldron - painterly 3 (saturation remix)",
-  "Geiss - Cauldron - painterly 4",
-  "Geiss - Cosmic Dust 2 - cloud journey",
-  "Geiss - Cruzin′",
-  "Geiss - Diffuser (Red Mix)",
-  "Geiss - Inkblot",
-  "Geiss - Iris",
-  "Geiss - MicroCheckers 2",
-  "Geiss - Mosaic Octopus",
-  "geiss - reaction diffusion 3 (rippling leopard skin)",
-  "Geiss - Reaction Diffusion 4 - Petri Mix",
-  "Geiss - Rose 4 Shifted Tiles",
-  "Geiss - Skin Dots 10b",
-  "Geiss - Sound And The Fury (Jelly V3)",
-  "Geiss - Waterfall",
-  "Geiss + Flexi + Martin - disconnected",
-  "Geiss + Rovastar - The Chaos Of Colours (sprouting dimentia mix)",
-  "Goody - Lights in the Sky",
-  "Goody - The Wild Vort",
-  "Goody + flexi - Irdu Lili",
-  "Hexcollie, Bdrv, Geiss, Flexi n Aderrasi - Slime Slide - mash0000 - holster your salad shot",
-  "Krash & Rovastar - Cerebral Demons - Phat + Eo.S. Moire Remix",
-  "Krash + Illusion - Spiral Movement",
-  "LuxXx - ChillFlower BlurFace Ib",
-  "LuxXx - Makes Me Cry (five) (Makes Me Cry, So Lick My Tears, And Get Real High)",
-  "martin - alien grand theft water",
-  "Martin - cool morning",
-  "martin - elusive impressions mix2",
-  "martin - glass corridor",
-  "martin - glassball dance",
-  "martin - hardcore mix 2",
-  "martin - into the fireworks",
-  "martin - invasion",
-  "martin - musicogenic epilepsy",
-  "martin - on silent paths",
-  "Martin - QBikal - Surface Turbulence",
-  "martin - Thinking about you",
-  "martin + flexi - mandelbox explorer - high speed oversustained bipolar",
-  "martin + stahlregen - martin in da mash 11",
-  "martin + stahlregen - martin in da mash 12a",
-  "martin + stahlregen - martin in da mash 18",
-  "martin, flexi + sto - traumflug",
-  "New Creation Sensation -  AdamFx,Flexi,Amandio c n Martin - Star to Another World ft Hexocollie  n Shadow Harlequin n Geiss B",
-  "ORB - Nova Sunrise",
-  "ORB - Starfish",
-  "raron + flexi - milkdrop fibers on fire",
-  "Reenen & Telek - Slow Shift Matrix (bb4.5 (Dynamic Beat) Mix)",
-  "Rovastar - Altars Of Harlequin′s Madness (Dark Disorder Mix)",
-  "Rovastar - Braindance 1",
-  "Rovastar - Dark Ritual (Star Of Destiny Denied Mix)",
-  "Rovastar - Dark Ritual (Star Of Destiny Mix)",
-  "Rovastar - Demon Sunflower (Double Resistance Mix)",
-  "Rovastar - Explosive Minds",
-  "Rovastar - Eye On Reality (Mega 3 Mix)",
-  "Rovastar - Harlequin′s Fractal Encounter - cancer of saints",
-  "Rovastar - Trippy Sperm (Jelly)",
-  "Rovastar + Geiss - Dynamic Swirls 3 (Voyage Of Twisted Souls Mix)",
-  "Rovastar + Loadus + Geiss - FractalDrop (Insanity Mix)",
-  "Rovastar + Loadus + Geiss - Tone-mapped FractalDrop 7d",
-  "Rovastar + Unchained - Oddball World",
-  "Rovastar-altarsofmadness(forgottenrea",
-  "Rozzor & Esotic - PPL (NWI) Mandala Chill Color Reactive Texture Tweaked",
-  "ShadowHarlequin - Tunneling (glitch mix) - [Geiss - 3 layers]",
-  "shifter - feathers (angel wings)",
-  "shifter - morphid",
-  "shifter - tadpole evolution (static mix)",
-  "shifter - tumbling cubes (endless) radial blur",
-  "Shifter & Eo.S+Phat - Fractical dancer (shattered mind)",
-  "Stahlregen - Dots (Pixels - Blocky) (Jelly V2)",
-  "Stahlregen - Dots (Pixels - Blocky) (Reverse Jelly V3)",
-  "Stahlregen & AdamFX + flexi + Geiss - Dragonfly Wings (MashUp 26 - Jack′s Playful Thumbdrum Planet RMX) - mash0000 - closer to god through bacon",
-  "Stahlregen & baked + Geiss + Krash - Washing Machine (V2)",
-  "Stahlregen & Boz + Eo.S + Geiss + Phat + Rovastar + Zylot - Machine Code [Jelly]",
-  "Stahlregen & fiSHbRaiN + flexi + Geiss + shifter - Stonecraft (Beetle Relief mix)",
-  "stahlregen & geiss + rovastar - fields of flowers (mashup 9 - space flower rmx) - mash0001 - pack em in, we got a long haul + flashlight",
-  "stahlregen + geiss + shifter - babylon",
-  "suksma - creepy children steal your identity",
-  "suksma - water cooled red uranium vs dotes - freeenergynow.net",
-  "Telek - Slow Thing (Spiderman Mix)",
-  "TobiasWolfBoi - The Pit",
-  "TonyMilkdrop - Magellan's Nebula [Flexi - fancy + $this shall not retain]",
-  "Unchained - Beat Demo 2.1",
-  "Unchained - Free to Feel (Valium Remix)",
-  "Unchained - In Memory Of Peg",
-  "Unchained - Not As Fun As It Looks",
-  "Unchained - Painful Plasma (Multi-Wave Mirrored Rage) -- Rozzor triangle tweak",
-  "Unchained - Spinal Mixdown 2",
-  "Unchained - Subjective Experience Of The Manifold",
-  "Unchained & Rovastar - Waves Of Waves",
-  "yin - 160 - Controversial",
-  "yin - 190 - Temporal fluctuations",
-  "yin - 250 - Artificial poles of the continuum_Phat′s_Orbit_mix",
-  "yin - 253 - Artificial poles of the continuum (remix #3)",
-  "yin - 311 - Ocean of Light (bouncing off mix)",
-  "Zylot + Geiss - Enlightenment",
-];
-
 /**
- * The pool the dice and the beat-synced cycle draw from.
+ * The pool the dice, the beat-synced cycle and the next button draw from:
+ * the whole catalogue, minus anything hidden.
  *
- * Favourites first, once there are enough to cycle. Otherwise the curated
- * shortlist (minus anything hidden), so the automatic look is a good one rather
- * than a roll of the 1754-sided die. Falls through to the whole allowed set
- * only if the curated names somehow are not in this corpus.
+ * It used to be a 150-preset curated shortlist, then only your favourites
+ * once you had two. Both made a 1754-preset catalogue feel like a handful of
+ * looks on repeat — with two hearts, shuffle alternated between exactly those
+ * two. Favourites are a way to find a preset again (the ♥ filter in the
+ * browser), not a cage for shuffle; a preset you never want to see again is
+ * what X (hide) is for, and that veto is honoured here.
  *
  * @returns {string[]}
  */
 function milkdropCyclePool() {
-  const allowed = milkdropAllowed();
-  const liked = allowed.filter((n) => mdpFavourites.has(n));
-  if (liked.length > 1) return liked;
-
-  const allowedSet = new Set(allowed);
-  const curated = MILKDROP_CURATED.filter((n) => allowedSet.has(n));
-  return curated.length > 0 ? curated : allowed;
+  return milkdropAllowed();
 }
 
 /**
- * The preset to open MilkDrop on when nothing is pinned or chosen.
+ * A random preset from the pool that is not `current`, so a shuffle or a
+ * "next" always visibly changes something. Random rather than stepping to the
+ * neighbour: the catalogue is sorted by author, and walking it in order shows
+ * twenty variations of one person's preset before anything else.
  *
- * Random, not `pool[0]`. It used to take the first entry, so every session
- * without a pin opened on the identical look — out of 1754 presets, which
- * rather defeats the point of having them. The pool is already the right set
- * to draw from: liked presets when there are any, the curated list otherwise
- * (see `milkdropCyclePool`), so a random pick here is a random pick from
- * *your* presets rather than from everything.
+ * @param {string|null} current
+ * @returns {string|null}
+ */
+function milkdropRandomOther(current) {
+  const pool = milkdropCyclePool();
+  if (pool.length === 0) return null;
+  if (pool.length === 1) return pool[0];
+  let pick = current;
+  // Bounded, not `while`: a pool of one repeated name must not spin forever.
+  for (let tries = 0; tries < 8 && pick === current; tries += 1) {
+    pick = pool[Math.floor(Math.random() * pool.length)];
+  }
+  return pick;
+}
+
+/**
+ * The preset to open MilkDrop on when nothing is pinned or chosen — a random
+ * one from the whole catalogue (see `milkdropCyclePool`).
  *
  * The caller is responsible for asking once and remembering the answer —
  * `milkdropTargetFor` runs every frame, so a fresh random on each call would
@@ -335,9 +167,7 @@ function milkdropCyclePool() {
  * current intent, the same way the drop-triggered cycle does.
  */
 function milkdropDefault() {
-  const pool = milkdropCyclePool();
-  if (!pool.length) return null;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return milkdropRandomOther(null);
 }
 
 /** Per-track MilkDrop preset pins, keyed like every other per-track override. */
@@ -679,8 +509,24 @@ function updateMilkdropPinChip() {
 
 if (els.mdBtn) {
   els.mdBtn.addEventListener('click', () => {
-    if (els.mdPanel && els.mdPanel.hidden) openMilkdropPanel();
-    else closeMilkdropPanel();
+    if (els.mdPanel && !els.mdPanel.hidden) { closeMilkdropPanel(); return; }
+    if (activeEngine === 'milkdrop') { openMilkdropPanel(); return; }
+    /* From a swirl scene: make MilkDrop this song's look — saved like a click
+       on the scene chip, since browsing presets is asking for MilkDrop — and
+       open the browser once the engine is up — the grid's previews and a
+       click on a card both need a live MilkDrop frame to act on. */
+    presetId = 'milkdrop';
+    if (currentTrack) {
+      const overrides = readLookOverrides();
+      overrides[trackLookKey(currentTrack)] = presetId;
+      try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
+    }
+    applyPresetLabel();
+    const started = performance.now();
+    (function waitForEngine() {
+      if (activeEngine === 'milkdrop') openMilkdropPanel();
+      else if (performance.now() - started < 3000) requestAnimationFrame(waitForEngine);
+    })();
   });
 }
 if (els.mdClose) els.mdClose.addEventListener('click', closeMilkdropPanel);

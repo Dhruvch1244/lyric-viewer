@@ -46,12 +46,16 @@ static ADAPTERS: &[Adapter] = &[
         id: "claude",
         label: "Claude CLI",
         cmd: "claude",
-        install: "npm install -g @anthropic-ai/claude-code",
+        install: "curl -fsSL https://claude.ai/install.sh | bash",
         verified: true,
         unverified: false,
-        needs_model: None,
+        needs_model: Some("claude"),
         // `-p` is print/non-interactive: read stdin, print the reply, exit.
-        command: |_| ("claude".into(), vec!["-p".into()]),
+        // The same `claude` you run in a terminal, signed in the same way —
+        // the app never installs or logs it in.
+        command: |model| {
+            ("claude".into(), vec!["-p".into(), "--model".into(), model.unwrap_or(CLAUDE_MODELS[0].0).into()])
+        },
     },
     Adapter {
         id: "gemini",
@@ -99,15 +103,48 @@ static ADAPTERS: &[Adapter] = &[
     },
 ];
 
+/// Models offered for the Claude CLI, newest first; the first is the default.
+/// Explicit ids rather than the CLI's `opus`/`sonnet` aliases, so the
+/// settings card can say exactly which model answers.
+pub const CLAUDE_MODELS: &[(&str, &str)] = &[
+    ("claude-opus-5-5", "Opus 5.5 — newest, most capable"),
+    ("claude-sonnet-5-5", "Sonnet 5.5 — faster"),
+    ("claude-haiku-5-5", "Haiku 5.5 — fastest, lightest"),
+];
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct Consent {
     consented: bool,
     id: Option<String>,
+    /// Claude CLI model id; `None` means `CLAUDE_MODELS[0]`.
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// The per-OS config root, matching where Tauri's `app_config_dir` puts the
+/// rest of this app's state.
+///
+/// This used to be `%APPDATA%` unconditionally — a Windows-only variable. On
+/// Linux and macOS there was no path, `save_consent` silently did nothing, and
+/// choosing "Use Claude CLI" was forgotten the moment it was clicked: the CLI
+/// could never actually be connected outside Windows.
+fn config_root() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if cfg!(windows) {
+        return std::env::var_os("APPDATA").map(PathBuf::from);
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return home.map(|h| h.join("Library").join("Application Support"));
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| home.map(|h| h.join(".config")))
 }
 
 fn consent_path() -> Option<std::path::PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    Some(std::path::PathBuf::from(appdata).join(IDENTIFIER).join("localcli.json"))
+    Some(config_root()?.join(IDENTIFIER).join("localcli.json"))
 }
 
 fn load_consent() -> Consent {
@@ -131,17 +168,43 @@ fn save_consent(c: &Consent) {
 /// `"declined"` is stored as a real decision (distinct from "never asked",
 /// which is what an absent file means); anything else clears it.
 pub fn set_consent(id: Option<&str>) {
+    // The model choice outlives a disconnect, so reconnecting keeps it.
+    let model = load_consent().model;
     let c = match id {
-        Some("declined") => Consent { consented: false, id: Some("declined".into()) },
-        Some(x) if ADAPTERS.iter().any(|a| a.id == x) => Consent { consented: true, id: Some(x.to_string()) },
-        _ => Consent { consented: false, id: None },
+        Some("declined") => Consent { consented: false, id: Some("declined".into()), model },
+        Some(x) if ADAPTERS.iter().any(|a| a.id == x) => Consent { consented: true, id: Some(x.to_string()), model },
+        _ => Consent { consented: false, id: None, model },
     };
     save_consent(&c);
 }
 
+/// Pick the Claude CLI model. Unknown ids are ignored rather than stored, so a
+/// typo can never become a `--model` that fails every call.
+pub fn set_model(model: &str) {
+    if !CLAUDE_MODELS.iter().any(|(id, _)| *id == model) {
+        return;
+    }
+    let mut c = load_consent();
+    c.model = Some(model.to_string());
+    save_consent(&c);
+}
+
+fn claude_model() -> &'static str {
+    let chosen = load_consent().model;
+    CLAUDE_MODELS
+        .iter()
+        .find(|(id, _)| Some(*id) == chosen.as_deref())
+        .map(|(id, _)| *id)
+        .unwrap_or(CLAUDE_MODELS[0].0)
+}
+
 pub fn consent() -> Value {
     let c = load_consent();
-    json!({ "consented": c.consented, "id": c.id })
+    let models: Vec<Value> = CLAUDE_MODELS.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect();
+    json!({
+        "consented": c.consented, "id": c.id, "model": claude_model(), "models": models,
+        "saveable": consent_path().is_some(),
+    })
 }
 
 /// Whether a consented CLI is selected and thus usable.
@@ -165,8 +228,10 @@ pub fn detect() -> Value {
     let results: Vec<Value> = ADAPTERS
         .iter()
         .map(|a| {
+            let path = resolve_cmd(a.cmd);
             json!({
-                "id": a.id, "label": a.label, "installed": on_path(a.cmd),
+                "id": a.id, "label": a.label, "installed": path.is_some(),
+                "path": path.map(|p| p.to_string_lossy().into_owned()),
                 "install": a.install, "unverified": a.unverified, "verified": a.verified,
             })
         })
@@ -174,13 +239,58 @@ pub fn detect() -> Value {
     json!(results)
 }
 
-fn on_path(cmd: &str) -> bool {
-    let finder = if cfg!(windows) { "where" } else { "which" };
-    matches!(run_direct(finder, &[cmd.to_string()], DETECT_TIMEOUT, None), Ok(out) if !out.trim().is_empty())
+/// Where `cmd` lives, or None if it is not installed.
+///
+/// Windows asks `where`, which knows the `.cmd`/`.ps1` shim rules. Elsewhere
+/// the search is done here, not by `which`: `which` is not in Arch's `base`
+/// (so it can be missing outright), and an app started from a desktop
+/// launcher inherits a PATH without the per-user directories CLIs install to
+/// — Claude's own installer puts it in `~/.local/bin`, which a Hyprland or
+/// GNOME session started by a display manager often does not have. So PATH,
+/// then those directories.
+fn resolve_cmd(cmd: &str) -> Option<std::path::PathBuf> {
+    if cfg!(windows) {
+        let out = run_direct("where", &[cmd.to_string()], DETECT_TIMEOUT, None).ok()?;
+        return out.lines().map(str::trim).find(|l| !l.is_empty()).map(std::path::PathBuf::from);
+    }
+    search_dirs().into_iter().map(|d| d.join(cmd)).find(|p| is_executable(p))
+}
+
+/// PATH plus the per-user install directories `resolve_cmd` explains.
+fn search_dirs() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for rel in [".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin", ".cargo/bin"] {
+            dirs.push(home.join(rel));
+        }
+    }
+    for abs in ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"] {
+        dirs.push(PathBuf::from(abs));
+    }
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
+    dirs
+}
+
+#[cfg(unix)]
+fn is_executable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &std::path::Path) -> bool {
+    p.is_file()
 }
 
 /// Discover a usable model name for adapters that need one.
 fn discover_model(kind: &str) -> Option<String> {
+    if kind == "claude" {
+        return Some(claude_model().to_string());
+    }
     if kind != "ollama" {
         // gh-models: no cheap list parse worth the round trip; a default is used.
         return None;
@@ -209,6 +319,25 @@ Remember: output the JSON object and nothing else."
 /// `llm::convert`'s chain expects, so it slots in as one more provider.
 pub fn call(system: &str, user: &str, schema: &Value) -> Result<Value, String> {
     let adapter = chosen_adapter().ok_or("no local CLI selected")?;
+    call_with(adapter, system, user, schema)
+}
+
+/// One tiny round trip through a CLI, connected or not, for the settings
+/// card's Test button: proves the binary starts, is signed in, and answers in
+/// JSON. Returns which model answered and how long it took.
+pub fn test(id: &str) -> Result<Value, String> {
+    let adapter = ADAPTERS.iter().find(|a| a.id == id).ok_or("unknown CLI")?;
+    let schema = json!({ "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] });
+    let start = std::time::Instant::now();
+    let out = call_with(adapter, "You are a connectivity check.", "Reply with {\"ok\": true}.", &schema)?;
+    Ok(json!({
+        "ok": out.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+        "ms": start.elapsed().as_millis() as u64,
+        "model": if adapter.id == "claude" { Some(claude_model()) } else { None },
+    }))
+}
+
+fn call_with(adapter: &Adapter, system: &str, user: &str, schema: &Value) -> Result<Value, String> {
 
     let mut model = None;
     if let Some(kind) = adapter.needs_model {
@@ -239,7 +368,12 @@ fn run_cli(file: &str, args: &[String], timeout: Duration, stdin_data: &str) -> 
         full_args.extend(args.iter().cloned());
         run_direct("cmd", &full_args, timeout, Some(stdin_data))
     } else {
-        run_direct(file, args, timeout, Some(stdin_data))
+        // By absolute path, for the reason `resolve_cmd` gives — and with the
+        // same directories on the child's PATH, since an npm-installed CLI is
+        // a `#!/usr/bin/env node` script that has to find `node` the same way.
+        let program = resolve_cmd(file).ok_or_else(|| format!("{file} not found on PATH or in ~/.local/bin"))?;
+        let program = program.to_string_lossy().into_owned();
+        run_direct(&program, args, timeout, Some(stdin_data))
     }
 }
 
@@ -251,6 +385,10 @@ fn run_cli(file: &str, args: &[String], timeout: Duration, stdin_data: &str) -> 
 fn run_direct(program: &str, args: &[String], timeout: Duration, stdin_data: Option<&str>) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    if let Ok(path) = std::env::join_paths(search_dirs()) {
+        cmd.env("PATH", path);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

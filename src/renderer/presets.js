@@ -228,10 +228,11 @@
       opaque. Solo also keeps the lyrics, which is the entire point — no
       MilkDrop player anywhere shows the words.
 
-      `milkdrop` names a starting preset from the pack. It is a *starting*
-      point: cycleMilkdrop() moves through the catalogue from there, and a name
-      that a pack upgrade removed resolves to the first available preset rather
-      than to a black screen.
+      Every MilkDrop start is a random preset from the whole catalogue (see
+      milkdropTargetFor in renderer.js). `milkdrop` names the fallback for the
+      moment before the catalogue has loaded any names; a name that a pack
+      upgrade removed resolves to the first available preset rather than to a
+      black screen.
     */
     {
       id: 'milkdrop',
@@ -241,22 +242,6 @@
       soloLayer: true,
       transparentBg: true,
       milkdrop: 'martin - mandelbox explorer - high speed demo version',
-      layers: {},
-      swirl: {},
-    },
-    {
-      id: 'milkdrop-ii',
-      name: 'MilkDrop II',
-      cost: 2,
-      engine: 'milkdrop',
-      soloLayer: true,
-      transparentBg: true,
-      /* A second entry point into the same 395-preset catalogue, so the cycle
-         does not always start from the same look. Named by number rather than
-         by character ("Soft", "Calm") on purpose: these are community presets
-         and nobody has classified them, so any adjective here would be a
-         promise the code cannot keep. */
-      milkdrop: 'Flexi - alien fish pond',
       layers: {},
       swirl: {},
     },
@@ -294,6 +279,10 @@
    * @returns {Preset}
    */
   function byId(id) {
+    // 'milkdrop-ii' was a second entry point into the same catalogue, removed
+    // once every MilkDrop start became a random roll; songs that saved it as
+    // their look keep MilkDrop rather than dropping to the default.
+    if (id === 'milkdrop-ii') id = 'milkdrop';
     return NORMALIZED.find((p) => p.id === id) || NORMALIZED.find((p) => p.id === DEFAULT_ID);
   }
 

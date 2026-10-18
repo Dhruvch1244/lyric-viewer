@@ -107,6 +107,8 @@
     localcliDetect: () => call('localcli_detect', {}, { detected: [] }),
     localcliStatus: () => call('localcli_status', {}, {}),
     localcliConsent: (id) => call('localcli_consent', { id }),
+    localcliSetModel: (model) => call('localcli_set_model', { model }, {}),
+    localcliTest: (id) => call('localcli_test', { id }, { status: 'error', message: 'unavailable' }),
 
     milkdropCatalogue: () => call('milkdrop_catalogue', {}, []),
     milkdropPreset: (name) => call('milkdrop_preset', { name }),

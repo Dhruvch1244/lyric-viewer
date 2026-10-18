@@ -184,6 +184,9 @@ fn call_openai_compatible(url: &str, model: &str, key: &str, system: &str, user:
     parse_json_loose(text)
 }
 
+/// The newest Opus. Overridable with `LYRIC_OVERLAY_ANTHROPIC_MODEL`.
+pub(crate) const ANTHROPIC_DEFAULT_MODEL: &str = "claude-opus-5-5";
+
 /// Claude via the Messages API directly — no SDK, since Electron's Node SDK
 /// dependency doesn't carry over to a Rust binary. Anthropic has no
 /// `response_format`/JSON-mode knob the way the OpenAI-compatible providers
@@ -191,23 +194,34 @@ fn call_openai_compatible(url: &str, model: &str, key: &str, system: &str, user:
 /// parsed the same best-effort way as Groq/HF's completions.
 fn call_anthropic(system: &str, user: &str, schema: &Value) -> Result<Value, String> {
     let key = anthropic_key().ok_or("no anthropic key")?;
-    let model = std::env::var("LYRIC_OVERLAY_ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-5".into());
+    let model = std::env::var("LYRIC_OVERLAY_ANTHROPIC_MODEL").unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.into());
     let sys = format!(
         "{system}\n\nReturn ONLY a JSON object that conforms to this JSON Schema (no markdown, no commentary):\n{schema}"
     );
-    let body = json!({
+    let mut body = json!({
         "model": model,
-        "max_tokens": 8192,
-        "temperature": 0.2,
+        "max_tokens": 16000,
         "system": sys,
         "messages": [{ "role": "user", "content": user }],
     });
-    let resp = ureq::post("https://api.anthropic.com/v1/messages")
+    let mut req = ureq::post("https://api.anthropic.com/v1/messages")
         .set("Content-Type", "application/json")
         .set("x-api-key", &key)
         .set("anthropic-version", "2023-06-01")
-        .timeout(TIMEOUT)
-        .send_json(body);
+        .timeout(TIMEOUT);
+    if model == ANTHROPIC_DEFAULT_MODEL {
+        // Opus 5.5 rejects `temperature` and always thinks; `low` effort keeps
+        // a mood tag or a translation batch quick, and `fallbacks: "default"`
+        // lets a lyric that trips a safety classifier be answered by the
+        // fallback model instead of failing the feature. Only for the default:
+        // an older model set through the env var may reject either field.
+        body["output_config"] = json!({ "effort": "low" });
+        body["fallbacks"] = json!("default");
+        req = req.set("anthropic-beta", "server-side-fallback-2026-07-01");
+    } else {
+        body["temperature"] = json!(0.2);
+    }
+    let resp = req.send_json(body);
     let data: Value = match resp {
         Ok(r) => r.into_json().map_err(|e| format!("anthropic decode: {e}"))?,
         Err(ureq::Error::Status(code, r)) => {
@@ -216,8 +230,16 @@ fn call_anthropic(system: &str, user: &str, schema: &Value) -> Result<Value, Str
         }
         Err(e) => return Err(format!("anthropic transport: {e}")),
     };
+    if data.get("stop_reason").and_then(|v| v.as_str()) == Some("refusal") {
+        return Err("anthropic declined this request".into());
+    }
+    // The first TEXT block, not content[0]: a thinking model puts its
+    // (empty, display-omitted) thinking block first.
     let text = data
-        .pointer("/content/0/text")
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|blocks| blocks.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text")))
+        .and_then(|b| b.get("text"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     parse_json_loose(text)

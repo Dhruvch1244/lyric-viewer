@@ -156,6 +156,11 @@
              Both used to be called a preset, with two similar-looking chips
              and only one of them labelled. -->
         <button id="btn-preset" class="chip" type="button" title="Scene — this app's own look. Click to change. (P)">◈ Liquid</button>
+        <!-- Always on the bar, not in More and not only while MilkDrop is live:
+             it is the way into 1755 looks, and a door that appears only once
+             you are already through it is not a door. From a swirl scene it
+             switches this song to MilkDrop, then opens the browser. -->
+        <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse, favourite and pin the 1755-preset catalogue (V)" aria-pressed="false">✳ MilkDrop</button>
         <!-- Shuffle (PERF-UX.md U6b) is always visible, not contextual — it is
              just a persisted preference, safe to arm from the swirl engine for
              whenever MilkDrop becomes active. Heart/Next stay contextual below:
@@ -168,7 +173,7 @@
              bar from nineteen chips to five and that should hold. -->
         <span id="md-live" class="hud__live" hidden>
           <button id="btn-md-heart" class="chip" type="button" aria-pressed="false"
-                  title="Favourite this preset — shuffle draws from your favourites once you have some">♡</button>
+                  title="Favourite this preset — keep it under ♥ in the MilkDrop browser">♡</button>
           <button id="btn-md-next" class="chip" type="button"
                   title="Next preset now">▸</button>
         </span>
@@ -200,7 +205,6 @@
             <div class="more-menu__row">
             <button id="btn-backdrop" class="chip" type="button" title="Backdrop opacity (B)">◐ vivid</button>
             <button id="btn-sprites" class="chip" type="button" title="Toggle artist sprites" aria-pressed="true">☻ Sprites</button>
-            <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — the imported community catalogue. Browse, favourite and pin. (V)" aria-pressed="false" hidden>✳ MilkDrop</button>
             <button id="btn-perf" class="chip" type="button" title="Lite mode — fewer effects, higher FPS" aria-pressed="false"><svg viewBox="0 0 16 16" fill="currentColor" stroke="none" aria-hidden="true"><path d="M9 1 3.4 9.2h3.4l-.9 5.8L12.6 6.6H9.1L9 1z"/></svg>Lite</button>
             <button id="btn-wallpaper" class="chip" type="button" title="Desktop wallpaper mode — visuals run behind your icons (Ctrl+Alt+M)" aria-pressed="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="8.4" rx="1"/><path d="M5.6 14h4.8M8 11v3"/></svg>Wallpaper</button>
             </div>
@@ -272,6 +276,23 @@
                placeholder="hf_…" autocomplete="off" spellcheck="false" />
         <button id="keybox-save" class="chip" type="button">Save</button>
         <span id="keybox-status" class="keybox__status" role="status"></span>
+
+        <!-- Claude CLI, as its own setup card rather than one chip among five:
+             it is the verified adapter and the one most people here have. Uses
+             the `claude` you already run in a terminal, signed in the same way;
+             the app never installs or logs it in, only finds, tests and calls
+             it. Filled by populateClaudeCard() in renderer.js. -->
+        <div class="keybox__local" id="keybox-claude">
+          <span class="keybox__label">Claude CLI</span>
+          <span id="keybox-claude-status" class="keybox__note">checking…</span>
+          <code id="keybox-claude-install" class="keybox__code" hidden></code>
+          <div class="keybox__cli">
+            <select id="keybox-claude-model" class="chip" title="Which Claude model answers"></select>
+            <button id="keybox-claude-connect" class="chip" type="button">Connect</button>
+            <button id="keybox-claude-test" class="chip chip--muted" type="button"
+                    title="Send one tiny prompt and time the answer">Test</button>
+          </div>
+        </div>
 
         <!-- Local AI: pick a developer CLI to use when the cloud has no key or
              is out of quota. Available here on demand, not only when a request
@@ -602,6 +623,9 @@
     <section id="poster" class="poster" hidden role="dialog" aria-modal="true" aria-label="Cover art">
       <header class="poster__bar">
         <h2 class="poster__title">Cover art</h2>
+        <input id="poster-input" class="lyricsearch__input" type="search"
+               placeholder="Album, song or artist…" spellcheck="false" />
+        <button id="poster-run" class="chip" type="button">Search</button>
         <span id="poster-status" class="poster__status" role="status"></span>
         <button id="poster-auto" class="chip chip--muted" type="button"
                 title="Forget the chosen cover and search again">Auto</button>
@@ -657,6 +681,19 @@
       <button id="nudge-enable" class="chip" type="button">Enable ♫</button>
       <button id="nudge-dismiss" class="chip chip--muted" type="button"
               title="Don't show this again">✕</button>
+    </div>
+
+    <!-- "Not found — search yourself." Lyrics and the cover are looked up
+         automatically; when every source misses, the manual search (/) and
+         the cover picker are the fix, and both sit behind the More menu where
+         nobody looks mid-song. One small card for the current song, right
+         side so it never stacks on the capture nudge, gone on the next track
+         or after a few seconds. -->
+    <div id="missing-card" class="nudge nudge--missing" role="status" hidden>
+      <span id="missing-text" class="nudge__text"></span>
+      <button id="missing-lyrics" class="chip" type="button" hidden>Search lyrics</button>
+      <button id="missing-cover" class="chip" type="button" hidden>Find cover</button>
+      <button id="missing-dismiss" class="chip chip--muted" type="button" title="Dismiss">✕</button>
     </div>
 
     <!-- Auto-update, on screen. 0.20.0 reported update state into the tray menu
@@ -777,7 +814,7 @@
           <div><dt>/</dt><dd>Search lyrics</dd></div>
           <div><dt>K</dt><dd>Settings</dd></div>
           <div><dt>P</dt><dd>Scene</dd></div>
-          <div><dt>V</dt><dd>MilkDrop presets (while MilkDrop is the live engine)</dd></div>
+          <div><dt>V</dt><dd>MilkDrop presets (switches to MilkDrop if needed)</dd></div>
           <div><dt>B</dt><dd>Backdrop opacity</dd></div>
           <div><dt>Esc</dt><dd>Close whatever panel is open</dd></div>
           <div><dt>?</dt><dd>This list</dd></div>

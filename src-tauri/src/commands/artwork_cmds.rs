@@ -86,6 +86,13 @@ impl Runnable for ArtworkJob {
                     "chosen": false,
                 }),
             );
+        } else {
+            // Said out loud rather than by silence, so the renderer can offer
+            // the cover picker for this song instead of leaving a blank tile.
+            let _ = app.emit(
+                "artwork",
+                json!({ "track": { "title": title, "artist": artist }, "artwork": null, "missing": true }),
+            );
         }
     }
 }

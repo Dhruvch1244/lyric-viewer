@@ -965,6 +965,18 @@ body.mode-wallpaper .poster {
   gap: 0.4rem;
 }
 
+.keybox__code {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--chrome-card);
+  color: var(--chrome-ink);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
 .localcli__hint {
   font-size: 0.72rem;
   color: var(--chrome-ink-faint);
@@ -990,6 +1002,14 @@ body.mode-wallpaper .poster {
 */
 .nudge--update {
   bottom: 17vh;
+}
+
+/* Right-hand side: the capture nudge and the update/local-CLI cards all sit
+   on the left, and this one can arrive at the same moment as any of them. */
+.nudge--missing {
+  left: auto;
+  right: 3vw;
+  max-width: min(26rem, 60vw);
 }
 
 /*

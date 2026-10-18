@@ -110,6 +110,8 @@ const els = {
   posterBusy: document.getElementById('poster-busy'),
   posterAuto: document.getElementById('poster-auto'),
   posterClose: document.getElementById('poster-close'),
+  posterInput: document.getElementById('poster-input'),
+  posterRun: document.getElementById('poster-run'),
   lyricSearchBtn: document.getElementById('btn-lyrics-search'),
   lyricSearch: document.getElementById('lyrics-search'),
   lyricSearchInput: document.getElementById('lyricsearch-input'),
@@ -1494,6 +1496,31 @@ let frameIntervalMs = 16.7;
 let lastFrameAt = 0;
 
 /*
+  The display's own frame interval — the fastest cadence frames have been
+  presented at, tracked downward only (a load spike can make frames slower than
+  vsync, never faster).
+
+  The resolution ladders below used to climb only below 13ms (~77fps), which a
+  60Hz display can never reach — and WebKitGTK caps every display at 60fps. So
+  on Linux, and on any 60Hz screen, the swirl sat at its 0.55 starting rung for
+  good and the 2D canvas never recovered from a single dip: measured in the
+  live app at 945x1025, a 519x563 swirl stretched to fill it, with frames at a
+  steady 16.7ms and 0.3ms of draw cost — all of the blur, none of the load.
+  "Holding the display's rate" is the headroom signal that works at any
+  refresh rate.
+*/
+let vsyncMs = 16.7;
+
+/**
+ * Whether frames are arriving at the display's full rate — room to spend on
+ * more pixels. The 13ms floor keeps the old behaviour on high-refresh displays,
+ * where 77fps on a 144Hz screen was always reason enough to climb.
+ */
+function hasFrameHeadroom() {
+  return frameIntervalMs < Math.max(13, vsyncMs * 1.25);
+}
+
+/*
   Drawing-buffer scale currently applied to the swirl field.
 
   The field renders below CSS resolution and is stretched back up by the
@@ -1503,10 +1530,15 @@ let lastFrameAt = 0;
   pixels for a barely perceptible change in softness. See applySwirlScale.
 */
 let swirlScale = 0;
-/** Resolution ladder, coarse on purpose — see applySwirlScale. */
-const SWIRL_SCALES = [0.30, 0.40, 0.55, 0.70];
+/** Resolution ladder, coarse on purpose — see applySwirlScale. The 1.0 rung is
+    new with the headroom fix: at 0.70 the field was still visibly soft on a
+    1080p screen, and in the live app 1.0 held 60fps with the same 18-19ms
+    worst frame as 0.55. The governor still sheds it the moment frames run long. */
+const SWIRL_SCALES = [0.30, 0.40, 0.55, 0.70, 1.0];
 /** When the swirl resolution last changed, so climbing back up is rate-limited. */
 let lastSwirlScaleAt = 0;
+/** Per rung, when climbing back to it is allowed again — see applySwirlScale. */
+const swirlRungBlockedUntil = [];
 /** Whether the 2D backdrop canvas is currently out of the page (Ghost mode). */
 let canvasHidden = false;
 
@@ -1543,8 +1575,10 @@ let milkdropSize = '';
    persisted; a pin is. */
 let milkdropWanted = null;
 let milkdropChosen = null;
-/** The visual preset id `milkdropWanted` was seeded from. */
+/** The visual preset id + track `milkdropWanted` was seeded from. */
 let milkdropSeededFor = null;
+/** Whether a fatal MilkDrop init failure has already been routed to a swirl look. */
+let milkdropFailHandled = false;
 
 /* ------------------------------------------------------------ display mode */
 /*
@@ -1619,7 +1653,7 @@ function applyCanvasScale(now) {
   if (frameIntervalMs > 24 && rung > 0) {
     rung -= 1;
     lastCanvasScaleAt = now;
-  } else if (frameIntervalMs < 13 && rung < CANVAS_SCALES.length - 1
+  } else if (hasFrameHeadroom() && rung < CANVAS_SCALES.length - 1
     && now - lastCanvasScaleAt > 1500) {
     rung += 1;
     lastCanvasScaleAt = now;
@@ -2580,10 +2614,18 @@ function applySwirlScale(now) {
     a genuine sag, while one bad frame now costs one reallocation instead of
     three.
   */
+  /*
+    A rung that had to be shed is not retried for 30s. A 60fps-capped display
+    cannot show "comfortably 60" apart from "only just 60", so the climb is a
+    probe — and without this, a rung one step too heavy would be climbed,
+    dropped and reallocated every second or so.
+  */
   if (frameIntervalMs > 22 && rung > 0 && now - lastSwirlScaleAt > 300) {
+    swirlRungBlockedUntil[rung] = now + 30000;
     rung -= 1;
     lastSwirlScaleAt = now;
-  } else if (frameIntervalMs < 13 && rung < ceiling && now - lastSwirlScaleAt > 1000) {
+  } else if (hasFrameHeadroom() && rung < ceiling && now - lastSwirlScaleAt > 1000
+    && !(now < (swirlRungBlockedUntil[rung + 1] || 0))) {
     rung += 1;
     lastSwirlScaleAt = now;
   }
@@ -2613,8 +2655,9 @@ function applySwirlScale(now) {
  * disagree.
  *
  * Precedence: a pin (this song, persisted) beats a session choice (a click or
- * the dice) beats the look's own starting preset, falling back to a curated
- * default so a look never opens on a dud.
+ * the dice) beats a random preset from the whole catalogue, rolled once per
+ * song. The look's own `milkdrop` name is only the fallback for a catalogue
+ * that has not loaded any names.
  *
  * THE BUG THIS FIXES. A session choice must survive an *engine bounce*. The
  * FPS governor swaps MilkDrop for the cheap swirl preset whenever the frame
@@ -2622,28 +2665,32 @@ function applySwirlScale(now) {
  * GPU-heavy — and swaps back when it recovers. The old init path cleared
  * `milkdropChosen` on every such re-entry, so a preset you picked reverted to
  * the look's seed a second or two later, for no reason you could see. The reset
- * now happens ONLY when the visual look itself changes (a different `preset.id`),
- * not when the same look's engine restarts.
+ * now happens ONLY when the visual look or the song changes, not when the same
+ * look's engine restarts.
  *
  * @param {object} preset the visual look being rendered
  * @returns {string|null} the preset name to show
  */
 function milkdropTargetFor(preset) {
-  if (preset.id !== milkdropSeededFor) {
-    // A genuinely new look: its starting point is the new intent, and any
-    // session choice belonged to the previous look.
-    milkdropSeededFor = preset.id;
+  // Keyed on the song as well as the look: MilkDrop is the default look for
+  // every new song, so keyed on `preset.id` alone it would never reseed and
+  // the whole session would open on one preset.
+  const seedKey = `${preset.id}|${currentTrack ? trackLookKey(currentTrack) : ''}`;
+  if (seedKey !== milkdropSeededFor) {
+    // A genuinely new look or song: any session choice belonged to the
+    // previous one, and the start is a fresh random roll below.
+    milkdropSeededFor = seedKey;
     milkdropChosen = null;
-    milkdropWanted = preset.milkdrop;
+    milkdropWanted = null;
   }
   let seed = (milkdropWanted && window.MilkDrop.names().includes(milkdropWanted)) ? milkdropWanted : null;
   if (!seed) {
-    // `milkdropDefault` is random now, and this function runs every frame —
+    // `milkdropDefault` is random, and this function runs every frame —
     // so the answer has to be recorded as the current intent, not re-rolled.
     // Exactly what the drop-triggered cycle below does with its own pick, and
     // for the same reason: without it the next frame disagrees and the preset
     // changes at the frame rate.
-    seed = milkdropDefault();
+    seed = milkdropDefault() || preset.milkdrop;
     milkdropWanted = seed;
   }
   return pinnedMilkdrop() || milkdropChosen || seed;
@@ -2669,7 +2716,6 @@ function applyEngine(preset, now, dt, w, h) {
   if (wanted !== activeEngine) {
     activeEngine = wanted;
     document.body.classList.toggle('engine-milkdrop', wanted === 'milkdrop');
-    if (els.mdBtn) els.mdBtn.hidden = wanted !== 'milkdrop';
     if (wanted === 'milkdrop') {
       els.milkdrop.hidden = false;
       window.MilkDrop.init(els.milkdrop);
@@ -2691,6 +2737,15 @@ function applyEngine(preset, now, dt, w, h) {
   }
 
   if (activeEngine !== 'milkdrop') return;
+
+  // MilkDrop is the default look for new songs (defaultLookFor), so a frame
+  // that turns out unable to run must hand this song back to a swirl look
+  // rather than leave lyrics on a blank screen. Once: an explicit override to
+  // MilkDrop stays the user's call.
+  if (window.MilkDrop.failed() && !milkdropFailHandled) {
+    milkdropFailHandled = true;
+    applyLookForTrack(currentTrack);
+  }
 
   /*
     The engine reports whether it is actually alive only once its frame has
@@ -2739,15 +2794,14 @@ function applyEngine(preset, now, dt, w, h) {
        where an unwanted preset actually turns up, so a veto that did not reach
        it would be a bookmark rather than a veto.
 
-       Liked presets, when there are any, are the only ones the cycle draws
-       from — the fastest way to make 1754 looks feel curated is to let someone
-       curate them. */
-    const all = milkdropCyclePool();
-    if (all.length > 1) {
-      const i = all.indexOf(milkdropName);
+       A random pick from the whole catalogue, not the next favourite: with
+       two hearts, the old favourites-only pool alternated between exactly
+       those two (see milkdropCyclePool). */
+    const pick = milkdropRandomOther(milkdropName);
+    if (pick && pick !== milkdropName) {
       // Recorded as the new intent, not just loaded — otherwise the block above
       // reverts it on the next frame.
-      milkdropWanted = all[(i + 1) % all.length];
+      milkdropWanted = pick;
       // Cross-fade over a musical phrase, not a fixed 2.7s. Fading across four
       // beats lands the transition on a bar boundary, so the new preset arrives
       // *with* the music rather than at an arbitrary wall-clock offset. The
@@ -3409,6 +3463,8 @@ function drawBackdrop(now) {
     if (lastFrameAt) {
       const gap = now - lastFrameAt;
       if (gap < 100) frameIntervalMs += (gap - frameIntervalMs) * 0.05;
+      // Eased, not snapped, so one early-timestamped frame cannot halve it.
+      if (gap > 3 && gap < vsyncMs) vsyncMs += (gap - vsyncMs) * 0.1;
     }
     lastFrameAt = now;
 
@@ -4770,6 +4826,12 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.55.0': [
+    '<b>MilkDrop by default</b> — every new song opens on a random preset from all 1755, and shuffle picks from all of them too.',
+    '<b>Sharper visuals</b> — the backdrop now renders at full resolution whenever your machine keeps up.',
+    '<b>Lyrics or cover missing?</b> A small popup lets you search for them yourself, pre-filled for the song.',
+    '<b>Claude CLI on Linux & Mac</b> — connect the claude you already use from the 🔑 panel, on Opus 5.5.',
+  ],
   '0.27.0': [
     '<b>The visuals hit harder on the beat</b> — every kick thumps the field and sends a shockwave from the centre, with bigger drops.',
     '<b>No more share pop-up</b> — turning on audio (♫) just starts, no "choose what to share" dialog.',
@@ -5307,6 +5369,9 @@ window.player.onTrack((track) => {
   flushHeatmap();                 // ...including the shape of it
   flushTranscription();           // and send the previous song's audio to Whisper
   currentTrack = track;
+  missingNudge.reset();           // the last song's "not found" popup says nothing about this one
+  // An open search panel follows the song; a closed one catches up when opened.
+  if (els.lyricSearch && !els.lyricSearch.hidden) resetLyricSearchForTrack();
   maybeAutoShowSongInfo(track);   // pop "About this song" open once, if Wikipedia has it
   durationMs = track.durationMs || 0;
   lastProgressPct = -1;           // force the bar to redraw for the new song
@@ -5437,6 +5502,9 @@ window.player.onHeatmap((data) => {
 /* Cover art + richer artist credit fetched in the main process. */
 window.player.onArtwork((data) => {
   if (!isForCurrentTrack(data.track)) return;
+  // Every source came back empty (artwork_cmds.rs emits `missing`).
+  if (data.missing) { missingNudge.show('cover'); return; }
+  missingNudge.hide('cover');
   if (data.artwork) loadArtImage(data.artwork);
   maybeEnrichArtists(data.artistName);
   // Whether this cover was hand-picked, so the ▣ chip can say so and the
@@ -5570,11 +5638,28 @@ window.player.onLyrics((payload) => {
       setJob('lyrics', null);
       setStatus(payload.plainAvailable ? 'lyrics found — timing needed' : 'no synced lyrics found');
       clearColumn();
+      missingNudge.show('lyrics');
       // Nothing to show this play — start listening so Whisper can transcribe
       // the song at the end and have it ready for every play after.
       beginTranscriptionListen();
       break;
     case 'error': setJob('lyrics', null); setStatus('lyric lookup failed'); clearColumn(); break;
+    case 'network-error':
+      // LRCLIB never answered — not the same as the song having no lyrics.
+      // Main re-runs the lookup on its own while `retrying`; after that the
+      // manual search (/) is how to ask again.
+      clearColumn();
+      if (payload.retrying) {
+        setJob('lyrics', 'waiting for the lyrics server');
+        setStatus(`can't reach the lyrics server — retrying in ${payload.retryInS || 10}s…`);
+      } else {
+        setJob('lyrics', null);
+        setStatus("can't reach the lyrics server — check your connection, then press / to search");
+        missingNudge.show('lyrics');
+        // Same fallback as a real miss: let Whisper learn the song meanwhile.
+        beginTranscriptionListen();
+      }
+      break;
     default:
       setStatus('');
       /*
@@ -5604,8 +5689,8 @@ window.player.onLyrics((payload) => {
         setStatus('word-sync active');
       }
   }
-  if (payload.status !== 'searching') setJob('lyrics', null);
-  if (payload.status === 'ok') showSourceBadge(payload.origin);
+  if (payload.status !== 'searching' && !(payload.status === 'network-error' && payload.retrying)) setJob('lyrics', null);
+  if (payload.status === 'ok') { showSourceBadge(payload.origin); missingNudge.hide('lyrics'); }
   applyScript();
   refreshButtons();
   updateHero();
@@ -5835,7 +5920,7 @@ document.addEventListener('keydown', (e) => {
       if (els.presetBtn) els.presetBtn.click();
       break;
     case 'v': case 'V':
-      if (els.mdBtn && !els.mdBtn.hidden) els.mdBtn.click(); // hidden unless MilkDrop is the live engine
+      if (els.mdBtn) els.mdBtn.click();
       break;
     case 'b': case 'B':
       if (els.backdropBtn) els.backdropBtn.click();
@@ -6508,9 +6593,23 @@ function readLookOverrides() {
 }
 
 /**
+ * The look a song without an override opens on: MilkDrop, on a random preset
+ * from the full catalogue (see milkdropTargetFor).
+ *
+ * Falls back to the hashed swirl look (`forTrack`) only once the MilkDrop
+ * frame has reported that it cannot run — WebGL2 missing, a bundle that
+ * failed to load. That is the case presets.js keeps second-engine looks out
+ * of the random pool for: lyrics on a blank screen. The frame only starts
+ * when MilkDrop is first shown, so until then MilkDrop is assumed.
+ */
+function defaultLookFor(track) {
+  if (window.MilkDrop && !window.MilkDrop.failed()) return 'milkdrop';
+  return window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key, currentGenre).id;
+}
+
+/**
  * Choose the look for a track: an explicit override if the user set one,
- * otherwise a look derived from the track identity — random across songs,
- * identical every time you replay the same one.
+ * otherwise `defaultLookFor`.
  * @param {object|null} track
  */
 function applyLookForTrack(track) {
@@ -6518,7 +6617,7 @@ function applyLookForTrack(track) {
   const override = readLookOverrides()[trackLookKey(track)];
   presetId = override
     ? window.VisualPresets.byId(override).id
-    : window.VisualPresets.forTrack(trackLookKey(track), moodProfile && moodProfile.key, currentGenre).id;
+    : defaultLookFor(track);
   applyPresetLabel();
 }
 
@@ -6546,13 +6645,10 @@ function applyPresetLabel() {
   engines by itself. Heart and next stay contextual (shown only while
   MilkDrop is the engine on screen) because both act on the CURRENT MilkDrop
   preset, which does not exist once MilkDrop's GPU surface has been torn
-  down (compact-mode teardown). The heart is the load bearing one:
-  favourites already decide what shuffle draws from (`milkdropCyclePool`
-  prefers liked presets once there is more than one), so hearting a few
-  turns 1754 community presets into your own rotation. That mechanism
-  existed already and was reachable only by opening the browser and finding
-  the current preset's card in it, which is not a thing anyone does
-  mid-song.
+  down (compact-mode teardown). The heart saves the current
+  preset to the browser's ♥ filter without opening the browser and finding
+  its card, which is not a thing anyone does mid-song. It no longer narrows
+  shuffle — shuffle draws from the whole catalogue (`milkdropCyclePool`).
 */
 const mdLive = document.getElementById('md-live');
 const mdShuffleBtn = document.getElementById('btn-md-shuffle');
@@ -6588,8 +6684,8 @@ function updateMilkdropLiveChips() {
     mdHeartBtn.textContent = liked ? '♥' : '♡';
     mdHeartBtn.setAttribute('aria-pressed', String(liked));
     mdHeartBtn.title = liked
-      ? `Favourited — shuffle draws from your favourites. Click to remove "${milkdropName || ''}".`
-      : `Favourite "${milkdropName || 'this preset'}" — shuffle then draws from your favourites`;
+      ? `Favourited — find it under ♥ in the MilkDrop browser. Click to remove "${milkdropName || ''}".`
+      : `Favourite "${milkdropName || 'this preset'}" — keep it under ♥ in the MilkDrop browser`;
   }
 }
 
@@ -6614,16 +6710,13 @@ if (mdHeartBtn) {
 
 if (mdNextBtn) {
   mdNextBtn.addEventListener('click', () => {
-    if (typeof milkdropCyclePool !== 'function' || !window.MilkDrop) return;
-    const pool = milkdropCyclePool();
-    if (pool.length < 2) {
-      setStatus('only one preset to choose from — favourite a few more in the browser');
+    if (typeof milkdropRandomOther !== 'function' || !window.MilkDrop) return;
+    const pick = milkdropRandomOther(milkdropName);
+    if (!pick || pick === milkdropName) {
+      setStatus('only one preset to choose from — unhide some in the browser');
       return;
     }
-    // Advance from where we are, so repeated clicks walk the pool rather than
-    // landing on the same neighbour twice.
-    const i = pool.indexOf(milkdropName);
-    milkdropWanted = pool[(i + 1) % pool.length];
+    milkdropWanted = pick;
     milkdropName = window.MilkDrop.loadPreset(milkdropWanted, 0);
     lastMilkdropSwitchAt = performance.now();
     if (typeof markMilkdropSeen === 'function') markMilkdropSeen(milkdropWanted);
@@ -6720,6 +6813,7 @@ els.keyBtn.addEventListener('click', async () => {
     const provider = await refreshProviderChip();
     els.keyStatus.textContent = provider ? `active: ${provider}` : 'no provider configured';
     populateLocalCliPicker();
+    populateClaudeCard();
     els.keyInput.focus();
   } else {
     closeKeybox();
@@ -6733,6 +6827,79 @@ if (els.keyClose) els.keyClose.addEventListener('click', closeKeybox);
    logic instead of duplicating it. */
 if (els.settingsCorner) {
   els.settingsCorner.addEventListener('click', () => els.keyBtn.click());
+}
+
+/**
+ * The key panel's Claude CLI card: whether `claude` was found (and where), the
+ * install command for this OS when it was not, the model, Connect/Disconnect
+ * and a Test round trip. Connecting is the same consent the Local AI picker
+ * below records, so both stay in step.
+ */
+async function populateClaudeCard() {
+  const status = document.getElementById('keybox-claude-status');
+  const install = document.getElementById('keybox-claude-install');
+  const modelSel = document.getElementById('keybox-claude-model');
+  const connectBtn = document.getElementById('keybox-claude-connect');
+  const testBtn = document.getElementById('keybox-claude-test');
+  if (!status || !window.player.localcliDetect) return;
+
+  let claude = null;
+  let consent = {};
+  try {
+    claude = ((await window.player.localcliDetect()) || []).find((c) => c.id === 'claude') || null;
+    consent = (await window.player.localcliStatus()) || {};
+  } catch { /* backend without these commands */ }
+  const connected = consent.consented && consent.id === 'claude';
+
+  modelSel.replaceChildren(...(consent.models || []).map((m) => {
+    const o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = m.label;
+    return o;
+  }));
+  if (consent.model) modelSel.value = consent.model;
+
+  const found = Boolean(claude && claude.installed);
+  status.textContent = !found
+    ? 'Not found. Install it in a terminal, run `claude` once to sign in, then reopen this panel:'
+    : connected ? `Connected · ${claude.path}` : `Found at ${claude.path} — not connected`;
+  // The official installer per OS; on Linux it is the same command for Arch
+  // and every other distro, and it installs to ~/.local/bin, which the
+  // backend searches even when the desktop session's PATH lacks it.
+  install.hidden = found;
+  install.textContent = /Windows/.test(navigator.userAgent)
+    ? 'irm https://claude.ai/install.ps1 | iex'
+    : 'curl -fsSL https://claude.ai/install.sh | bash';
+  connectBtn.disabled = !found;
+  testBtn.disabled = !found;
+  modelSel.disabled = !found;
+  connectBtn.textContent = connected ? 'Disconnect' : 'Connect';
+  connectBtn.setAttribute('aria-pressed', String(connected));
+  if (consent.saveable === false) status.textContent += ' (cannot save the choice: no config folder)';
+
+  connectBtn.onclick = async () => {
+    await window.player.localcliConsent(connected ? null : 'claude');
+    els.keyStatus.textContent = connected ? 'Claude CLI disconnected' : 'Claude CLI connected';
+    populateClaudeCard();
+    populateLocalCliPicker();
+    refreshProviderChip();
+  };
+  modelSel.onchange = async () => {
+    await window.player.localcliSetModel(modelSel.value);
+    els.keyStatus.textContent = `Claude CLI model: ${modelSel.options[modelSel.selectedIndex].textContent}`;
+  };
+  testBtn.onclick = async () => {
+    testBtn.disabled = true;
+    els.keyStatus.textContent = 'asking Claude…';
+    try {
+      const res = await window.player.localcliTest('claude');
+      els.keyStatus.textContent = res && res.status === 'ok' && res.result.ok
+        ? `✓ ${res.result.model} answered in ${(res.result.ms / 1000).toFixed(1)}s`
+        : `Claude CLI test failed: ${(res && (res.message || 'unexpected reply')) || 'no reply'}`;
+    } finally {
+      testBtn.disabled = false;
+    }
+  };
 }
 
 /**
@@ -6777,6 +6944,7 @@ async function populateLocalCliPicker() {
     btn.addEventListener('click', async () => {
       try { await window.player.localcliConsent(c.id); } catch { /* command may not exist on this backend yet */ }
       populateLocalCliPicker();
+      populateClaudeCard();
       els.keyStatus.textContent = c.id ? `local AI: ${c.label}` : 'local AI off';
     });
     box.appendChild(btn);
@@ -7029,7 +7197,15 @@ function closePoster() {
   if (els.posterBtn) els.posterBtn.setAttribute('aria-pressed', 'false');
 }
 
-async function openPoster() {
+/**
+ * Open the cover picker and search. With no `query` it searches the playing
+ * song as the automatic lookup sees it (and resets the box to that); with one,
+ * it searches that text instead — for when the song's own title/artist is what
+ * the sources cannot match. Either way a pick is saved against the PLAYING
+ * song, never against the typed text.
+ * @param {string} [query]
+ */
+async function openPoster(query) {
   if (!els.poster) return;
   closeRailPanels(els.poster);
   els.poster.hidden = false;
@@ -7040,6 +7216,10 @@ async function openPoster() {
     els.posterGrid.replaceChildren();
     els.posterStatus.textContent = 'nothing playing';
     return;
+  }
+  const typed = typeof query === 'string' ? query.trim() : '';
+  if (els.posterInput && !typed) {
+    els.posterInput.value = [currentTrack.artist, currentTrack.title].filter(Boolean).join(' ');
   }
 
   els.posterGrid.replaceChildren();
@@ -7052,7 +7232,7 @@ async function openPoster() {
   try {
     let res;
     try {
-      res = await window.player.artworkCandidates(asked);
+      res = await window.player.artworkCandidates(typed ? { title: typed, artist: '', durationMs: 0 } : asked);
     } catch (err) {
       els.posterStatus.textContent = err.message || 'search failed';
       return;
@@ -7132,6 +7312,13 @@ if (els.posterBtn) {
   });
 }
 if (els.posterClose) els.posterClose.addEventListener('click', closePoster);
+if (els.posterRun) els.posterRun.addEventListener('click', () => openPoster(els.posterInput.value));
+if (els.posterInput) {
+  els.posterInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') openPoster(els.posterInput.value);
+    else if (e.key === 'Escape') closePoster();
+  });
+}
 if (els.posterAuto) {
   els.posterAuto.addEventListener('click', async () => {
     if (!currentTrack) return;
@@ -7184,17 +7371,81 @@ function closeLyricSearch() {
   if (els.lyricSearchBtn) els.lyricSearchBtn.setAttribute('aria-pressed', 'false');
 }
 
+/**
+ * The "not found — search yourself" card (#missing-card). Tracks which of the
+ * two lookups missed for the current song and offers the matching fix for
+ * each; `reset` on a track change, `hide(kind)` when that lookup recovers
+ * (a network retry that worked, a cover chosen by hand).
+ */
+const missingNudge = (() => {
+  const card = document.getElementById('missing-card');
+  const text = document.getElementById('missing-text');
+  const lyricsBtn = document.getElementById('missing-lyrics');
+  const coverBtn = document.getElementById('missing-cover');
+  const dismissBtn = document.getElementById('missing-dismiss');
+  const missing = new Set();
+  /** Dismissed for this song: a later miss of the other kind stays quiet too. */
+  let dismissed = false;
+  let timer = 0;
+
+  function render() {
+    if (!card) return;
+    clearTimeout(timer);
+    if (dismissed || missing.size === 0 || isCompact()) { card.hidden = true; return; }
+    const title = currentTrack && currentTrack.title ? `“${currentTrack.title}”` : 'this song';
+    const what = missing.has('lyrics') && missing.has('cover') ? 'lyrics or a cover'
+      : missing.has('lyrics') ? 'lyrics' : 'a cover';
+    text.textContent = `Couldn't find ${what} for ${title}.`;
+    lyricsBtn.hidden = !missing.has('lyrics');
+    coverBtn.hidden = !missing.has('cover');
+    card.hidden = false;
+    // Long enough to read and reach; the fixes stay in More either way.
+    timer = setTimeout(() => { card.hidden = true; }, 15000);
+  }
+
+  if (lyricsBtn) lyricsBtn.addEventListener('click', () => { card.hidden = true; openLyricSearch(); });
+  if (coverBtn) coverBtn.addEventListener('click', () => { card.hidden = true; openPoster(); });
+  if (dismissBtn) dismissBtn.addEventListener('click', () => { dismissed = true; render(); });
+
+  return {
+    show(kind) { missing.add(kind); render(); },
+    hide(kind) { if (missing.delete(kind)) render(); },
+    reset() { missing.clear(); dismissed = false; render(); },
+  };
+})();
+
+/** trackLookKey of the song the search box was last filled for. */
+let lyricSearchFilledFor = null;
+
+/**
+ * Point the search at the song that is playing now: fill the box with its
+ * artist + title, drop the previous song's results, and search straight away.
+ *
+ * Per song, not once. The box used to fill only while empty, so after the
+ * first song it kept showing the last song's query and results, and every
+ * later search started with clearing it by hand. A query the user typed for
+ * THIS song is left alone — only a song change resets it.
+ */
+function resetLyricSearchForTrack() {
+  if (!els.lyricSearchInput || !currentTrack) return;
+  const key = trackLookKey(currentTrack);
+  if (key === lyricSearchFilledFor) return;
+  lyricSearchFilledFor = key;
+  els.lyricSearchInput.value = [currentTrack.artist, currentTrack.title].filter(Boolean).join(' ');
+  if (els.lyricSearchList) els.lyricSearchList.replaceChildren();
+  if (els.lyricSearchStatus) els.lyricSearchStatus.textContent = '';
+  if (els.lyricSearchInput.value.trim()) runLyricSearch();
+}
+
 function openLyricSearch() {
   if (!els.lyricSearch) return;
   closeRailPanels(els.lyricSearch);
   els.lyricSearch.hidden = false;
   document.body.classList.add('show-cursor');
   if (els.lyricSearchBtn) els.lyricSearchBtn.setAttribute('aria-pressed', 'true');
-  // Pre-fill with what's actually playing — the common case is "the auto
-  // match for THIS song is wrong," not an unrelated lookup.
-  if (els.lyricSearchInput && !els.lyricSearchInput.value && currentTrack) {
-    els.lyricSearchInput.value = [currentTrack.artist, currentTrack.title].filter(Boolean).join(' ');
-  }
+  // Pre-filled and already searched for what's playing — the common case is
+  // "the auto match for THIS song is wrong," not an unrelated lookup.
+  resetLyricSearchForTrack();
   if (els.lyricSearchInput) els.lyricSearchInput.focus();
 }
 

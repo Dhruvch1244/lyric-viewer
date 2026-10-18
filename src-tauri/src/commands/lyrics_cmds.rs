@@ -333,6 +333,12 @@ struct LyricsJob {
     key: String,
 }
 
+/// Seconds to wait before each re-run of a lyrics lookup that could not reach
+/// LRCLIB (see `LyricsJob::run`). Widening, and about two minutes in all —
+/// roughly one song — after which a track change or a manual search is the
+/// better trigger than another timer.
+const LYRICS_NETWORK_RETRY_S: [u64; 3] = [10, 30, 60];
+
 impl Runnable for LyricsJob {
     fn lane(&self) -> Lane {
         Lane::Io
@@ -391,17 +397,63 @@ impl Runnable for LyricsJob {
         // lookup running to completion, and — worse — emitting its result over
         // the song that was actually playing by then. A cancelled job now
         // stops at the next source boundary and emits nothing.
-        let mut found = None;
-        if !cancel.cancelled() {
-            found = crate::lyrics::fetch_synced(&track);
+        //
+        // An unreachable LRCLIB is not a miss. `call_lrclib` already rides out
+        // a few seconds of overload; past that, saying "no synced lyrics found"
+        // told the user the song had none, and nothing ever asked again. So the
+        // whole lookup is re-run on a widening backoff while this track is
+        // still the current one, saying so on the status line meanwhile.
+        //
+        // The wait sleeps inside this job, holding one of the I/O lane's eight
+        // slots — acceptable for the one current track, and a track change
+        // cancels it within one poll. The engine has no delayed resubmit, and
+        // one retry loop is not worth adding one.
+        let mut retry = 0;
+        let mut found;
+        let mut unreachable;
+        loop {
+            found = None;
+            unreachable = false;
+            if !cancel.cancelled() {
+                match crate::lyrics::fetch_synced_checked(&track) {
+                    Ok(hit) => found = hit,
+                    Err(crate::lyrics::Unreachable) => unreachable = true,
+                }
+            }
+            if found.is_none() && !cancel.cancelled() {
+                found = crate::netease::fetch_synced(&track);
+            }
+            if found.is_none() && !cancel.cancelled() {
+                found = crate::kugou::fetch_synced(&track);
+            }
+            if cancel.cancelled() {
+                return;
+            }
+            if found.is_some() || !unreachable || retry >= LYRICS_NETWORK_RETRY_S.len() {
+                break;
+            }
+            let wait_s = LYRICS_NETWORK_RETRY_S[retry];
+            retry += 1;
+            let _ = app.emit("lyrics", json!({
+                "track": { "title": title, "artist": artist },
+                "cues": [], "status": "network-error", "retrying": true, "retryInS": wait_s,
+            }));
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(wait_s);
+            while std::time::Instant::now() < until {
+                if cancel.cancelled() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            let _ = app.emit("lyrics", json!({ "track": { "title": title, "artist": artist }, "cues": [], "status": "searching" }));
         }
-        if found.is_none() && !cancel.cancelled() {
-            found = crate::netease::fetch_synced(&track);
-        }
-        if found.is_none() && !cancel.cancelled() {
-            found = crate::kugou::fetch_synced(&track);
-        }
-        if cancel.cancelled() {
+        if found.is_none() && unreachable {
+            // Out of retries. Still not "not found" — the manual search (/)
+            // is the way to ask again once the connection is back.
+            let _ = app.emit("lyrics", json!({
+                "track": { "title": title, "artist": artist },
+                "cues": [], "status": "network-error", "retrying": false,
+            }));
             return;
         }
         match found {
