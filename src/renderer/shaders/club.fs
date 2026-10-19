@@ -1,5 +1,5 @@
 /*{
- "DESCRIPTION": "Club lights: laser fans sweeping on the beat, colour cuts, and a strobe on the hardest kicks. Softened by Reduce Motion.",
+ "DESCRIPTION": "Club lights: laser fans sweeping from the stage, a 360-degree mirror-ball fan from the centre, colour cuts, and a strobe on the hardest kicks. Softened by Reduce Motion.",
  "CREDIT": "Lyric Overlay (MIT)",
  "ISFVSN": "2",
  "CATEGORIES": [
@@ -90,13 +90,20 @@ void main() {
   vec3 c2 = hsv(hue + 0.5 + hash(vec2(cut, 2.0)) * 0.3, 1.0, 1.0);
   vec3 col = vec3(0.0);
   float swing = sin(TIME * 1.7 + beat * 6.2831853) * 0.6;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 10; i++) {
     float fi = float(i);
-    float spread = (fi - 2.5) * 0.18;
-    float wid = 0.012 + 0.02 * kick;
-    col += c1 * beam(uv, vec2(w * 0.2, -0.05), spread + swing, wid) * (0.35 + bass);
-    col += c2 * beam(uv, vec2(w * 0.8, -0.05), -spread - swing, wid) * (0.35 + bass);
+    float spread = (fi - 4.5) * 0.13;
+    float wid = 0.012 + 0.025 * kick;
+    col += c1 * beam(uv, vec2(w * 0.2, -0.05), spread + swing, wid) * (0.6 + bass * 1.4 + kick);
+    col += c2 * beam(uv, vec2(w * 0.8, -0.05), -spread - swing, wid) * (0.6 + bass * 1.4 + kick);
   }
+  // Mirror-ball fan from the centre covering the full 360 degrees, spinning
+  // with the beat: the stage beams alone left the top of the screen dark.
+  vec2 cp = uv - vec2(w * 0.5, 0.5);
+  float ca = atan(cp.y, cp.x);
+  float seg = 6.2831853 / 24.0;
+  float cd = abs(mod(ca - TIME * 0.6 - beat * 0.5 + seg * 0.5, seg) - seg * 0.5) * length(cp);
+  col += mix(c2, c1, 0.5 + 0.5 * sin(ca * 3.0)) * exp(-cd * cd / 0.0001) * (0.8 + mid * 1.5 + kick * 2.0);
   // Haze where the beams cross the smoke.
   float haze = noise(uv * 3.0 + vec2(TIME * 0.2, 0.0)) * 0.5 + 0.5;
   col *= 0.55 + haze * 0.7;
@@ -104,7 +111,9 @@ void main() {
   // Strobe: only on hard kicks, and only on the first half of the beat so it
   // cannot exceed the beat rate.
   float strobe = smoothstep(0.55, 0.9, kick) * step(beat, 0.5);
-  col = mix(col, vec3(1.0), strobe * 0.7);
-  col += vec3(drop * 0.6);
-  gl_FragColor = vec4(col, 1.0);
+  col = mix(col, vec3(1.0), strobe * 0.75);
+  col += vec3(drop * 0.7);
+  // Soft tone curve instead of a hard clip, so stacked beams stay coloured
+  // rather than flattening to white.
+  gl_FragColor = vec4(1.0 - exp(-col * 1.4), 1.0);
 }

@@ -253,14 +253,20 @@
       app (src/renderer/shaders/); "Shader Mix" moves through the whole shader
       catalogue the way MilkDrop's shuffle moves through presets.
 
-      Club strobes. It is capped at the beat rate in the shader and softened
-      under the OS Reduce Motion setting, but it is a strobe; it is never
-      handed out at random (SECOND_ENGINE below) and only shows when chosen.
+      Club and the laser scenes strobe. The strobe is capped at the beat rate
+      in each shader and softened under the OS Reduce Motion setting, but it
+      is a strobe; none of these is handed out at random (SECOND_ENGINE below)
+      and they show only when chosen.
     */
     { id: 'hyperspace', name: 'Hyperspace', cost: 2, engine: 'isf', shader: 'Hyperspace', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
     { id: 'club', name: 'Club', cost: 2, engine: 'isf', shader: 'Club', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
     { id: 'kaleidoscope', name: 'Kaleidoscope', cost: 2, engine: 'isf', shader: 'Kaleidoscope', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
     { id: 'spectrum3d', name: 'Spectrum 3D', cost: 2, engine: 'isf', shader: 'Spectrum 3D', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'laser-show', name: 'Laser Show', cost: 2, engine: 'isf', shader: 'Laser Show', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'laser-tunnel', name: 'Laser Tunnel', cost: 2, engine: 'isf', shader: 'Laser Tunnel', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'laser-grid', name: 'Laser Grid', cost: 2, engine: 'isf', shader: 'Laser Grid', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'starburst', name: 'Starburst', cost: 2, engine: 'isf', shader: 'Starburst', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'vortex', name: 'Vortex', cost: 2, engine: 'isf', shader: 'Vortex', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
     { id: 'shaders', name: 'Shader Mix', cost: 2, engine: 'isf', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
   ];
 

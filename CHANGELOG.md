@@ -2,6 +2,20 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- **Laser scenes, 360 degrees.** Five new shader scenes in the ◈ cycle and
+  Shader Mix: **Laser Show** (beam fans from the centre and all four corners,
+  the whole screen, multiplying and flaring on kicks), **Laser Tunnel**,
+  **Laser Grid**, **Starburst** and **Vortex**.
+- **Club hits harder**: 20 stage beams instead of 12, plus a 360-degree
+  mirror-ball fan from the centre.
+- **Shader scenes react harder on Intense.** A mastered track's bass sits
+  around 0.3-0.5, so beams barely moved; on Intense the band levels and kick
+  are now lifted before they reach a shader (0.3 arrives as ~0.65). Normal is
+  unchanged, Chill is softer. Strobes stay capped at the beat rate and Reduce
+  Motion still tames them.
+
 ## 0.56.0 — 2026-10-18
 
 - **The visuals hit on the beat.** MilkDrop was fed the raw system waveform,

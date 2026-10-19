@@ -50,6 +50,31 @@
   "credit": "Lyric Overlay"
  },
  {
+  "name": "Laser Show",
+  "file": "laser-show.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Laser Tunnel",
+  "file": "laser-tunnel.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Laser Grid",
+  "file": "laser-grid.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Starburst",
+  "file": "starburst.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Vortex",
+  "file": "vortex.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
   "name": "Ridgelines",
   "file": "vidvox/Ridgelines.fs",
   "credit": "VIDVOX ISF-Files (MIT)",
