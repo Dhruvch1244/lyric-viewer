@@ -469,13 +469,18 @@ let fpsCap = '60';
       of songs never produce a drop the detector recognises, so one preset ran
       for the whole song. `beatSwitchMs` adds a change on a strong kick and
       `maxHoldMs` a ceiling with or without audio.
+    - Shader scenes got the same flat levels: a mastered track sits at
+      bass ~0.3-0.5 and most beams scale off that, so they barely moved.
+      `shaderCurve`/`shaderGain` lift the band levels and the kick before they
+      reach a shader (v^curve * gain, capped at 1): an input of 0.3 arrives as
+      ~0.65 on Intense, 0.3 on Normal. Beat phase and hue are not touched.
 
   `normal` is the pre-0.56 behaviour, kept exactly for anyone who liked it.
 */
 const VIS_INTENSITY = {
-  chill:   { mdTarget: 0.45, mdKick: 0.3, dropSwitchMs: 90000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.16, flashGain: 0.7, pulseGain: 0.7 },
-  normal:  { mdTarget: 0.6,  mdKick: 0.8, dropSwitchMs: 42000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.10, flashGain: 1,   pulseGain: 1 },
-  intense: { mdTarget: 0.85, mdKick: 1.8, dropSwitchMs: 8000,  beatSwitchMs: 14000, maxHoldMs: 30000, kickFloor: 0.06, flashGain: 1.3, pulseGain: 1.45 },
+  chill:   { mdTarget: 0.45, mdKick: 0.3, dropSwitchMs: 90000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.16, flashGain: 0.7, pulseGain: 0.7,  shaderCurve: 1,   shaderGain: 0.75 },
+  normal:  { mdTarget: 0.6,  mdKick: 0.8, dropSwitchMs: 42000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.10, flashGain: 1,   pulseGain: 1,    shaderCurve: 1,   shaderGain: 1 },
+  intense: { mdTarget: 0.85, mdKick: 1.8, dropSwitchMs: 8000,  beatSwitchMs: 14000, maxHoldMs: 30000, kickFloor: 0.06, flashGain: 1.3, pulseGain: 1.45, shaderCurve: 0.7, shaderGain: 1.5 },
 };
 let visIntensity = 'intense';
 function intensityCfg() { return VIS_INTENSITY[visIntensity] || VIS_INTENSITY.intense; }
@@ -2879,13 +2884,16 @@ function drawShaderEngine(preset, now, w, h) {
   const live = audioEnv && audioEnv.active;
   // Reduce Motion: the strobe and the kick punches are the part that hurts.
   const calm = reducedMotion ? 0.3 : 1;
+  const vi = intensityCfg();
+  const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
   fx.render({
-    bass: live ? audioEnv.bass : 0.25 + intensity * 0.3,
-    mid: live ? audioEnv.mid : 0.2,
-    treble: live ? audioEnv.treble : 0.2,
-    level: live ? Math.min(1, audioEnv.level * 1.6) : intensity * 0.6,
+    bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
+    mid: punch(live ? audioEnv.mid : 0.2),
+    treble: punch(live ? audioEnv.treble : 0.2),
+    level: punch(live ? Math.min(1, audioEnv.level * 1.6) : intensity * 0.6),
     // Without capture the lyric-driven beat flash is the best beat there is.
-    kick: (live ? audioEnv.kick : Math.min(1, beatFlash * 0.7)) * calm,
+    // Calm applies after the punch, so Reduce Motion still caps the strobe.
+    kick: punch(live ? audioEnv.kick : Math.min(1, beatFlash * 0.7)) * calm,
     beat: beatPeriodMs > 0 ? (beatClockMs % beatPeriodMs) / beatPeriodMs : 0,
     drop: dropFlash * calm,
     hue: shaderHue,

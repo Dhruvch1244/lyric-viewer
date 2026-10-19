@@ -131,11 +131,20 @@ test('every preset names an engine, and only known ones', () => {
   }
 });
 
-test('the swirl engine is still the default and the majority', () => {
+test('the swirl engine is still the default and owns the random pool', () => {
   // The signature look must not be quietly demoted by adding preset packs.
+  // This used to demand a swirl majority of all looks, but that only measured
+  // how long the ◈ cycle is: what a new song actually gets comes from
+  // RANDOM_POOL, so that is what is guarded — every look forTrack can hand
+  // out is a swirl one, however many shader scenes exist to choose by hand.
   assert.equal(VisualPresets.byId(VisualPresets.DEFAULT_ID).engine, 'swirl');
-  const swirl = VisualPresets.all.filter((p) => p.engine === 'swirl').length;
-  assert.ok(swirl > VisualPresets.all.length / 2, 'the second engine has taken over');
+  assert.ok(VisualPresets.RANDOM_POOL.length > 0, 'nothing to hand out');
+  for (const preset of VisualPresets.RANDOM_POOL) {
+    assert.equal(preset.engine, 'swirl', `${preset.id} is handed out at random`);
+  }
+  for (let i = 0; i < 200; i += 1) {
+    assert.equal(VisualPresets.forTrack(`track-${i}`).engine, 'swirl');
+  }
 });
 
 test('every milkdrop preset names a starting preset and owns the screen', () => {
