@@ -101,8 +101,8 @@ void main() {
   s += layer(uv, t * 2.3, 170.0, 13.0, stretch * 1.6) * 0.6;
   float r = length(uv);
   vec3 tint = hsv(hue + r * 0.15, 0.7, 1.0);
-  vec3 col = s * mix(tint, vec3(1.0), 0.35);
+  vec3 col = s * mix(tint, vec3(1.0), 0.35) * (1.6 + kick * 2.0 + level);
   col += hsv(hue, 0.85, 1.0) * (0.06 + bass * 0.5) / (r * 7.0 + 0.4);   // the hole you fly into
   col += vec3(drop * 0.85) * smoothstep(1.2, 0.0, r);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(1.0 - exp(-col * 1.3), 1.0);
 }

@@ -362,6 +362,20 @@
         </div>
 
         <div class="keybox__section">
+          <span class="keybox__heading">Hindi</span>
+        </div>
+
+        <!-- The offline Hindi pack (src-tauri/src/hindi.rs). अ works without
+             it — built-in words and spelling rules — this adds ~1M more words. -->
+        <div class="keybox__local">
+          <span class="keybox__label">Hindi pack — offline Devanagari (अ)</span>
+          <span class="keybox__note">अ always works offline. The pack adds about a million more words
+            for more accurate spelling. Built from AI4Bharat's Aksharantar (CC0 / CC-BY).</span>
+          <button id="keybox-hindi-pack" class="chip" type="button">Download</button>
+          <span id="keybox-hindi-status" class="keybox__status" role="status"></span>
+        </div>
+
+        <div class="keybox__section">
           <span class="keybox__heading">Transcription</span>
           <span class="keybox__note">Used only for songs with no synced lyrics anywhere.</span>
         </div>
@@ -802,6 +816,23 @@
         <button id="model-consent-never" class="chip chip--muted" type="button">Don't ask again</button>
       </div>
       <div id="model-consent-log" class="modelconsent__log" hidden></div>
+    </section>
+
+    <!-- Startup offer for the offline Hindi pack (hindi.rs). Asked on launch
+         until it is downloaded or declined for good; Settings → Hindi has the
+         same button any time. -->
+    <div id="hindi-pack-backdrop" class="modelconsent-backdrop" hidden></div>
+    <section id="hindi-pack" class="modelconsent" hidden role="dialog" aria-modal="true" aria-label="Download the Hindi pack">
+      <h2 class="modelconsent__title">Download the Hindi pack?</h2>
+      <p id="hindi-pack-body" class="modelconsent__body">अ shows romanized Hindi lyrics in Devanagari, offline — no AI service, so no
+        refusals. It already works; this one-time download adds about a million more words so
+        rarer words are spelled right. You can also get it later from ⚙ Settings → Hindi.</p>
+      <div id="hindi-pack-ask" class="modelconsent__row">
+        <button id="hindi-pack-yes" class="chip" type="button">Download</button>
+        <button id="hindi-pack-later" class="chip chip--muted" type="button">Not now</button>
+        <button id="hindi-pack-never" class="chip chip--muted" type="button">Don't ask again</button>
+      </div>
+      <p id="hindi-pack-progress" class="modelconsent__body" role="status" hidden></p>
     </section>
 
     <!-- U4: the cheat sheet is the authoritative list of every shortcut —

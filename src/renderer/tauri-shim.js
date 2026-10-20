@@ -77,6 +77,7 @@
     onPresyncProgress: (cb) => on('presync-progress', cb),
     onTranscribeProgress: (cb) => on('transcribe-progress', cb),
     onModelConsentNeeded: (cb) => on('model-consent-needed', cb),
+    onHindiPack: (cb) => on('hindi-pack', cb),
     onIdle: (cb) => on('idle', cb),
     onVisibility: (cb) => on('overlay-visibility', cb),
     onDisplayMode: (cb) => on('display-mode', cb),
@@ -123,6 +124,11 @@
     setOffset: (valueMs) => call('set_offset', { valueMs }, valueMs),
     getPrefs: () => call('get_prefs', {}, {}),
     setScript: (script) => call('set_script', { script }),
+    /* The offline Hindi pack (hindi.rs): status, start a download (progress
+       arrives through onHindiPack), remove. */
+    hindiPackStatus: () => call('hindi_pack_status', {}, { installed: false, downloadBytes: 0 }),
+    hindiPackDownload: () => call('hindi_pack_download', {}, false),
+    hindiPackRemove: () => call('hindi_pack_remove', {}, false),
     setShowTranslation: (show) => call('set_show_translation', { show }),
     requestTranslation: () => call('request_translation', {}),
     getProviderStatus: () => call('get_provider_status', {}, { provider: null }),

@@ -86,13 +86,15 @@ void main() {
   float t = TIME * (1.2 + level * 2.5);
   float z = depth + t;
   // Lines sit at the cell edges, where |fract - 0.5| approaches 0.5.
-  float ring = smoothstep(0.40, 0.49, abs(fract(z * 0.5) - 0.5));
+  // Faded out toward the edges: there one ring spans a huge screen area, and
+  // on a kick (fast z) it flooded the whole frame with one colour.
+  float ring = smoothstep(0.40, 0.49, abs(fract(z * 0.5) - 0.5)) * smoothstep(1.0, 0.45, r);
   float ribs = smoothstep(0.44, 0.495, abs(fract(a / 6.2831853 * 16.0 + z * 0.05) - 0.5));
   vec3 c = hsv(hue + floor(z * 0.5) * 0.07, 0.85, 1.0);
-  float pulse = 0.5 + kick * 1.5 + bass * 0.6;
-  vec3 col = c * (ring * pulse + ribs * 0.35);
+  float pulse = 0.7 + kick * 1.8 + bass * 0.8;
+  vec3 col = c * (ring * pulse + ribs * (0.5 + treble * 0.8 + kick * 0.6));
   col *= smoothstep(0.0, 0.25, r) * (1.0 / (1.0 + depth * 0.05));
   col += hsv(hue + 0.5, 0.6, 1.0) * 0.05 / (r + 0.05);
   col += vec3(drop * 0.6) * smoothstep(0.8, 0.0, r);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(1.0 - exp(-col * 1.4), 1.0);
 }

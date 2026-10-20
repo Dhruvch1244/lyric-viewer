@@ -96,10 +96,10 @@ void main() {
     p = abs(p) / max(dot(p, p), 0.05) - vec2(0.85 + 0.1 * sin(t), 0.55 + 0.12 * mid);
     p *= rot(t * 0.25);
     float fi = float(i);
-    float line = exp(-28.0 * min(abs(p.x), abs(p.y)));
+    float line = exp(-22.0 * min(abs(p.x), abs(p.y)));
     col += hsv(hue + fi * 0.03, 0.9, 1.0) * line * (0.25 + 0.12 * fi);
   }
-  col *= 0.45 + level * 0.6 + kick * 0.9;
+  col *= 0.9 + level * 1.0 + kick * 1.6;
   col = col / (1.0 + col);
   col *= smoothstep(1.6, 0.2, r) * 1.3;
   col += vec3(drop * 0.5) * smoothstep(1.0, 0.0, r);

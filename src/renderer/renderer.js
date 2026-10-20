@@ -128,6 +128,7 @@ const els = {
   whatsnewClose: document.getElementById('whatsnew-close'),
   modelConsentBackdrop: document.getElementById('model-consent-backdrop'),
   modelConsent: document.getElementById('model-consent'),
+  hindiPack: document.getElementById('hindi-pack'),
   modelConsentBody: document.getElementById('model-consent-body'),
   modelConsentAsk: document.getElementById('model-consent-ask'),
   modelConsentYes: document.getElementById('model-consent-yes'),
@@ -6132,7 +6133,7 @@ if (els.cheatsheetBackdrop) els.cheatsheetBackdrop.addEventListener('click', clo
 // The same panels that block the page in wallpaper mode (WALLPAPER_PANELS,
 // below) also count as "already have the keyboard" here — welcome/whatsnew/
 // model-consent/cheatsheet are the ones marked aria-modal="true".
-const BLOCKING_MODALS = [els.welcome, els.whatsnew, els.modelConsent, els.cheatsheet].filter(Boolean);
+const BLOCKING_MODALS = [els.welcome, els.whatsnew, els.modelConsent, els.cheatsheet, els.hindiPack].filter(Boolean);
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.altKey || e.metaKey) return; // global Ctrl+Alt hotkeys live in tray.rs, not here
@@ -6462,8 +6463,127 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.cheatsheet, els.insights, els.songInfo, els.similar, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.hindiPack, els.cheatsheet, els.insights, els.songInfo, els.similar, moreMenu,
 ].filter(Boolean);
+
+/* ------------------------------------------------------------ Hindi pack */
+/*
+  The offline Hindi pack (src-tauri/src/hindi.rs). अ works without it; the pack
+  makes rarer words spell right. Offered once per launch until it is either
+  downloaded or declined with "Don't ask again", and always reachable from
+  Settings → Hindi. The offer waits for the welcome/what's-new cards so a first
+  launch never stacks two dialogs.
+*/
+{
+  const dialog = els.hindiPack;
+  const backdrop = document.getElementById('hindi-pack-backdrop');
+  const ask = document.getElementById('hindi-pack-ask');
+  const progress = document.getElementById('hindi-pack-progress');
+  const settingsBtn = document.getElementById('keybox-hindi-pack');
+  const settingsStatus = document.getElementById('keybox-hindi-status');
+  let installed = false;
+  let busy = false;
+  let downloadBytes = 0;
+
+  const closeDialog = () => {
+    if (dialog) dialog.hidden = true;
+    if (backdrop) backdrop.hidden = true;
+  };
+
+  const show = (text) => {
+    if (settingsStatus) settingsStatus.textContent = text;
+    if (progress) { progress.hidden = !text; progress.textContent = text; }
+  };
+
+  const refreshButton = () => {
+    if (!settingsBtn) return;
+    settingsBtn.disabled = busy;
+    settingsBtn.textContent = installed ? 'Remove' : `Download${downloadBytes ? ` (${humanBytes(downloadBytes)})` : ''}`;
+  };
+
+  const startDownload = async () => {
+    if (busy) return;
+    busy = true;
+    refreshButton();
+    if (ask) ask.hidden = true;
+    show('Starting download…');
+    await window.player.hindiPackDownload();
+  };
+
+  window.player.onHindiPack((data) => {
+    if (!data) return;
+    if (data.stage === 'downloading') {
+      busy = true;
+      show(`Downloading… ${data.percent || 0}%`);
+    } else if (data.stage === 'building') {
+      show('Building the word list…');
+    } else if (data.stage === 'done') {
+      busy = false;
+      installed = true;
+      show(`Installed — ${Number(data.words || 0).toLocaleString()} words.`);
+      setTimeout(closeDialog, 1600);
+      // Re-spell the song on screen with the bigger dictionary.
+      if (script === 'devanagari') {
+        window.player.setScript('devanagari').then((res) => {
+          if (res && res.status === 'ok' && Array.isArray(res.cues)) { cuesDevanagari = res.cues; applyScript(); }
+        });
+      }
+    } else if (data.stage === 'error') {
+      busy = false;
+      show(`Download failed: ${data.message || 'unknown error'}. Try again from Settings → Hindi.`);
+      if (ask) ask.hidden = false;
+    }
+    refreshButton();
+  });
+
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', async () => {
+      if (installed) {
+        if (await window.player.hindiPackRemove()) {
+          installed = false;
+          show('Removed. अ still works with the built-in words.');
+        }
+        refreshButton();
+      } else {
+        startDownload();
+      }
+    });
+  }
+
+  const yes = document.getElementById('hindi-pack-yes');
+  const later = document.getElementById('hindi-pack-later');
+  const never = document.getElementById('hindi-pack-never');
+  if (yes) yes.addEventListener('click', startDownload);
+  if (later) later.addEventListener('click', closeDialog);
+  if (never) never.addEventListener('click', () => {
+    try { localStorage.setItem('hindiPackPrompt', 'never'); } catch { /* ignore */ }
+    closeDialog();
+  });
+
+  const offer = (tries) => {
+    if (installed || busy || !dialog) return;
+    let declined = null;
+    try { declined = localStorage.getItem('hindiPackPrompt'); } catch { /* ignore */ }
+    if (declined === 'never') return;
+    // Another dialog is up (first-run welcome, what's new): look again later.
+    if (BLOCKING_MODALS.some((el) => el !== dialog && !el.hidden)) {
+      if (tries < 40) setTimeout(() => offer(tries + 1), 3000);
+      return;
+    }
+    if (ask) ask.hidden = false;
+    show('');
+    dialog.hidden = false;
+    if (backdrop) backdrop.hidden = false;
+  };
+
+  window.player.hindiPackStatus().then((st) => {
+    installed = Boolean(st && st.installed);
+    downloadBytes = (st && st.downloadBytes) || 0;
+    refreshButton();
+    if (installed) show('Installed.');
+    else setTimeout(() => offer(0), 4000);
+  });
+}
 
 function anyPanelOpen() {
   return WALLPAPER_PANELS.some((el) => !el.hidden);
@@ -6728,7 +6848,7 @@ els.scriptBtn.addEventListener('click', async () => {
   const next = script === 'devanagari' ? 'latin' : 'devanagari';
   if (next === 'devanagari' && !cuesDevanagari) {
     if (!transliterationAvailable) {
-      setStatus('set GEMINI_API_KEY or ANTHROPIC_API_KEY for Devanagari');
+      setStatus('Devanagari is unavailable for this song');
       return;
     }
     setStatus('transliterating…');

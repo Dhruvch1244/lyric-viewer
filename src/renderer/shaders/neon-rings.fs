@@ -86,15 +86,16 @@ void main() {
   float r = length(uv);
   float a = atan(uv.y, uv.x);
   vec3 col = vec3(0.0);
-  for (int i = 0; i < 12; i++) {
+  for (int i = 0; i < 20; i++) {
     float fi = float(i);
-    float band = IMG_NORM_PIXEL(fftImage, vec2(pow((fi + 0.5) / 12.0, 1.7) * 0.8 + 0.01, 0.5)).r;
-    float radius = 0.06 + fi * 0.04 + band * 0.07 + kick * 0.03;
+    float band = IMG_NORM_PIXEL(fftImage, vec2(pow((fi + 0.5) / 20.0, 1.7) * 0.8 + 0.01, 0.5)).r;
+    float radius = 0.05 + fi * 0.036 + band * 0.1 + kick * 0.05;
     float wobble = 0.006 * sin(a * (3.0 + fi) + TIME * (1.0 + fi * 0.2));
-    float ring = smoothstep(0.012 + band * 0.01, 0.0, abs(r - radius - wobble));
-    col += hsv(hue + fi / 12.0 * 0.7, 0.85, 1.0) * ring * (0.4 + band * 1.4);
+    float ring = smoothstep(0.014 + band * 0.016, 0.0, abs(r - radius - wobble));
+    float glow = exp(-abs(r - radius - wobble) * 30.0) * band * 0.35;
+    col += hsv(hue + fi / 20.0 * 0.7, 0.85, 1.0) * (ring * (0.7 + band * 2.4 + kick) + glow);
   }
   col += hsv(hue, 0.6, 1.0) * (0.1 + bass) * 0.04 / (r + 0.03);
   col += vec3(drop * 0.5) * smoothstep(0.9, 0.0, r);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(1.0 - exp(-col * 1.4), 1.0);
 }

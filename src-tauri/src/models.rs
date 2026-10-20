@@ -39,6 +39,22 @@ pub(crate) struct ModelFile {
     size: u64,
 }
 
+impl ModelFile {
+    /// For model sets pinned outside this file (`hindi.rs`'s pack), so the
+    /// same download/verify path serves them instead of a second copy of it.
+    pub(crate) const fn new(name: &'static str, url: &'static str, sha256: &'static str, size: u64) -> Self {
+        Self { name, url, sha256, size }
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+}
+
 // `onnx-community/whisper-base_timestamped` at commit
 // 608c49e61301901684bc36cac8f74b95ff6b5a8e. `_timestamped` is not a
 // preference — the ordinary `whisper-base` export has no cross-attention

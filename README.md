@@ -110,6 +110,21 @@ Produces a signed-by-updater (not Authenticode-signed — see
 `src-tauri/target/release/bundle/nsis/`. Tagged pushes (`v*`) build and publish
 this automatically for Windows, macOS and Linux via GitHub Actions.
 
+### Hindi (Devanagari)
+
+The अ button shows romanized Hindi/Punjabi lyrics in Devanagari, offline:
+built-in common words plus spelling rules, no AI service and no key. An
+optional one-time **Hindi pack** (33 MB download, offered on startup and in
+⚙ Settings → Hindi) is turned on your machine into a ~1M-word lexicon from
+[AI4Bharat's Aksharantar](https://huggingface.co/datasets/ai4bharat/Aksharantar)
+(CC0 / CC-BY). See `src-tauri/src/hindi.rs`.
+
+### GPU
+
+On a laptop with two GPUs the app starts on the discrete one by default
+(PRIME offload on Linux, the high-performance GPU on Windows). Set
+`LYRIC_OVERLAY_GPU=default` to keep the integrated GPU.
+
 ### Arch Linux (and Manjaro, EndeavourOS, ...)
 
 Each release also ships a native `lyric-overlay-<version>-x86_64.pkg.tar.zst`,

@@ -61,9 +61,17 @@ pub(crate) fn change_offset(app: &AppHandle, delta: i64, absolute: Option<i64>) 
     let _ = app.emit("offset", json!({ "offsetMs": value }));
 }
 
-#[tauri::command]
-pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<Mutex<CurTrack>>, app: AppHandle) -> Value {
+/// Switch the lyric script. `async`, and that is the freeze fix: a plain
+/// command runs on Tauri's main thread, and this one used to transliterate
+/// through a network LLM call right there, so pressing अ froze every other
+/// command and all rendering until the call came back (or failed: hosted
+/// models refuse to reproduce song lyrics). Transliteration is local now
+/// (`hindi.rs`) and fast, but it still reads the cache and may scan the
+/// Hindi pack's lexicon, which has no business on the main thread either.
+#[tauri::command(async)]
+pub(crate) fn set_script(script: String, app: AppHandle) -> Value {
     {
+        let state = app.state::<Mutex<Prefs>>();
         let mut p = state.lock().unwrap_or_else(|e| e.into_inner());
         p.script = script.clone();
         save_prefs(&app, &p);
@@ -73,12 +81,9 @@ pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<
     }
     // Switching to Devanagari: transliterate the current track's cued lyrics
     // (cache-first), the same on-demand path the renderer's अ button expects.
-    let key = cur.lock().unwrap_or_else(|e| e.into_inner()).key.clone();
+    let key = app.state::<Mutex<CurTrack>>().lock().unwrap_or_else(|e| e.into_inner()).key.clone();
     if key.is_empty() {
         return json!({ "status": "error", "message": "nothing playing" });
-    }
-    if !crate::llm::is_available() {
-        return json!({ "status": "error", "message": "no LLM provider configured" });
     }
     let Some(path) = lyrics_cache_path(&app, &key) else {
         return json!({ "status": "error", "message": "no cache" });
@@ -89,21 +94,26 @@ pub(crate) fn set_script(script: String, state: State<Mutex<Prefs>>, cur: State<
     let Ok(mut cached) = serde_json::from_str::<Value>(&text) else {
         return json!({ "status": "error", "message": "cache unreadable" });
     };
+    // A cached result is reused only if it was made with the pack this
+    // install has now: downloading the pack should improve the next press,
+    // not be hidden behind a rules-only result from before.
+    let pack = crate::hindi::pack_installed(&app);
     if let Some(deva) = cached.get("cuesDevanagari") {
-        if deva.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+        let fresh = cached.get("devanagariPack").and_then(Value::as_bool) == Some(pack);
+        if fresh && deva.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
             return json!({ "status": "ok", "cues": deva });
         }
     }
     let cues: Vec<crate::lyrics::Cue> = cached.get("cues").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-    match crate::transliterate::to_devanagari(&cues) {
-        Ok(deva) => {
-            let val = serde_json::to_value(&deva).unwrap_or(Value::Null);
-            cached["cuesDevanagari"] = val.clone();
-            let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
-            json!({ "status": "ok", "cues": val })
-        }
-        Err(message) => json!({ "status": "error", "message": message }),
+    if cues.is_empty() {
+        return json!({ "status": "error", "message": "no lyrics to transliterate" });
     }
+    let deva = crate::hindi::transliterate(&app, &cues);
+    let val = serde_json::to_value(&deva).unwrap_or(Value::Null);
+    cached["cuesDevanagari"] = val.clone();
+    cached["devanagariPack"] = json!(pack);
+    let _ = std::fs::write(&path, serde_json::to_string(&cached).unwrap_or_default());
+    json!({ "status": "ok", "cues": val })
 }
 
 #[tauri::command]
