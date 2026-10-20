@@ -137,21 +137,22 @@ jobs:
   # draft release. Built in an archlinux container rather than on the Ubuntu
   # runner so it links Arch's own webkit2gtk-4.1/GTK, not 22.04's — the .deb
   # and AppImage above already cover "runs anywhere"; this is the one pacman
-  # installs and upgrades. After `build` so tauri-action has already created
-  # the draft release this uploads into.
+  # installs and upgrades. Runs alongside `build`, not after it: the ~11
+  # minute makepkg used to start only once the slowest platform finished.
+  # Attaching it to the release is the separate `arch-release` job below,
+  # because that is the only part that needs tauri-action's draft to exist.
   arch:
-    needs: build
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     permissions:
-      contents: write
+      contents: read
     steps:
       # git before checkout, or actions/checkout falls back to a REST tarball
       # with no .git — and `git archive` below needs the repository.
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            git rust nodejs npm github-cli \
+            git rust nodejs npm \
             webkit2gtk-4.1 gtk3 libayatana-appindicator dbus hicolor-icon-theme
 
       - uses: actions/checkout@v4
@@ -183,10 +184,24 @@ jobs:
           path: packaging/arch/*.pkg.tar.zst
           if-no-files-found: error
 
+  # Seconds of work: waits for both the package and tauri-action's draft
+  # release, then attaches one to the other. On the Ubuntu runner, which has
+  # gh preinstalled.
+  arch-release:
+    needs: [build, arch]
+    if: needs.arch.result == 'success' && (inputs.tag != '' || github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lyric-overlay-arch
+          path: arch
+
       - name: Attach to the draft release
-        if: env.RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$RELEASE_TAG" packaging/arch/*.pkg.tar.zst \
+          gh release upload "$RELEASE_TAG" arch/*.pkg.tar.zst \
             --repo "$GITHUB_REPOSITORY" --clobber
