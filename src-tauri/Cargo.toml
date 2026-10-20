@@ -99,6 +99,11 @@ ebur128 = "0.1"
 # `bundled` compiles SQLite from source, adding no system dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Reads the Hindi pack's archive (hindi.rs). Already in the tree through
+# tauri-plugin-updater on Windows, so this adds no new crate there; deflate
+# only, through flate2's pure-Rust backend, so still no C toolchain.
+zip = { version = "4", default-features = false, features = ["deflate"] }
+
 # MPRIS "now playing" on Linux (mpris.rs) — the SMTC equivalent. Already in the
 # tree via Tauri's notification/tray stack, so this adds no new crate to build.
 [target.'cfg(target_os = "linux")'.dependencies]

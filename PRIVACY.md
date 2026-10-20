@@ -56,12 +56,16 @@ not ours. We have no control over and take no responsibility for their practices
 - Deezer — <https://www.deezer.com/legal/personal-datas>
 - MusicBrainz / Cover Art Archive (MetaBrainz) — <https://metabrainz.org/privacy>
 
-**Optional AI translation, transliteration, and mood (receive: lyric text +
-song title/artist). These run only when you enable an AI feature and provide
-your own API key:**
+**Optional AI translation and mood (receive: lyric text + song title/artist).
+These run only when you enable an AI feature and provide your own API key.
+Devanagari transliteration (अ) runs on your device and sends nothing:**
 - Google Gemini — <https://policies.google.com/privacy>
 - Groq — <https://groq.com/privacy-policy/>
 - Hugging Face — <https://huggingface.co/privacy>
+
+**Optional Hindi pack (a one-time file download, only if you choose it;
+receives nothing about you or your music):**
+- Hugging Face, hosting AI4Bharat's Aksharantar word list — <https://huggingface.co/privacy>
 
 **Software updates (standalone build only):**
 - GitHub — <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>. The

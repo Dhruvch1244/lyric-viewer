@@ -32,6 +32,8 @@ mod crashlog;
 mod fingerprint;
 mod genius;
 mod genre;
+mod gpu;
+mod hindi;
 mod musicbrainz;
 mod jobs;
 mod kugou;
@@ -58,7 +60,6 @@ mod smtc;
 mod state;
 mod structure;
 mod translate;
-mod transliterate;
 mod tray;
 #[cfg(windows)]
 mod wallpaper;
@@ -100,10 +101,14 @@ fn apply_nvidia_wayland_workaround() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Both before the webview exists: they only work through the environment
+    // WebKitGTK reads when it creates its GL context.
+    #[cfg(target_os = "linux")]
+    gpu::prefer_discrete();
     #[cfg(target_os = "linux")]
     apply_nvidia_wayland_workaround();
 
-    // The getDisplayMedia share-picker bypass for loopback audio is set via the
+    // WebView2's flags (the high-performance GPU, see gpu.rs) are set via the
     // window's `additionalBrowserArgs` in tauri.conf.json — that is the path wry
     // actually passes to WebView2 (the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env
     // var is ignored once wry sets args through the API).
@@ -220,6 +225,9 @@ pub fn run() {
             commands::prefs::get_transcribe_config,
             commands::prefs::set_transcribe_config,
             commands::lyrics_cmds::request_translation,
+            hindi::hindi_pack_status,
+            hindi::hindi_pack_download,
+            hindi::hindi_pack_remove,
             commands::misc::get_provider_status,
             commands::misc::localcli_detect,
             commands::misc::localcli_status,

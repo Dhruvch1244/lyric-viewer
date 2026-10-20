@@ -2,6 +2,36 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
+
+## Unreleased
+
+- **अ no longer freezes the app or fails with "all providers failed".**
+  Transliteration ran inside a command on Tauri's main thread, so the whole
+  window froze while it waited on an AI service, and hosted models then
+  refused anyway, because reproducing a song's lyrics is against their
+  copyright rules. It is now done on your device in milliseconds, with no AI
+  and no key. The EN translation button had the same freeze; also fixed.
+- **Offline Hindi engine, with an optional Hindi pack.** A built-in table of
+  the few hundred commonest lyric words, plus spelling rules whose
+  conjunct-or-not table was learned from 1.3M real word pairs. Exact match on
+  the hardest benchmark (Aksharantar's held-out unseen words) went from 18.6%
+  for plain letter-by-letter rules to 23.5%. The optional Hindi pack (33 MB,
+  asked on startup, or ⚙ Settings → Hindi) is built on your machine into a
+  lexicon of 1,080,141 words from AI4Bharat's Aksharantar (CC0/CC-BY).
+- **Launches on your best GPU.** On a hybrid laptop the app now turns on PRIME
+  offload to the discrete GPU itself on Linux (NVIDIA or Mesa), and asks
+  WebView2 for the high-performance GPU on Windows. `prime-run`,
+  `DRI_PRIME` or `LYRIC_OVERLAY_GPU=default` still win.
+- **Spectrum 3D, rebuilt.** The old version was 48 thin bars along the horizon.
+  It is now a spectrum reactor: the live spectrum as a full circle of bars
+  around a pulsing core, with echoes rushing outward like a tunnel and a
+  shockwave every beat.
+- **Brighter, harder shaders.** Hyperspace, Kaleidoscope and Neon Rings react
+  much more to the beat. Ring Tunnel no longer floods the screen with a single
+  colour on a kick.
+- **Website** now lists the Arch package, Linux now-playing, the laser scenes
+  and offline Hindi, and shows the latest release's notes straight from this
+  changelog.
 ## 0.57.0 — 2026-10-20
 
 - **Laser scenes, 360 degrees.** Five new shader scenes in the ◈ cycle and

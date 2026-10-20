@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::jobs::{self, CancelToken, Lane, Priority, Runnable};
 use crate::state::{AlwaysOnTopGuard, CurTrack};
@@ -375,8 +375,8 @@ impl Runnable for LyricsJob {
                     let mut payload = cached;
                     payload["track"] = json!({ "title": title, "artist": artist });
                     payload["origin"] = json!("disk");
-                    payload["translationAvailable"] = json!(crate::llm::is_available());
-                    payload["transliterationAvailable"] = json!(crate::llm::is_available());
+                    payload["translationAvailable"] = json!(true);
+                    payload["transliterationAvailable"] = json!(true);
                     let _ = app.emit("lyrics", payload);
                     resolve_mood(&app, &title, &artist, &key, cue_texts.clone(), cached_mood);
                     resolve_attribution(&app, &title, &artist, &key, cue_texts.clone(), cached_attr);
@@ -469,7 +469,7 @@ impl Runnable for LyricsJob {
                     "status": "ok",
                     "indic": false,
                     "hasWordTimings": false,
-                    "transliterationAvailable": crate::llm::is_available(),
+                    "transliterationAvailable": true,
                     "translationAvailable": crate::llm::is_available(),
                 });
                 // Persist the raw result (without the per-emit track/origin fields).
@@ -1365,8 +1365,8 @@ pub(crate) fn import_lyrics(track: Value, app: AppHandle) -> Value {
     let mut out = payload;
     out["track"] = json!({ "title": t.title, "artist": t.artist });
     out["origin"] = json!("manual");
-    out["transliterationAvailable"] = json!(crate::llm::is_available());
-    out["translationAvailable"] = json!(crate::llm::is_available());
+    out["transliterationAvailable"] = json!(true);
+    out["translationAvailable"] = json!(true);
     let _ = app.emit("lyrics", out);
     json!({ "status": "ok", "lines": lines })
 }
@@ -1472,17 +1472,21 @@ pub(crate) fn choose_lyrics_candidate(track: Value, id: i64, app: AppHandle) -> 
     let mut out = payload;
     out["track"] = json!({ "title": t.title, "artist": t.artist });
     out["origin"] = json!("manual");
-    out["transliterationAvailable"] = json!(crate::llm::is_available());
-    out["translationAvailable"] = json!(crate::llm::is_available());
+    out["transliterationAvailable"] = json!(true);
+    out["translationAvailable"] = json!(true);
     let _ = app.emit("lyrics", out);
     json!({ "status": "ok", "lines": lines })
 }
 
 /// Translate the current track's cached lyrics to English (LLM). Returns the
 /// cues directly (the renderer awaits this) and caches them for next time.
-#[tauri::command]
-pub(crate) fn request_translation(app: AppHandle, state: State<Mutex<CurTrack>>) -> Value {
-    let cur = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+///
+/// `async` because this is a network LLM call: as a plain command it ran on
+/// Tauri's main thread and froze the whole window while it waited, the same
+/// bug `set_script` had.
+#[tauri::command(async)]
+pub(crate) fn request_translation(app: AppHandle) -> Value {
+    let cur = app.state::<Mutex<CurTrack>>().lock().unwrap_or_else(|e| e.into_inner()).clone();
     if cur.key.is_empty() {
         return json!({ "status": "error", "message": "nothing playing" });
     }
