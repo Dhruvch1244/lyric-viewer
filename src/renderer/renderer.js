@@ -5057,6 +5057,11 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.58.0': [
+    '<b>Hindi (अ) works offline</b> — no AI, no freeze, no "all providers failed". Get the optional Hindi pack in ⚙ Settings → Hindi for a million more words.',
+    '<b>Starts on your best GPU</b> — laptops with two graphics chips use the fast one by default.',
+    '<b>Spectrum 3D, rebuilt</b> — a 360° spectrum reactor. Hyperspace, Kaleidoscope and Neon Rings hit much harder.',
+  ],
   '0.57.0': [
     '<b>Laser scenes</b> — Laser Show fills the whole screen with 360° beams, plus Laser Tunnel, Laser Grid, Starburst and Vortex. Press ◈ to cycle.',
     '<b>Harder-hitting shaders</b> — on Intense, every shader scene now reacts much more to the beat, and Club has more beams.',

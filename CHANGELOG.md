@@ -3,7 +3,7 @@
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
 
-## Unreleased
+## 0.58.0 — 2026-10-20
 
 - **अ no longer freezes the app or fails with "all providers failed".**
   Transliteration ran inside a command on Tauri's main thread, so the whole
