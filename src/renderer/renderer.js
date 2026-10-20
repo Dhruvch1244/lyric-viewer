@@ -5056,6 +5056,10 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.57.0': [
+    '<b>Laser scenes</b> — Laser Show fills the whole screen with 360° beams, plus Laser Tunnel, Laser Grid, Starburst and Vortex. Press ◈ to cycle.',
+    '<b>Harder-hitting shaders</b> — on Intense, every shader scene now reacts much more to the beat, and Club has more beams.',
+  ],
   '0.56.0': [
     '<b>The visuals hit on the beat</b> — MilkDrop now feels every kick, and changes preset on strong beats every ~15 seconds.',
     '<b>New scenes</b> — Hyperspace, Club, Kaleidoscope, Spectrum 3D and Shader Mix. Press ◈ to cycle.',

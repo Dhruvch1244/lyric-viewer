@@ -2,7 +2,7 @@
 
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.57.0 — 2026-10-20
 
 - **Laser scenes, 360 degrees.** Five new shader scenes in the ◈ cycle and
   Shader Mix: **Laser Show** (beam fans from the centre and all four corners,
