@@ -3,6 +3,26 @@
 All notable changes to Lyric Overlay. Versions follow [semantic versioning](https://semver.org/).
 
 
+
+## 0.59.0 — 2026-10-23
+
+- **Max intensity, the new default.** A tier above Intense: shader levels
+  lifted harder (a quiet band level of 0.3 arrives as ~0.82, against ~0.65 on
+  Intense, with headroom kept so beats still stand out), a 2.8x kick push into
+  MilkDrop, presets changing every ~10s, and a **kick zoom**: the whole visual
+  punches forward up to 6% on every kick. The zoom is a compositor transform,
+  so it adds no shader or MilkDrop work. Reduce Motion still tames all of it. If you
+  picked Intense before, choose Max in ⚙ Settings → Visual intensity.
+- **Faster shaders, measured.** Frame time through the real shader engine at
+  480x270 (SwiftShader, median of repeated runs): Neon Rings 38.5 → 18.8 ms
+  (it looped all 20 rings per pixel; now only the ~10 that can reach it),
+  Club 12.6 → 5.0 ms (20 `atan` per pixel down to 2), Spectrum 3D
+  17.4 → 13.3 ms. Audio shaders now upload the analyser's bytes straight into
+  a one-channel texture instead of going through a 2D canvas: per-frame
+  JavaScript for an FFT shader fell from 277 µs to 42 µs, and FFT Color Lines
+  (6.4 → 4.0 ms) and Radial Spectrogram (7.0 → 5.1 ms) render faster. Across
+  all 26 shaders the summed frame time went from 198.5 to 163.1 ms.
+
 ## 0.58.0 — 2026-10-20
 
 - **अ no longer freezes the app or fails with "all providers failed".**
