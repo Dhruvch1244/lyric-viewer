@@ -1,0 +1,63 @@
+name: publish
+
+# Publish a draft release that release.yml built — the "click Publish release"
+# step, runnable from a workflow dispatch (or by an agent that can dispatch
+# workflows but cannot edit releases itself). Publishing is what creates the
+# tag (on the commit the draft was built from) and what makes the release show
+# up at /releases/latest, which the website's download buttons, its "What's
+# new" block and the in-app updater all read.
+#
+# Refuses unless every release.yml job for that tag finished green, so a
+# half-built draft (say, Windows failed) is never pushed out to the updater.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag of the draft release to publish, e.g. v0.59.0'
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check the draft exists and is still a draft
+        run: |
+          draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          if [ "$draft" != "true" ]; then
+            echo "::error::$TAG is not a draft release (already published, or missing)"
+            exit 1
+          fi
+
+      - name: Check the build that made it is green
+        run: |
+          # The newest release.yml run that built this tag: a dispatch with the
+          # tag as its input, or a push of the tag itself.
+          id="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+          # A draft can name a branch rather than a commit; resolve it.
+          if ! echo "$id" | grep -Eq '^[0-9a-f]{40}$'; then
+            id="$(gh api "repos/$GITHUB_REPOSITORY/commits/$id" --jq .sha)"
+          fi
+          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml --limit 30 \
+            --json databaseId,headSha,status,conclusion \
+            --jq "[.[] | select(.headSha == \"$id\")][0]")"
+          if [ -z "$run" ] || [ "$run" = "null" ]; then
+            echo "::error::no release.yml run found for $TAG's commit $id"
+            exit 1
+          fi
+          status="$(echo "$run" | jq -r .status)"
+          conclusion="$(echo "$run" | jq -r .conclusion)"
+          if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
+            echo "::error::the release build for $TAG is $status/$conclusion, not completed/success"
+            exit 1
+          fi
+
+      - name: Publish
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
