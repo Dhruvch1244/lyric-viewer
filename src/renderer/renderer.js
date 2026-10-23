@@ -474,17 +474,46 @@ let fpsCap = '60';
       bass ~0.3-0.5 and most beams scale off that, so they barely moved.
       `shaderCurve`/`shaderGain` lift the band levels and the kick before they
       reach a shader (v^curve * gain, capped at 1): an input of 0.3 arrives as
-      ~0.65 on Intense, 0.3 on Normal. Beat phase and hue are not touched.
+      ~0.65 on Intense, ~0.82 on Max, 0.3 on Normal. Beat phase and hue are
+      not touched. Max stops short of saturating: at 0.55 x 1.9 a level of 0.3
+      already arrived as 0.98, every beat looked the same, and intensity
+      without contrast reads as flat.
 
   `normal` is the pre-0.56 behaviour, kept exactly for anyone who liked it.
+
+  `max` (the default since 0.59) is for "really very intense": a harder lift
+  into the shaders and MilkDrop, faster preset changes, and `punch` — the
+  whole visual zooms forward by up to that fraction on a kick (see
+  applyKickPunch). Reduce Motion still scales every kick-driven effect down.
 */
 const VIS_INTENSITY = {
   chill:   { mdTarget: 0.45, mdKick: 0.3, dropSwitchMs: 90000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.16, flashGain: 0.7, pulseGain: 0.7,  shaderCurve: 1,   shaderGain: 0.75 },
   normal:  { mdTarget: 0.6,  mdKick: 0.8, dropSwitchMs: 42000, beatSwitchMs: 0,     maxHoldMs: 0,     kickFloor: 0.10, flashGain: 1,   pulseGain: 1,    shaderCurve: 1,   shaderGain: 1 },
   intense: { mdTarget: 0.85, mdKick: 1.8, dropSwitchMs: 8000,  beatSwitchMs: 14000, maxHoldMs: 30000, kickFloor: 0.06, flashGain: 1.3, pulseGain: 1.45, shaderCurve: 0.7, shaderGain: 1.5 },
+  max:     { mdTarget: 0.95, mdKick: 2.8, dropSwitchMs: 5000,  beatSwitchMs: 9000,  maxHoldMs: 20000, kickFloor: 0.04, flashGain: 1.6, pulseGain: 1.8,  shaderCurve: 0.6, shaderGain: 1.7, punch: 0.06 },
 };
-let visIntensity = 'intense';
-function intensityCfg() { return VIS_INTENSITY[visIntensity] || VIS_INTENSITY.intense; }
+let visIntensity = 'max';
+function intensityCfg() { return VIS_INTENSITY[visIntensity] || VIS_INTENSITY.max; }
+
+/**
+ * Zoom a full-screen GPU layer forward on the kick: `scale(1 + punch * kick)`.
+ * A CSS transform, so it is the compositor's job — no repaint, no extra pass
+ * over the shader or MilkDrop. Not yet measured in the real app (the perf
+ * harness, scripts/perf/, is the place to do that on the target machine).
+ * Written only when the value moves, and reset to nothing when a tier without
+ * punch is chosen.
+ * @param {HTMLElement|null} el
+ * @param {number} kick 0..1, already scaled by Reduce Motion
+ */
+function applyKickPunch(el, kick) {
+  if (!el) return;
+  const punch = intensityCfg().punch || 0;
+  const scale = 1 + punch * Math.max(0, Math.min(1, kick));
+  const prev = el._punch || 1;
+  if (Math.abs(scale - prev) < 0.002 && !(scale === 1 && prev !== 1)) return;
+  el._punch = scale;
+  el.style.transform = scale === 1 ? '' : `scale(${scale.toFixed(4)})`;
+}
 
 /* ------------------------------------------------------------ reduced motion */
 /*
@@ -2802,6 +2831,9 @@ function stopShaderEngine() {
   window.ShaderFX.destroy();
   els.shaderfx = document.getElementById('shaderfx');
   els.shaderfx.hidden = true;
+  // destroy() swaps in a clone, which copies the inline style: drop the kick
+  // punch's transform so the next shader look does not start zoomed.
+  els.shaderfx.style.transform = '';
   shaderName = null;
 }
 
@@ -2899,6 +2931,7 @@ function drawShaderEngine(preset, now, w, h) {
     drop: dropFlash * calm,
     hue: shaderHue,
   });
+  applyKickPunch(els.shaderfx, (live ? audioEnv.kick : Math.min(1, beatFlash * 0.7)) * calm);
 }
 
 /**
@@ -3061,6 +3094,7 @@ function applyEngine(preset, now, dt, w, h) {
     target: vi.mdTarget,
     kickGain: vi.mdKick,
   });
+  applyKickPunch(els.milkdrop, (audioEnv && audioEnv.active ? audioEnv.kick : 0) * (reducedMotion ? 0.3 : 1));
 }
 
 function renderSwirl(now, dt, life, alpha, style, bass, tintLive, accentLive) {
@@ -5057,6 +5091,10 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.59.0': [
+    '<b>Max intensity</b> — the new default: harder kicks, faster preset changes, and the whole visual punches forward on every beat. In ⚙ Settings → Visual intensity.',
+    '<b>Faster shaders</b> — Neon Rings and Club now render at more than twice the speed, and audio-driven scenes spend far less time per frame.',
+  ],
   '0.58.0': [
     '<b>Hindi (अ) works offline</b> — no AI, no freeze, no "all providers failed". Get the optional Hindi pack in ⚙ Settings → Hindi for a million more words.',
     '<b>Starts on your best GPU</b> — laptops with two graphics chips use the fast one by default.',
@@ -6338,7 +6376,7 @@ if (els.wallpaperBtn) {
   if (intensitySelect) {
     intensitySelect.value = visIntensity;
     intensitySelect.addEventListener('change', () => {
-      visIntensity = intensitySelect.value in VIS_INTENSITY ? intensitySelect.value : 'intense';
+      visIntensity = intensitySelect.value in VIS_INTENSITY ? intensitySelect.value : 'max';
       try { localStorage.setItem('visIntensity', visIntensity); } catch { /* ignore */ }
     });
   }

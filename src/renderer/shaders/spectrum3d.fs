@@ -83,9 +83,11 @@ float spec(float x) {
 // One ring of bars at base radius r0 and length scale len: brightness of p.
 // The circle is mirrored left/right, so the bass meets at the bottom and the
 // highs at the top and the shape is symmetric like a speaker cone.
-vec3 ring(vec2 p, float r0, float len, float spin, float bars, float glow) {
+// `ang` is the pixel's angle, computed once in main(): scaling p for an echo
+// does not change it, and computing it per ring was 5 atan() per pixel.
+vec3 ring(vec2 p, float ang, float r0, float len, float spin, float bars, float glow) {
   float r = length(p);
-  float a = atan(p.x, -p.y) + spin;            // 0 at the bottom
+  float a = ang + spin;                        // 0 at the bottom
   float m = abs(mod(a + 3.14159, 6.28318) - 3.14159) / 3.14159; // 0 bottom .. 1 top, mirrored
   float id = floor(m * bars);
   float fx = fract(m * bars);
@@ -106,7 +108,8 @@ void main() {
   float spin = t * 0.15 + beat * 0.2;
   float core = 0.16 + bass * 0.05 + kick * 0.04;
   // The live ring.
-  col += ring(p, core, 0.34 + kick * 0.12, spin, 64.0, 1.0);
+  float ang = atan(p.x, -p.y);
+  col += ring(p, ang, core, 0.34 + kick * 0.12, spin, 64.0, 1.0);
   // Echoes: the same spectrum scaled outward and fading, each one a step
   // further "back in time", so the screen reads as a tunnel of past beats.
   for (int i = 1; i < 5; i++) {
@@ -114,7 +117,7 @@ void main() {
     float z = fract(t * (0.35 + level * 0.6) + fi / 5.0);   // 0 new .. 1 gone
     float s = 1.0 + z * 2.6;
     vec2 q = p / s;
-    col += ring(q, core, 0.34, spin - fi * 0.35, 64.0, (1.0 - z) * 0.45);
+    col += ring(q, ang, core, 0.34, spin - fi * 0.35, 64.0, (1.0 - z) * 0.45);
   }
   // Pulsing core: a disc that punches on the kick, rimmed in white.
   vec3 cc = hsv(hue + 0.5, 0.8, 1.0);

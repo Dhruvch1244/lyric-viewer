@@ -58,30 +58,18 @@
   let audioInputs = { audio: [], audioFFT: [] };
   let loadToken = 0;
 
-  // Audio textures, the ISF spec's shape. 2D canvases because that is what the
-  // renderer's texture upload accepts; a putImageData of 512x1 a frame is
-  // nothing next to a full-screen fragment shader.
+  // Audio textures, the ISF spec's shape: one row, waveform 0.5-centred, FFT
+  // 0..1. Uploaded straight from the analyser's bytes as single-channel
+  // LUMINANCE textures (a shader's `.r` reads the value either way). This used
+  // to go through 2D canvases (putImageData, then texImage2D of the canvas),
+  // and the canvas-to-texture upload was the whole cost: measured 277us per
+  // frame of JS for an FFT shader against ~8us for one without audio inputs.
   const WAVE_W = 512;
   const FFT_W = 256;
-  let waveCanvas = null;
-  let fftCanvas = null;
-  let waveImg = null;
-  let fftImg = null;
   const RESERVED_UNITS = 4;
   const timeBytes = new Uint8Array(1024);
   const freqBytes = new Uint8Array(512);
-
-  function ensureAudioCanvases() {
-    if (waveCanvas) return;
-    waveCanvas = document.createElement('canvas');
-    waveCanvas.width = WAVE_W;
-    waveCanvas.height = 1;
-    fftCanvas = document.createElement('canvas');
-    fftCanvas.width = FFT_W;
-    fftCanvas.height = 1;
-    waveImg = waveCanvas.getContext('2d').createImageData(WAVE_W, 1);
-    fftImg = fftCanvas.getContext('2d').createImageData(FFT_W, 1);
-  }
+  const waveRow = new Uint8Array(WAVE_W);
 
   /** Load shaders/index.json once. */
   function loadCatalogue() {
@@ -205,6 +193,7 @@
     currentName = entry.name;
     inputs = prepared.header.INPUTS || [];
     audioInputs = prepared.audio;
+    plan = planInputs(inputs, entry.drive || {});
     return currentName;
   }
 
@@ -218,57 +207,84 @@
   }
 
   /**
-   * Upload `source` into image input `name` on a reserved texture unit — see
-   * the RESERVED_UNITS note in init(). Never through renderer.setValue, which
-   * is what leaked units.
+   * Upload one row of bytes into image input `name` on a reserved texture
+   * unit — see the RESERVED_UNITS note in init(). Never through
+   * renderer.setValue, which is what leaked units. The first upload sizes the
+   * texture; later ones only replace its contents (texSubImage2D), which
+   * skips reallocating it every frame.
    */
-  function bindAudioTexture(name, source, unit) {
+  function bindAudioTexture(name, bytes, width, unit) {
     const uniform = renderer.uniforms[name];
     if (!uniform || !uniform.texture || unit >= RESERVED_UNITS) return;
     renderer.program.use();
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, uniform.texture.texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    gl.uniform1i(renderer.program.getUniformLocation(name), unit);
-    if (!uniform.sized) {
-      uniform.sized = true;
-      renderer.setValue(`_${name}_imgSize`, [source.width, source.height]);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    if (uniform.sized !== width) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, bytes);
+      // A non-power-of-two-safe sampler: clamp, no mipmaps.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      uniform.sized = width;
+      renderer.setValue(`_${name}_imgSize`, [width, 1]);
       renderer.setValue(`_${name}_imgRect`, [0, 0, 1, 1]);
       renderer.setValue(`_${name}_flip`, false);
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.LUMINANCE, gl.UNSIGNED_BYTE, bytes);
     }
+    gl.uniform1i(renderer.program.getUniformLocation(name), unit);
   }
 
-  /** Fill the audio canvases from the analyser and hand them to the shader. */
+  /** Fill the audio textures from the analyser and hand them to the shader. */
   function feedAudio() {
     if (!audioInputs.audio.length && !audioInputs.audioFFT.length) return;
     const audio = window.AudioReactive;
     if (!audio || !audio.isActive || !audio.isActive()) return;
-    ensureAudioCanvases();
     if (audioInputs.audio.length && audio.timeDomain && audio.timeDomain(timeBytes)) {
-      const d = waveImg.data;
       const step = timeBytes.length / WAVE_W;
-      for (let i = 0; i < WAVE_W; i += 1) {
-        const v = timeBytes[Math.floor(i * step)];
-        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
-        d[i * 4 + 3] = 255;
-      }
-      waveCanvas.getContext('2d').putImageData(waveImg, 0, 0);
-      audioInputs.audio.forEach((n, i) => bindAudioTexture(n, waveCanvas, i));
+      for (let i = 0; i < WAVE_W; i += 1) waveRow[i] = timeBytes[Math.floor(i * step)];
+      audioInputs.audio.forEach((n, i) => bindAudioTexture(n, waveRow, WAVE_W, i));
     }
     if (audioInputs.audioFFT.length && audio.frequency && audio.frequency(freqBytes)) {
-      const d = fftImg.data;
-      // 512 bins -> 256: the top half is mostly air above 11kHz.
-      for (let i = 0; i < FFT_W; i += 1) {
-        const v = freqBytes[i];
-        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
-        d[i * 4 + 3] = 255;
-      }
-      fftCanvas.getContext('2d').putImageData(fftImg, 0, 0);
-      audioInputs.audioFFT.forEach((n, i) => bindAudioTexture(n, fftCanvas, audioInputs.audio.length + i));
+      // 512 bins -> the low 256: the top half is mostly air above 11kHz.
+      const fft = freqBytes.subarray(0, FFT_W);
+      audioInputs.audioFFT.forEach((n, i) => bindAudioTexture(n, fft, FFT_W, audioInputs.audio.length + i));
     }
   }
 
   const SIGNALS = ['bass', 'mid', 'treble', 'level', 'kick', 'beat', 'drop', 'hue'];
+
+  /**
+   * How each input of the loaded shader is fed, worked out once at load
+   * instead of every frame (render() used to look the catalogue entry up and
+   * classify every input per frame). One of:
+   *   { name, kind: 'signal' }                       a SIGNALS float
+   *   { name, kind: 'drive', signal, k, lo, hi }     a catalogue drive mapping
+   *   { name, kind: 'color', role }                  a palette-tinted colour
+   */
+  let plan = [];
+  function planInputs(list, drive) {
+    const out = [];
+    for (const input of list) {
+      if (input.TYPE === 'color' && typeof drive[input.NAME] === 'string') {
+        out.push({ name: input.NAME, kind: 'color', role: drive[input.NAME] });
+      } else if (input.TYPE !== 'float') {
+        continue;
+      } else if (SIGNALS.includes(input.NAME)) {
+        out.push({ name: input.NAME, kind: 'signal' });
+      } else if (drive[input.NAME]) {
+        // { "speed": "bass" } or { "speed": ["kick", 3] }: default + (max - default) * signal * k
+        const d = drive[input.NAME];
+        const [signal, k] = Array.isArray(d) ? d : [d, 1];
+        const lo = typeof input.DEFAULT === 'number' ? input.DEFAULT : (input.MIN || 0);
+        const hi = typeof input.MAX === 'number' ? input.MAX : lo + 1;
+        out.push({ name: input.NAME, kind: 'drive', signal, k, lo, hi });
+      }
+    }
+    return out;
+  }
 
   /** RGBA for a palette role: 'hue' (the accent), 'hueAlt' (its complement), 'dark'. */
   function paletteColor(role, hue) {
@@ -289,26 +305,15 @@
   function render(sig) {
     if (!renderer || !renderer.valid || !currentName || !canvas) return;
     feedAudio();
-    const entry = catalogue.find((c) => c.name === currentName);
-    const drive = (entry && entry.drive) || {};
-    for (const input of inputs) {
-      if (input.TYPE === 'color' && typeof drive[input.NAME] === 'string') {
+    for (const p of plan) {
+      if (p.kind === 'signal') {
+        renderer.setValue(p.name, sig[p.name] || 0);
+      } else if (p.kind === 'drive') {
+        renderer.setValue(p.name, p.lo + (p.hi - p.lo) * Math.min(1, (sig[p.signal] || 0) * p.k));
+      } else {
         // The Vidvox generators default to greyscale; tint them from the
         // song's palette so they sit with the rest of the app.
-        renderer.setValue(input.NAME, paletteColor(drive[input.NAME], sig.hue || 0));
-        continue;
-      }
-      if (input.TYPE !== 'float') continue;
-      if (SIGNALS.includes(input.NAME)) {
-        renderer.setValue(input.NAME, sig[input.NAME] || 0);
-      } else if (drive[input.NAME]) {
-        // { "speed": "bass" } or { "speed": ["kick", 3] }: default + (max - default) * signal * k
-        const d = drive[input.NAME];
-        const [signal, k] = Array.isArray(d) ? d : [d, 1];
-        const lo = typeof input.DEFAULT === 'number' ? input.DEFAULT : (input.MIN || 0);
-        const hi = typeof input.MAX === 'number' ? input.MAX : lo + 1;
-        const v = lo + (hi - lo) * Math.min(1, (sig[signal] || 0) * k);
-        renderer.setValue(input.NAME, v);
+        renderer.setValue(p.name, paletteColor(p.role, sig.hue || 0));
       }
     }
     renderer.draw(canvas);

@@ -150,6 +150,9 @@ body.lang-devanagari .ln.is-active {
    replaces it rather than layering with it. */
 #milkdrop {
   position: fixed;
+  /* Its own compositor layer: the kick punch (renderer.js applyKickPunch)
+     transforms it every frame and must not repaint anything. */
+  will-change: transform;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -165,6 +168,9 @@ body.lang-devanagari .ln.is-active {
 
 #shaderfx {
   position: fixed;
+  /* Its own compositor layer: the kick punch (renderer.js applyKickPunch)
+     transforms it every frame and must not repaint anything. */
+  will-change: transform;
   inset: 0;
   width: 100%;
   height: 100%;
