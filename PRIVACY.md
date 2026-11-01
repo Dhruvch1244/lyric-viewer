@@ -67,7 +67,8 @@ Devanagari transliteration (अ) runs on your device and sends nothing:**
 receives nothing about you or your music):**
 - Hugging Face, hosting AI4Bharat's Aksharantar word list — <https://huggingface.co/privacy>
 
-**Software updates (standalone build only):**
+**Software updates (receive: a request for the latest release, nothing about
+you or your music; at launch and every 6 hours):**
 - GitHub — <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>. The
   Microsoft Store version does not self-update; the Store delivers updates.
 

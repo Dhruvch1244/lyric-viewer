@@ -140,9 +140,25 @@ Or build it yourself from `packaging/arch/PKGBUILD`:
 cd packaging/arch && makepkg -si
 ```
 
-The package has no self-updater (`--features distro`) — pacman owns the
-binary, so upgrade by installing the newer package. Audio-reactive mode needs
-`parec`, which comes with `libpulse`.
+**Updates, two ways — both install the same signed package through pacman:**
+
+- **In the app.** It checks for a new release at launch and every 6 hours,
+  downloads it in the background, verifies its signature against the app's
+  update key, and offers **Install & restart**, which asks for your password
+  (polkit) and runs `pacman -U`.
+- **With your system updates.** Add the release repository to
+  `/etc/pacman.conf` once:
+
+  ```ini
+  [lyric-overlay]
+  SigLevel = Optional TrustAll
+  Server = https://github.com/Dhruvch1244/lyric-viewer/releases/latest/download
+  ```
+
+  then `sudo pacman -Sy lyric-overlay`. From then on `pacman -Syu` (and
+  CachyOS's update tools) keep it current.
+
+Audio-reactive mode needs `parec`, which comes with `libpulse`.
 
 ## Performance
 
