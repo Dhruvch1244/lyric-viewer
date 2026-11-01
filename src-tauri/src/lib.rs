@@ -29,6 +29,7 @@ mod beats;
 mod commands;
 mod correct;
 mod crashlog;
+mod distro_update;
 mod fingerprint;
 mod genius;
 mod genre;
@@ -180,7 +181,7 @@ pub fn run() {
 
             // Apply any keys saved via the 🔑 panel, then check for an update.
             commands::prefs::load_api_keys(&handle);
-            commands::updater::check_for_update(handle.clone());
+            commands::updater::start_update_checks(handle.clone());
 
             // Fill the remembered display mode's monitor. If that mode is
             // wallpaper, reparent immediately — apply_wallpaper only fires on

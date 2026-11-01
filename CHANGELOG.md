@@ -4,6 +4,24 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+
+## Unreleased
+
+- **Auto-update on Arch.** The pacman package had no updates at all; its
+  updater was compiled out because pacman owns the binary. It now checks
+  GitHub, downloads the new package in the background, verifies its signature
+  with the same key and library every other platform's updater uses (release
+  CI now signs the `.pkg.tar.zst`), and offers **Install & restart**, which
+  installs through `pkexec pacman -U`. A tampered or unsigned package is
+  refused. Each release also carries a pacman repository, so
+  `pacman -Syu` can keep it updated instead (README, "Arch Linux").
+- **Update checks every 6 hours,** not just at launch: the app lives in the
+  tray for days, and a long session never heard about a release.
+- **The update card says what's new.** Releases now carry their CHANGELOG
+  section instead of "See CHANGELOG.md", and the card shows its headlines.
+- **One-step releases.** A release run publishes itself once every build is
+  green, with a `SHA256SUMS` file for every download; a failure leaves a draft
+  for a look.
 ## 0.59.0 — 2026-10-23
 
 - **Max intensity, the new default.** A tier above Intense: shader levels

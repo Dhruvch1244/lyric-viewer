@@ -17,9 +17,9 @@ name: release
 # excludes drafts from /releases/latest and its API, which is what the
 # website's download buttons and version chip read. A tag that's built but
 # never manually published leaves the site silently serving the previous
-# release. After a build finishes: review it in the GitHub UI, then either
-# click "Publish release" there, or run
-# `gh release edit <tag> --repo Dhruvch1244/lyric-viewer --draft=false`.
+# release. A manual run publishes it automatically once everything is green
+# (the `publish` input, on by default); a pushed tag stays a draft — review it
+# in the GitHub UI, then click "Publish release", or dispatch publish.yml.
 
 on:
   push:
@@ -36,6 +36,14 @@ on:
         description: 'Release tag to create, e.g. v0.54.0 (empty = build only)'
         required: false
         default: ''
+      # One step from "release" to live: after every job is green, attach
+      # SHA256SUMS and publish the draft (the `publish` job below). Off, it
+      # stays a draft for review, as a pushed tag always does.
+      publish:
+        description: 'Publish the release once every build is green'
+        type: boolean
+        required: false
+        default: true
 
 env:
   RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
@@ -117,6 +125,23 @@ jobs:
         if: matrix.sidecar
         run: npm run vendor:sidecar
 
+      # This version's CHANGELOG section becomes the release body, which
+      # tauri-action also writes into latest.json as `notes` — what the in-app
+      # update card summarises. It used to be a fixed "See CHANGELOG.md".
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          ver="${RELEASE_TAG#v}"
+          [ -n "$ver" ] || ver="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)"
+          notes="$(awk -v v="$ver" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {if (on) exit} on' CHANGELOG.md)"
+          [ -n "$notes" ] || notes="See CHANGELOG.md for details."
+          {
+            echo 'body<<LYRIC_NOTES_EOF'
+            printf '%s\n' "$notes"
+            echo 'LYRIC_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build + publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -128,7 +153,7 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: 'Lyric Overlay ${{ env.RELEASE_TAG }}'
-          releaseBody: 'See CHANGELOG.md for details.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -178,10 +203,41 @@ jobs:
           chown -R builder:builder .
           sudo -u builder makepkg --noconfirm
 
+      # Sign the package with the updater key, so the app's own updater
+      # (distro_update.rs) can verify it exactly like every other platform's
+      # update, and build a one-package pacman repository so `pacman -Syu`
+      # picks up new releases (README: "Arch Linux").
+      - name: Sign and index the package
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cd packaging/arch
+          pkg="$(ls *.pkg.tar.zst)"
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            # The tauri CLI makepkg's build just installed, the same signer
+            # tauri-action uses for the other platforms.
+            cli="$(ls -d src/lyric-viewer-*/node_modules/.bin/tauri)"
+            "$cli" signer sign "$pkg"
+            test -s "$pkg.sig"
+          else
+            echo "::warning::no signing key; the in-app updater will refuse this package"
+          fi
+          repo-add lyric-overlay.db.tar.gz "$pkg"
+          # GitHub release assets cannot be symlinks; pacman fetches the
+          # plain names, so make them real copies.
+          for f in lyric-overlay.db lyric-overlay.files; do
+            cp --remove-destination "$(readlink -f "$f")" "$f"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: lyric-overlay-arch
-          path: packaging/arch/*.pkg.tar.zst
+          path: |
+            packaging/arch/*.pkg.tar.zst
+            packaging/arch/*.pkg.tar.zst.sig
+            packaging/arch/lyric-overlay.db*
+            packaging/arch/lyric-overlay.files*
           if-no-files-found: error
 
   # Seconds of work: waits for both the package and tauri-action's draft
@@ -203,5 +259,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$RELEASE_TAG" arch/*.pkg.tar.zst \
+          gh release upload "$RELEASE_TAG" arch/* \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+  # The last step of a release: checksums for every file, then publish — the
+  # GitHub "Publish release" click, done here once every job above is green
+  # (any failure skips it, leaving the draft for a look). Publishing creates
+  # the tag and makes this /releases/latest, which the updaters, the pacman
+  # repository and the website all read.
+  publish:
+    needs: [build, arch-release]
+    if: inputs.tag != '' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Attach SHA256SUMS
+        run: |
+          mkdir assets && cd assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          gh release upload "$RELEASE_TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publish
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

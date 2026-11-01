@@ -4,7 +4,13 @@
 //! card's own copy, "is downloaded and ready. Restart now", says as much;
 //! that copy did not match what the code before this fix actually did).
 //! No-ops on the Microsoft Store build (see the `store` feature gating in
-//! `run()`), where the Store updates the app itself.
+//! `run()`), where the Store updates the app itself. The Arch package
+//! (`distro`) has its own path, `distro_update.rs`: same card, same signing
+//! key, installed through pacman instead of over the running binary.
+//!
+//! Checked at launch and then every `RECHECK` while the app runs. It lives in
+//! the tray for days at a time, and a launch-only check meant a long session
+//! never heard about a release.
 //!
 //! State shape sent to the renderer is `{phase, version?, percent?, prompt}`
 //! — see onboarding-cards.js's `applyUpdateState` for the contract it reads.
@@ -20,6 +26,33 @@ use tauri_plugin_updater::Update;
 
 /// Last-known auto-update state, mirrored to the renderer's update card.
 pub(crate) struct UpdateStore(pub(crate) Mutex<Value>);
+
+/// How often a running app looks for a new release after the launch check.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// The verified Arch package waiting for "Install & restart" (distro only).
+static DISTRO_PACKAGE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+fn current_phase(app: &AppHandle) -> Option<String> {
+    let st = app.try_state::<UpdateStore>()?;
+    let guard = st.0.lock().unwrap_or_else(|e| e.into_inner());
+    guard.get("phase").and_then(Value::as_str).map(str::to_string)
+}
+
+/// Check now, then every `RECHECK`. A check is skipped while an update is
+/// already downloading or downloaded and waiting for a restart — the next one
+/// would only find the same release again.
+pub(crate) fn start_update_checks(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let busy = matches!(current_phase(&app).as_deref(), Some("downloading" | "ready" | "installing"));
+            if !busy {
+                check_for_update(app.clone());
+            }
+            tokio::time::sleep(RECHECK).await;
+        }
+    });
+}
 
 /// Store the new state and emit it, poison-safe — a panic elsewhere while
 /// this lock is held must not turn "an update is available" into "the
@@ -42,7 +75,11 @@ pub(crate) fn check_for_update(app: AppHandle) {
     // fallible guard when the plugin was never registered: it panics inside
     // Tauri's `state()` ("state() called before manage() for UpdaterState"),
     // which every store/distro launch logged until this check existed.
-    if cfg!(any(feature = "store", feature = "distro")) {
+    if cfg!(feature = "store") {
+        return;
+    }
+    if cfg!(feature = "distro") {
+        check_distro(app);
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -66,8 +103,70 @@ pub(crate) fn check_for_update(app: AppHandle) {
 /// restart is needed — `prompt` goes true so the card can say so. On
 /// failure, logs the actual error (previously discarded entirely, `.is_ok()`
 /// only) so a real-world failure has something to debug against.
+/// The Arch package's update: check, download and verify in the background,
+/// then prompt. Blocking network calls, so off the async runtime's workers.
+fn check_distro(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let available = match crate::distro_update::check(&app) {
+            Ok(Some(a)) => a,
+            Ok(None) => return,
+            Err(e) => {
+                log::warn!("{e}");
+                return;
+            }
+        };
+        let version = available.version.clone();
+        set_state(&app, json!({ "phase": "downloading", "version": version, "percent": 0, "prompt": false }));
+        let progress_app = app.clone();
+        let progress_version = version.clone();
+        let result = crate::distro_update::download(&app, &version, move |pct| {
+            set_state(
+                &progress_app,
+                json!({ "phase": "downloading", "version": progress_version, "percent": pct, "prompt": false }),
+            );
+        });
+        match result {
+            Ok(pkg) => {
+                *DISTRO_PACKAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(pkg);
+                set_state(
+                    &app,
+                    json!({ "phase": "ready", "version": version, "notes": available.notes, "prompt": true, "needsPassword": true }),
+                );
+            }
+            Err(e) => {
+                let message = format!("update download failed ({version}): {e}");
+                log::error!("{message}");
+                crate::crashlog::append_backend_error(&app, &message);
+                set_state(&app, json!({ "phase": "error", "version": version, "prompt": false }));
+            }
+        }
+    });
+}
+
+/// "Install & restart" on the Arch package: pacman installs the verified file
+/// (pkexec asks for the password), then the app restarts into it. A cancelled
+/// password prompt leaves the update ready to try again.
+fn install_distro(app: AppHandle) {
+    let Some(pkg) = DISTRO_PACKAGE.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    let ready = app.try_state::<UpdateStore>().map(|st| st.0.lock().unwrap_or_else(|e| e.into_inner()).clone());
+    let Some(ready) = ready else { return };
+    let mut installing = ready.clone();
+    installing["phase"] = json!("installing");
+    set_state(&app, installing);
+    tauri::async_runtime::spawn_blocking(move || match crate::distro_update::install(&pkg) {
+        Ok(()) => app.restart(),
+        Err(e) => {
+            log::warn!("update install: {e}");
+            let mut again = ready;
+            again["error"] = json!(e);
+            set_state(&app, again);
+        }
+    });
+}
+
 async fn download_and_install(app: AppHandle, update: Update) {
     let version = update.version.clone();
+    let notes = update.body.clone().unwrap_or_default();
     set_state(&app, json!({ "phase": "downloading", "version": version, "percent": 0, "prompt": false }));
 
     let downloaded = Mutex::new(0usize);
@@ -92,7 +191,7 @@ async fn download_and_install(app: AppHandle, update: Update) {
         .await;
 
     match result {
-        Ok(()) => set_state(&app, json!({ "phase": "ready", "version": version, "prompt": true })),
+        Ok(()) => set_state(&app, json!({ "phase": "ready", "version": version, "notes": notes, "prompt": true })),
         Err(e) => {
             let message = format!("update install failed ({version}): {e}");
             log::error!("{message}");
@@ -123,7 +222,9 @@ pub(crate) fn update_action(action: String, app: AppHandle) {
                     guard.get("phase").and_then(Value::as_str) == Some("ready")
                 })
                 .unwrap_or(false);
-            if ready {
+            if ready && cfg!(feature = "distro") {
+                install_distro(app);
+            } else if ready {
                 app.restart();
             }
         }

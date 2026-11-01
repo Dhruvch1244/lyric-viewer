@@ -92,6 +92,23 @@ if (els.nudgeDismiss) {
 */
 
 /** @param {{phase: string, version?: string, percent?: number, prompt: boolean}} s */
+/**
+ * The headline of each release-note bullet, for the update card: the CHANGELOG
+ * opens every bullet with a **bold** lead-in, so those read as a one-line
+ * "what's new". Plain text out — it goes into textContent, never innerHTML.
+ * @param {string} md the release's notes (its CHANGELOG section)
+ * @returns {string}
+ */
+function summarizeNotes(md) {
+  if (!md || /^See CHANGELOG/i.test(md.trim())) return '';
+  const heads = [];
+  for (const line of md.split('\n')) {
+    const m = /^\s*-\s+\*\*(.+?)\*\*/.exec(line);
+    if (m) heads.push(m[1].replace(/[.:]$/, ''));
+  }
+  return heads.slice(0, 3).join(' · ');
+}
+
 function applyUpdateState(state) {
   if (!state) return;
 
@@ -99,6 +116,25 @@ function applyUpdateState(state) {
     els.updateCard.hidden = !state.prompt;
     if (state.prompt && els.updateVersion) {
       els.updateVersion.textContent = state.version ? `Version ${state.version}` : 'A new version';
+    }
+    const notes = document.getElementById('update-notes');
+    if (notes) {
+      const text = state.error ? `Not installed: ${state.error}.` : summarizeNotes(state.notes);
+      notes.textContent = text;
+      notes.hidden = !text;
+    }
+    // The Arch package installs through pacman, which asks for a password,
+    // and only installs when asked — so the buttons say exactly that.
+    if (els.updateInstall) {
+      els.updateInstall.textContent = state.phase === 'installing'
+        ? 'Installing…'
+        : (state.needsPassword ? 'Install & restart' : 'Restart now');
+      els.updateInstall.disabled = state.phase === 'installing';
+    }
+    if (els.updateLater) {
+      els.updateLater.title = state.needsPassword
+        ? 'Keeps it downloaded; install from here any time'
+        : 'Installs by itself next time you quit';
     }
   }
 

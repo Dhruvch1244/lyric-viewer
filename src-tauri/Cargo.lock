@@ -2499,6 +2499,7 @@ dependencies = [
  "ebur128",
  "inference-protocol",
  "log",
+ "minisign-verify",
  "regex",
  "rusqlite",
  "rustfft",

@@ -58,7 +58,7 @@ log = "0.4"
 # Job engine (src/jobs). Only the sync primitives — the runtime itself is
 # Tauri's (`tauri::async_runtime`), which is this same tokio, so the versions
 # unify and nothing extra is pulled in.
-tokio = { version = "1", features = ["sync", "macros"] }
+tokio = { version = "1", features = ["sync", "macros", "time"] }
 tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
@@ -71,6 +71,10 @@ tauri-plugin-opener = "2"
 ureq = { version = "2.10", features = ["json"] }
 regex = "1"
 base64 = "0.22"
+# Verifies the Arch package's update signature (distro_update.rs) — the crate
+# tauri-plugin-updater already uses for every other platform, so the same key
+# signs everything and nothing new is compiled.
+minisign-verify = "0.2"
 # FFT for the native WASAPI loopback path (see audio.rs): the capture thread
 # turns raw PCM into the same byte-spectrum a Web Audio AnalyserNode would, so
 # the renderer's tuned DSP needs no change.
