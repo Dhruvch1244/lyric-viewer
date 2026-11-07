@@ -6,7 +6,7 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
-## Unreleased
+## 0.60.0 — 2026-11-07
 
 - **Studio: your song as an FL Studio session, live.** A new look in the ◈
   cycle that draws the playing song the way producer reels show a DAW: a
@@ -18,8 +18,6 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   pitch on each 16th note, and a **mixer** with peak hold. Nothing is authored
   per song. Without audio capture it falls back to a four-on-the-floor on the
   lyric beat clock.
-## Unreleased
-
 - **Auto-update on Arch.** The pacman package had no updates at all; its
   updater was compiled out because pacman owns the binary. It now checks
   GitHub, downloads the new package in the background, verifies its signature

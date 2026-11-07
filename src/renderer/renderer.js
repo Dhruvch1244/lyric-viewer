@@ -5110,6 +5110,10 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.60.0': [
+    '<b>Studio</b> — your song as a live FL Studio session: channel rack, piano roll, mixer and arrangement, written from the music as it plays. Press ◈ to find it.',
+    '<b>Updates that tell you what is new</b>, checked every 6 hours — and on Arch, the app now updates itself through pacman.',
+  ],
   '0.59.0': [
     '<b>Max intensity</b> — the new default: harder kicks, faster preset changes, and the whole visual punches forward on every beat. In ⚙ Settings → Visual intensity.',
     '<b>Faster shaders</b> — Neon Rings and Club now render at more than twice the speed, and audio-driven scenes spend far less time per frame.',
