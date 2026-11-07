@@ -5,6 +5,19 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+
+## Unreleased
+
+- **Studio: your song as an FL Studio session, live.** A new look in the ◈
+  cycle that draws the playing song the way producer reels show a DAW: a
+  **playlist** that lays out the arrangement bar by bar (Intro / Verse /
+  Chorus / Drop, by how loud each bar is against the song's own peak), a
+  **channel rack** whose 16 steps are written from what is actually heard
+  (kick from the kick detector; clap, hats, bass and percussion from onsets
+  in their own frequency bands), a **piano roll** of the melody's strongest
+  pitch on each 16th note, and a **mixer** with peak hold. Nothing is authored
+  per song. Without audio capture it falls back to a four-on-the-floor on the
+  lyric beat clock.
 ## Unreleased
 
 - **Auto-update on Arch.** The pacman package had no updates at all; its

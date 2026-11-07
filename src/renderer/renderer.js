@@ -3642,6 +3642,24 @@ function stageGradients(w, h, floorY) {
  * @param {number} w @param {number} h @param {number} now
  * @param {string} accent @param {string} tint
  */
+/* Studio (studio.js): the song as a DAW session, written live from the audio.
+   The spectrum buffer is allocated once — this runs every frame. */
+const studioFreq = new Uint8Array(512);
+function drawStudio(w, h, accent) {
+  if (!window.StudioView) return;
+  const live = audioEnv && audioEnv.active;
+  const haveFreq = live && window.AudioReactive && window.AudioReactive.frequency
+    && window.AudioReactive.frequency(studioFreq);
+  window.StudioView.draw(ctx, w, h, {
+    trackKey: currentTrack ? `${currentTrack.artist}|${currentTrack.title}` : '',
+    beatPhase,
+    env: live ? audioEnv : null,
+    freq: haveFreq ? studioFreq : null,
+    beatFlash,
+    accent,
+  });
+}
+
 function drawStage(w, h, now, accent, tint) {
   const floorY = h * STAGE_FLOOR_Y;
   const grads = stageGradients(w, h, floorY);
@@ -4221,6 +4239,7 @@ function drawBackdrop(now) {
     perfEnd('constellation', perfT0);
     // The stage floor goes down before anything that stands on it.
     if (scene.stage) drawStage(w, h, now, accentLive, tintLive);
+    if (scene.studio) drawStudio(w, h, accentLive);
 
     // Solo looks stop here: the layer above IS the picture. `finally` still
     // prices the frame and re-arms the loop, as it does for the bare path.
