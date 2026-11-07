@@ -65,7 +65,7 @@ test('a solo swirl preset names exactly the layer it draws', () => {
   // the other engine and correctly names no 2D layer at all; asserting "exactly
   // one" across both engines would be asserting the wrong thing.
   const solo = VisualPresets.all.filter((p) => p.soloLayer && p.engine === 'swirl');
-  assert.deepEqual(solo.map((p) => p.id), ['wormhole']);
+  assert.deepEqual(solo.map((p) => p.id).sort(), ['studio', 'wormhole']);
   for (const preset of solo) {
     const on = VisualPresets.LAYER_KEYS.filter((k) => preset.layers[k]);
     assert.equal(on.length, 1, `${preset.id} is solo but draws ${on.join(',')}`);

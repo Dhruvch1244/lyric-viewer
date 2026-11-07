@@ -46,7 +46,7 @@
    * drop flash and confetti that every other look gets, because the bare branch
    * returns before all of that. As layers they compose like everything else.
    */
-  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy', 'heatmap', 'vinyl', 'stage', 'wormhole'];
+  const LAYER_KEYS = ['aurora', 'bokeh', 'eq', 'rays', 'math', 'web', 'galaxy', 'heatmap', 'vinyl', 'stage', 'wormhole', 'studio'];
 
   /** @type {Preset[]} */
   const PRESETS = [
@@ -128,6 +128,21 @@
       */
       layers: { stage: true, rays: true, bokeh: true },
       swirl: { bandBias: 1.05, vortexBias: 0.9, glowBias: 1.15, kick: 2.0 },
+    },
+    {
+      id: 'studio',
+      name: 'Studio',
+      cost: 1,
+      /*
+        The song as a producer's DAW session (studio.js): playlist, channel
+        rack, piano roll and mixer, all written live from what is heard. Solo:
+        the panels are the picture, and a swirl behind them only muddies the
+        grid. Never handed out at random — it is a different kind of look
+        (a UI, not a field), so it shows only when chosen.
+      */
+      soloLayer: true,
+      layers: { studio: true },
+      swirl: {},
     },
     {
       id: 'wormhole',
@@ -352,7 +367,7 @@
   const SECOND_ENGINE = NORMALIZED.filter((p) => p.engine !== 'swirl').map((p) => p.id);
 
   const RANDOM_POOL = NORMALIZED.filter(
-    (p) => !['minimal', 'ghost'].includes(p.id) && !SECOND_ENGINE.includes(p.id)
+    (p) => !['minimal', 'ghost', 'studio'].includes(p.id) && !SECOND_ENGINE.includes(p.id)
   );
 
   /**
