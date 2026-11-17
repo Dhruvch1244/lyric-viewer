@@ -236,13 +236,6 @@ pub(crate) fn milkdrop_thumb_clear(app: AppHandle) -> bool {
     crate::presets::thumbs_clear(&app)
 }
 
-/// Aggregated listening stats for the Insights panel. `days` restricts to a
-/// trailing window (e.g. 30/365); omitted covers the whole unlimited log.
-#[tauri::command]
-pub(crate) fn get_listening_stats(app: AppHandle, days: Option<i64>) -> Value {
-    crate::stats::compute_stats(&app, days)
-}
-
 /// Erase the local listening-history log. See `stats.rs`'s module doc for why
 /// this exists — unlimited local retention is a real record of listening
 /// habits, so it must stay reversible on demand.

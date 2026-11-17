@@ -6,6 +6,13 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+
+## Unreleased
+
+- **Insights is gone.** The listening-stats panel (top artists, genres,
+  streaks) is removed, with its button, settings copy and backend command.
+  The local listening log stays: it is what Similar songs is built on, and
+  ⚙ Settings → Clear my history still erases it.
 ## 0.60.0 — 2026-11-07
 
 - **Studio: your song as an FL Studio session, live.** A new look in the ◈

@@ -243,7 +243,6 @@ pub fn run() {
             commands::misc::milkdrop_thumb_get,
             commands::misc::milkdrop_thumb_put,
             commands::misc::milkdrop_thumb_clear,
-            commands::misc::get_listening_stats,
             commands::misc::clear_listening_history,
             commands::misc::get_song_info,
             commands::misc::get_similar_songs,
