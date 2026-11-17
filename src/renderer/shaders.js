@@ -181,12 +181,17 @@
     }
     if (token !== loadToken || !renderer) return null; // a newer choice won
     const prepared = prepare(src);
-    renderer.loadSource(prepared.src);
-    if (!renderer.valid) {
+    /* loadSource can THROW on a compile error rather than set valid=false:
+       the vendored renderer parses the driver's message for a line number,
+       and a message it cannot parse (seen with ANGLE: "'pow' : no matching
+       overloaded function") is a TypeError out of here. Uncaught, it skipped
+       the put-the-last-one-back below and left the engine on a dead program. */
+    let compiled = false;
+    try { renderer.loadSource(prepared.src); compiled = renderer.valid; } catch (err) { renderer.error = renderer.error || (err && err.message); }
+    if (!compiled) {
       console.warn('[shaders]', entry.name, 'failed to compile:', renderer.error, renderer.errorLine);
       if (currentName) { // put the last good one back
-        const prev = prepare(sources.get(currentName));
-        renderer.loadSource(prev.src);
+        try { renderer.loadSource(prepare(sources.get(currentName)).src); } catch { /* stays failed */ }
       }
       return null;
     }

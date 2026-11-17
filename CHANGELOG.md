@@ -9,6 +9,17 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 ## Unreleased
 
+- **Eight new shaders** in Shaders (34 now): **Aurora** (light curtains over a
+  starfield), **Skyline** (a city of equalizer towers on a reflective floor),
+  **Ripples** (interfering rings from five strike points), **Hex Pulse** (a
+  honeycomb lit by a wave every beat), **Lightning** (forked arcs, a new
+  strike per kick), **Fractal Bloom** (an eight-fold kaleidoscopic fractal),
+  **Glitch** (torn colour bars and RGB split) and **Lava Lamp** (merging
+  blobs). Each rendered headless at rest and on a kick to check it draws and
+  answers the beat.
+- **A shader that fails to compile no longer leaves the screen dead.** The
+  vendored ISF renderer can throw on a driver error message it cannot parse,
+  which skipped the fall-back to the previous shader.
 - **Four modes, each with a browser — instead of a 21-step ◈ cycle.** ◈ now
   steps between **Overlay** (the app's own lyric looks: Liquid, Vinyl, Stage,
   Studio, ...), **MilkDrop**, **Shaders** and the new **Prism**, and lands on
