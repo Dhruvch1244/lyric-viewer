@@ -1709,6 +1709,7 @@ let milkdropShuffle = localStorage.getItem('milkdropShuffle') !== '0';
 const CANVAS_SCALES = [0.70, 0.85, 1.0];
 let canvasScale = 1.0;
 let lastCanvasScaleAt = 0;
+const canvasRungBlockedUntil = [];
 
 /**
  * Move the 2D canvas up or down a rung based on presented frame cadence.
@@ -1720,11 +1721,19 @@ function applyCanvasScale(now) {
   let rung = CANVAS_SCALES.indexOf(canvasScale);
   if (rung < 0) rung = CANVAS_SCALES.length - 1;
 
-  if (frameIntervalMs > 24 && rung > 0) {
+  /*
+    Rate-limited and rung-blocked exactly like applySwirlScale (see its 0.21.0
+    note). This one never got that fix: every frame over 24ms dropped a rung,
+    and the drop itself — a backing-store reallocation — made the next frame
+    long too, so one hitch walked the canvas from full scale to the floor in
+    consecutive frames, then climbed back and repeated.
+  */
+  if (frameIntervalMs > 24 && rung > 0 && now - lastCanvasScaleAt > 300) {
+    canvasRungBlockedUntil[rung] = now + 30000;
     rung -= 1;
     lastCanvasScaleAt = now;
   } else if (hasFrameHeadroom() && rung < CANVAS_SCALES.length - 1
-    && now - lastCanvasScaleAt > 1500) {
+    && now - lastCanvasScaleAt > 1500 && !(now < (canvasRungBlockedUntil[rung + 1] || 0))) {
     rung += 1;
     lastCanvasScaleAt = now;
   }
@@ -1749,8 +1758,15 @@ function sizeBackdropCanvas() {
   // hi-DPI is pure wasted fill-rate (the single biggest cause of lag on 4K).
   // Lyrics stay crisp regardless — they are DOM, not canvas.
   const dpr = Math.min(window.devicePixelRatio || 1, 1.0) * canvasScale;
-  els.canvas.width = Math.floor(window.innerWidth * dpr);
-  els.canvas.height = Math.floor(window.innerHeight * dpr);
+  const w = Math.floor(window.innerWidth * dpr);
+  const h = Math.floor(window.innerHeight * dpr);
+  // Assigning width/height clears and reallocates the backing store even when
+  // the value is unchanged; a resize event that did not change the size (a
+  // fullscreen toggle settling, a DPR re-report) need not pay for that.
+  if (els.canvas.width !== w || els.canvas.height !== h) {
+    els.canvas.width = w;
+    els.canvas.height = h;
+  }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 

@@ -3010,7 +3010,12 @@ html.webkitgtk * {
   gap: 0.5rem;
   align-content: start;
 }
+.looks__card[hidden] { display: none; }
 .looks__card {
+  /* 576 cards in Prism: skip layout and paint for the ones scrolled out of
+     view. The intrinsic size keeps the scrollbar honest. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100px;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;

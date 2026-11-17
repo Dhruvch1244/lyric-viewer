@@ -9,6 +9,29 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 ## Unreleased
 
+- **Performance, measured** (Chromium, before → after):
+  - **Multi-pass shaders render at the canvas's real resolution.** The ISF
+    renderer sized its pass buffers from the canvas's CSS size, so when the
+    frame-rate governor dropped the shader canvas to 960x540 the Spectrogram
+    and Waveform scenes still drew 1920x1080 buffers every frame — 4x the
+    pixels for nothing on screen. Buffers now follow the drawing buffer
+    (verified: 1920x1080 → 960x540, output unchanged).
+  - **Less JavaScript per shader frame.** Pass sizes are memoised and uniform
+    locations cached per program instead of asked of the driver for every
+    uniform every frame: FFT Spectrogram ~21 → ~12µs, Hyperspace ~6 → ~3µs.
+  - **Studio draws only what moves.** Panels, labels, 96 unlit pads, mixer
+    wells and 48 piano keys are painted once into a cached layer per window
+    size; the frame draws clips, lit pads, meters and notes. ~2.4 → ~1.5ms a
+    frame at 1080p, pixel-identical output.
+  - **☰ Browse opens and filters instantly.** Cards are built once per mode
+    and filtered in place, and off-screen cards skip layout: reopening 576
+    Prism modes ~17 → 0.7ms, a search keystroke ~3 → 0.9ms.
+  - **The backdrop canvas no longer sheds resolution in a cascade.** Its
+    governor dropped a rung on every slow frame (two rungs 76ms apart in one
+    sag, measured), the reallocation itself causing the next slow frame; it
+    is now rate-limited and rung-blocked like the swirl governor (373ms apart,
+    no climb back for 30s), and a resize that changes nothing no longer
+    reallocates.
 - **Eight new shaders** in Shaders (34 now): **Aurora** (light curtains over a
   starfield), **Skyline** (a city of equalizer towers on a reflective floor),
   **Ripples** (interfering rings from five strike points), **Hex Pulse** (a

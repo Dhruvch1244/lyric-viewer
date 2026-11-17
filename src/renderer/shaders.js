@@ -126,6 +126,32 @@
         (bindAudioTexture) sidesteps both without forking the library.
       */
       renderer.contextState.reset = function reset() { this.textureIndex = RESERVED_UNITS; };
+      /*
+        Pass buffers at the DRAWING-BUFFER size, not the CSS size. The renderer
+        evaluates a pass's "$WIDTH"/"$HEIGHT" from offsetWidth first, so with
+        the canvas at half resolution (the governor's lever) the multi-pass
+        Vidvox scenes still allocated and drew 1920x1080 buffers into a 960x540
+        canvas: 4x the pixels, every frame, for nothing on screen (measured:
+        texImage2D 1920x1080 with the canvas at 960x540). Reading offsetWidth
+        every pass of every frame could also force a layout. The answer for a
+        given size and expression never changes, so it is memoised; anything
+        naming another input ($someInput) is left to the renderer as before.
+      */
+      const evaluateSize = renderer.evaluateSize;
+      const sizes = new Map();
+      renderer.evaluateSize = function sized(el, expr) {
+        const text = String(expr);
+        const box = { width: el.width, height: el.height };
+        if (/\$(?!WIDTH|HEIGHT)/.test(text)) return evaluateSize.call(this, box, expr);
+        const key = `${box.width}x${box.height}|${text}`;
+        let v = sizes.get(key);
+        if (v === undefined) {
+          v = evaluateSize.call(this, box, expr);
+          if (sizes.size > 64) sizes.clear();
+          sizes.set(key, v);
+        }
+        return v;
+      };
       failed = false;
     } catch (err) {
       console.warn('[shaders] init failed:', err && err.message);
@@ -155,6 +181,24 @@
     gl = null;
     renderer = null;
     currentName = null;
+  }
+
+  /**
+   * Remember a program's uniform locations. The renderer asks the driver
+   * (gl.getUniformLocation, a string lookup across the GL boundary) for every
+   * uniform on every frame; a location is fixed for the program's life, and a
+   * new source makes a new program, so a per-program map is always right.
+   */
+  function cacheLocations(prog) {
+    if (!prog || prog.__cached || typeof prog.getUniformLocation !== 'function') return;
+    const lookup = prog.getUniformLocation;
+    const seen = new Map();
+    prog.getUniformLocation = function cached(name) {
+      let loc = seen.get(name);
+      if (loc === undefined) { loc = lookup.call(this, name); seen.set(name, loc); }
+      return loc;
+    };
+    prog.__cached = true;
   }
 
   /**
@@ -188,6 +232,7 @@
        the put-the-last-one-back below and left the engine on a dead program. */
     let compiled = false;
     try { renderer.loadSource(prepared.src); compiled = renderer.valid; } catch (err) { renderer.error = renderer.error || (err && err.message); }
+    if (compiled) { cacheLocations(renderer.program); cacheLocations(renderer.paintProgram); }
     if (!compiled) {
       console.warn('[shaders]', entry.name, 'failed to compile:', renderer.error, renderer.errorLine);
       if (currentName) { // put the last good one back
