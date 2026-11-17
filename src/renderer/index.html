@@ -155,16 +155,17 @@
              docs/PERF-UX.md U1. -->
         <button id="btn-lyrics" class="chip" type="button" title="Show / hide lyrics" aria-pressed="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.2 4.6h11.6M2.2 8h8.6M2.2 11.4h5.6"/></svg>Lyrics</button>
         <button id="btn-audio" class="chip" type="button" title="Audio-reactive (system sound)" aria-pressed="false">♫ Audio</button>
-        <!-- "Scene", not "preset": this is the app's OWN look (swirl field + 2D
-             layers), and the ✳ chip below is the imported MilkDrop catalogue.
-             Both used to be called a preset, with two similar-looking chips
-             and only one of them labelled. -->
-        <button id="btn-preset" class="chip" type="button" title="Scene — this app's own look. Click to change. (P)">◈ Liquid</button>
+        <!-- ◈ steps between the four modes (Overlay, MilkDrop, Shaders, Prism);
+             ☰ Browse picks a look inside the current one (looks-browser.js, or
+             the MilkDrop browser for MilkDrop). Two chips instead of a 21-step
+             cycle plus a separate MilkDrop door. -->
+        <button id="btn-preset" class="chip" type="button" title="Mode — click for the next one (P)">◈ Overlay</button>
+        <button id="btn-browse" class="chip" type="button" title="Browse the looks in this mode (B)" aria-pressed="false">☰ Browse</button>
         <!-- Always on the bar, not in More and not only while MilkDrop is live:
              it is the way into 1755 looks, and a door that appears only once
              you are already through it is not a door. From a swirl scene it
              switches this song to MilkDrop, then opens the browser. -->
-        <button id="btn-milkdrop" class="chip" type="button" title="MilkDrop presets — browse, favourite and pin the 1755-preset catalogue (V)" aria-pressed="false">✳ MilkDrop</button>
+        <button id="btn-milkdrop" class="chip" type="button" hidden title="MilkDrop presets — browse, favourite and pin the 1755-preset catalogue (V)" aria-pressed="false">✳ MilkDrop</button>
         <!-- Shuffle (PERF-UX.md U6b) is always visible, not contextual — it is
              just a persisted preference, safe to arm from the swirl engine for
              whenever MilkDrop becomes active. Heart/Next stay contextual below:
@@ -570,6 +571,19 @@
          like, so choosing one meant loading it and looking. 0.21.0 shows the
          pictures, remembers the ones you like, and lets you throw away the ones
          you never want to see again. -->
+    <!-- The looks browser (looks-browser.js): the picker for the Overlay,
+         Shaders and Prism modes, sharing the MilkDrop browser's rail and
+         chrome so the two read as one kind of thing. -->
+    <section id="looks" class="mdp looks" hidden role="dialog" aria-modal="true" aria-label="Browse looks">
+      <header class="mdp__bar looks__bar">
+        <h2 id="looks-title" class="mdp__title">Looks</h2>
+        <input id="looks-search" class="looks__search" type="search" placeholder="Search" autocomplete="off" spellcheck="false" />
+        <button id="looks-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
+      </header>
+      <p id="looks-count" class="looks__count"></p>
+      <div id="looks-grid" class="looks__grid" role="listbox" aria-label="Looks"></div>
+    </section>
+
     <section id="milkdrop-panel" class="mdp" hidden role="dialog" aria-modal="true" aria-label="MilkDrop presets">
       <header class="mdp__bar">
         <h2 class="mdp__title">MilkDrop presets</h2>
@@ -849,6 +863,7 @@
     <script src="swirl.js"></script>
     <script src="sprites.js"></script>
     <script src="studio.js"></script>
+    <script src="prism.js"></script>
     <script src="audio.js"></script>
     <script src="capture.js"></script>
     <!-- Picks between the native (backend/sidecar) and webview recorders for
@@ -865,6 +880,7 @@
     <script src="player.js"></script>
     <script src="renderer.js"></script>
     <script src="milkdrop-panel.js"></script>
+    <script src="looks-browser.js"></script>
     <script src="onboarding-cards.js"></script>
   </body>
 </html>

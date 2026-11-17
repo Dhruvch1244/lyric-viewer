@@ -200,5 +200,16 @@
    "bottomColor": "hue",
    "strokeColor": "hueAlt"
   }
+ },
+ {
+  "name": "Prism",
+  "file": "prism.fs",
+  "credit": "Lyric Overlay",
+  "library": "prism",
+  "params": [
+   "form",
+   "warp",
+   "palette"
+  ]
  }
 ]

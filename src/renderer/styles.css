@@ -2986,3 +2986,46 @@ html.webkitgtk * {
   font-size: 0.85em;
 }
 .nudge__notes[hidden] { display: none; }
+
+/* ---- Looks browser (looks-browser.js) — rides on .mdp's rail and chrome ---- */
+.looks[hidden] { display: none; }
+.looks__bar { display: flex; align-items: center; gap: 0.6rem; }
+.looks__bar .mdp__title { flex: 1; }
+.looks__search {
+  flex: 0 1 14rem;
+  min-width: 6rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--chrome-border);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+}
+.looks__count { margin: 0; opacity: 0.7; font-size: 0.85em; }
+.looks__grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 0.5rem;
+  align-content: start;
+}
+.looks__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--chrome-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.looks__card:hover,
+.looks__card:focus-visible { border-color: rgba(255, 255, 255, 0.45); }
+.looks__card[aria-selected="true"] { border-color: #28e0ec; box-shadow: 0 0 0 1px #28e0ec inset; }
+.looks__swatch { height: 2.6rem; border-radius: 6px; background: rgba(255, 255, 255, 0.08); }
+.looks__name { font-weight: 600; font-size: 0.9em; }
+.looks__meta { opacity: 0.6; font-size: 0.75em; }

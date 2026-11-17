@@ -9,6 +9,22 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 ## Unreleased
 
+- **Four modes, each with a browser — instead of a 21-step ◈ cycle.** ◈ now
+  steps between **Overlay** (the app's own lyric looks: Liquid, Vinyl, Stage,
+  Studio, ...), **MilkDrop**, **Shaders** and the new **Prism**, and lands on
+  the last look you used in each. **☰ Browse** (or `B`) opens a searchable
+  grid of what is inside the mode on screen — the same idea as the MilkDrop
+  browser, for every mode. Shaders are no longer separate looks: pick one in
+  the browser, or Mix to rotate through all of them with the music. A song's
+  saved look from before (e.g. "Laser Show") opens as Shaders on that shader.
+- **Prism: a new library of 576 modes.** One new shader with 12 forms
+  (rings, spiral, grid, hex, cells, tunnel, rays, waves, plasma, flower,
+  starfield, weave), 6 warps (swirl, fisheye, 6- and 8-way kaleidoscope,
+  mirror) and 8 palettes (song colours, fire, ice, neon, sunset, mono,
+  rainbow, acid) — every combination is a mode, every one answers the kick
+  and bass, and switching between them is instant (three numbers handed to
+  the GPU, nothing to compile or download). Rendered all forms × warps in
+  headless Chromium: none blank, no two alike.
 - **Insights is gone.** The listening-stats panel (top artists, genres,
   streaks) is removed, with its button, settings copy and backend command.
   The local listening log stays: it is what Similar songs is built on, and
@@ -23,6 +39,7 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   and the title alone — keeping the best-scoring match and stopping early on
   an exact one. Checked on real LRCLIB responses: two songs the old lookup
   missed are found, and none gets a worse match than before.
+
 ## 0.60.0 — 2026-11-07
 
 - **Studio: your song as an FL Studio session, live.** A new look in the ◈

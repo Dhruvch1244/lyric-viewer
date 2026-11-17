@@ -193,7 +193,7 @@
     currentName = entry.name;
     inputs = prepared.header.INPUTS || [];
     audioInputs = prepared.audio;
-    plan = planInputs(inputs, entry.drive || {});
+    plan = planInputs(inputs, entry.drive || {}, entry.params || []);
     return currentName;
   }
 
@@ -265,9 +265,19 @@
    *   { name, kind: 'color', role }                  a palette-tinted colour
    */
   let plan = [];
-  function planInputs(list, drive) {
+  /**
+   * Fixed per-mode values for inputs a catalogue entry lists under `params`
+   * (Prism's form/warp/palette): set by whoever picked the mode, held until
+   * changed, and written every frame like any other input.
+   */
+  let params = {};
+  function planInputs(list, drive, paramNames = []) {
     const out = [];
     for (const input of list) {
+      if (input.TYPE === 'float' && paramNames.includes(input.NAME)) {
+        out.push({ name: input.NAME, kind: 'param', fallback: typeof input.DEFAULT === 'number' ? input.DEFAULT : 0 });
+        continue;
+      }
       if (input.TYPE === 'color' && typeof drive[input.NAME] === 'string') {
         out.push({ name: input.NAME, kind: 'color', role: drive[input.NAME] });
       } else if (input.TYPE !== 'float') {
@@ -308,6 +318,8 @@
     for (const p of plan) {
       if (p.kind === 'signal') {
         renderer.setValue(p.name, sig[p.name] || 0);
+      } else if (p.kind === 'param') {
+        renderer.setValue(p.name, typeof params[p.name] === 'number' ? params[p.name] : p.fallback);
       } else if (p.kind === 'drive') {
         renderer.setValue(p.name, p.lo + (p.hi - p.lo) * Math.min(1, (sig[p.signal] || 0) * p.k));
       } else {
@@ -321,7 +333,10 @@
 
   window.ShaderFX = {
     init, destroy, load, resize, render,
-    names: () => catalogue.map((c) => c.name),
+    /* The shaders Shader Mix rotates through. A catalogue entry with a
+       `library` is a mode family of its own (Prism) and stays out of it. */
+    names: () => catalogue.filter((c) => !c.library).map((c) => c.name),
+    setParams: (p) => { params = p || {}; },
     catalogue: () => catalogue,
     ready: loadCatalogue,
     current: () => currentName,

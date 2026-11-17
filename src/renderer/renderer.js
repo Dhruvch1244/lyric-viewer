@@ -2824,13 +2824,25 @@ function stopShaderEngine() {
   shaderName = null;
 }
 
+/*
+  What the Shaders and Prism browsers chose (looks-browser.js). `shaderPick`
+  is a shader name for the Shaders look, or null for Mix; `prismModeId` is a
+  PrismLibrary id. Global rather than per song: the per-song choice is which
+  mode (presetId), and these are "which one in it" — the way MilkDrop's
+  shuffle preference is global too.
+*/
+let shaderPick = (() => { try { return localStorage.getItem('shaderPick') || null; } catch { return null; } })();
+let prismModeId = (() => { try { return localStorage.getItem('prismMode') || '0-0-0'; } catch { return '0-0-0'; } })();
+
 /**
- * Which shader this look shows. A named scene (Hyperspace, Club, ...) is that
- * shader; "Shader Mix" starts on a random one per song and moves on with the
- * same drop/beat/ceiling rules as MilkDrop's shuffle (VIS_INTENSITY).
+ * Which shader this look shows. Prism is its one shader; the Shaders look is
+ * the shader picked in its browser, or on Mix, a random one per song that
+ * moves on with the same drop/beat/ceiling rules as MilkDrop's shuffle
+ * (VIS_INTENSITY).
  */
 function shaderTargetFor(preset) {
   if (preset.shader) return preset.shader;
+  if (shaderPick) return shaderPick;
   const key = `${preset.id}|${currentTrack ? trackLookKey(currentTrack) : ''}`;
   const names = window.ShaderFX.names();
   if (key !== shaderSeededFor && names.length) {
@@ -2883,7 +2895,7 @@ function drawShaderEngine(preset, now, w, h) {
   if (want && want !== shaderName) loadShader(want, now);
 
   // Shader Mix moves on like MilkDrop's shuffle.
-  if (!preset.shader && milkdropShuffle && shaderName && !shaderLoading) {
+  if (!preset.shader && !shaderPick && milkdropShuffle && shaderName && !shaderLoading) {
     const vi = intensityCfg();
     const held = now - lastShaderSwitchAt;
     const kickNow = audioEnv && audioEnv.active ? audioEnv.kick : 0;
@@ -2906,6 +2918,8 @@ function drawShaderEngine(preset, now, w, h) {
   const calm = reducedMotion ? 0.3 : 1;
   const vi = intensityCfg();
   const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
+  // Prism's mode is three shader inputs, not a shader of its own.
+  if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(window.PrismLibrary.byId(prismModeId).params);
   fx.render({
     bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
     mid: punch(live ? audioEnv.mid : 0.2),
@@ -7036,11 +7050,62 @@ function defaultLookFor(track) {
  */
 function applyLookForTrack(track) {
   if (!track) return;
-  const override = readLookOverrides()[trackLookKey(track)];
+  let override = readLookOverrides()[trackLookKey(track)];
+  // A song saved on one of the old per-shader looks opens the Shaders look on
+  // that shader (presets.js LEGACY_SHADER_LOOKS).
+  const legacy = override && window.VisualPresets.LEGACY_SHADER_LOOKS[override];
+  if (legacy) {
+    override = 'shaders';
+    setShaderPick(legacy);
+  }
   presetId = override
     ? window.VisualPresets.byId(override).id
     : defaultLookFor(track);
   applyPresetLabel();
+}
+
+/** Choose the Shaders look's shader (null = Mix), remembered across songs. */
+function setShaderPick(name) {
+  shaderPick = name || null;
+  try {
+    if (shaderPick) localStorage.setItem('shaderPick', shaderPick);
+    else localStorage.removeItem('shaderPick');
+  } catch { /* ignore */ }
+}
+
+/** Choose the Prism mode, remembered across songs. */
+function setPrismMode(id) {
+  prismModeId = id;
+  try { localStorage.setItem('prismMode', id); } catch { /* ignore */ }
+}
+
+/**
+ * Make `id` this song's look: remembered for the song, and as the last look
+ * used in its mode so ◈ comes back to it.
+ */
+function chooseLook(id) {
+  presetId = window.VisualPresets.byId(id).id;
+  if (currentTrack) {
+    const overrides = readLookOverrides();
+    overrides[trackLookKey(currentTrack)] = presetId;
+    try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
+  }
+  try {
+    const last = JSON.parse(localStorage.getItem('modeLooks') || '{}') || {};
+    last[window.VisualPresets.familyOf(presetId)] = presetId;
+    localStorage.setItem('modeLooks', JSON.stringify(last));
+  } catch { /* ignore */ }
+  applyPresetLabel();
+}
+
+/** The look ◈ lands on when it enters a mode: the last one used there. */
+function lastLookIn(family) {
+  try {
+    const last = JSON.parse(localStorage.getItem('modeLooks') || '{}') || {};
+    const id = last[family.id];
+    if (id && window.VisualPresets.familyOf(id) === family.id) return id;
+  } catch { /* fall through */ }
+  return family.defaultLook;
 }
 
 /* Visual preset chip: cycles the named looks and persists the choice. The
@@ -7048,14 +7113,26 @@ function applyLookForTrack(track) {
    temporarily rendering a cheaper one — otherwise the chip would appear to
    change by itself. */
 function applyPresetLabel() {
-  const preset = window.VisualPresets.byId(presetId);
+  const VP = window.VisualPresets;
+  const preset = VP.byId(presetId);
+  const familyId = VP.familyOf(preset);
+  const family = VP.FAMILIES.find((f) => f.id === familyId);
+  // "Mode · what is chosen in it".
+  let inside = preset.name;
+  if (familyId === 'milkdrop') inside = (typeof milkdropShuffle !== 'undefined' && milkdropShuffle) ? 'Shuffle' : 'Pinned';
+  else if (familyId === 'shaders') inside = shaderPick || 'Mix';
+  else if (familyId === 'prism') inside = window.PrismLibrary ? window.PrismLibrary.byId(prismModeId).name : 'Prism';
+  const label = familyId === 'overlay' || inside !== family.name ? `${family.name} · ${inside}` : family.name;
   // When the governor has stepped in, say so. Silently rendering a different
   // look than the chip claims is worse than the dropped frames it prevents.
   const substituted = renderedPresetId && renderedPresetId !== presetId;
-  els.presetBtn.textContent = substituted ? `◈ ${preset.name} ⚡` : `◈ ${preset.name}`;
+  // The chip names only the mode — the bar is a rail of one-word buttons, and
+  // "Prism · Fire Spiral · Fisheye" wrapped it to four lines. What is chosen
+  // inside is in the tooltip and on ☰ Browse's selected card.
+  els.presetBtn.textContent = substituted ? `◈ ${family.name} ⚡` : `◈ ${family.name}`;
   els.presetBtn.title = substituted
-    ? `Scene: ${preset.name} — running "Minimal" to hold the frame rate`
-    : `Scene — ${preset.name}. This app's own look; click to cycle. (✳ is the MilkDrop catalogue.)`;
+    ? `${label} — running "Minimal" to hold the frame rate`
+    : `Mode: ${label}. Click for the next mode (Overlay, MilkDrop, Shaders, Prism); ☰ Browse picks inside it.`;
 }
 
 /*
@@ -7152,17 +7229,15 @@ if (mdNextBtn) {
 // switch or click happens, rather than waiting for the first one.
 updateMilkdropLiveChips();
 
-/* Clicking the chip re-rolls the look for the CURRENT song and remembers that
-   choice for it. Songs otherwise pick their own look automatically, so this is
-   an override rather than a global mode switch. */
+/* ◈ moves to the next mode (Overlay → MilkDrop → Shaders → Prism) and lands
+   on the look last used there; ☰ Browse (looks-browser.js) picks inside a
+   mode. It used to step through every look one at a time — 21 of them once
+   each shader was its own look — which is what "too many, not clean" meant.
+   The choice is remembered for the CURRENT song, as before: songs otherwise
+   pick their own look, so this is an override, not a global switch. */
 els.presetBtn.addEventListener('click', () => {
-  presetId = window.VisualPresets.next(presetId).id;
-  if (currentTrack) {
-    const overrides = readLookOverrides();
-    overrides[trackLookKey(currentTrack)] = presetId;
-    try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
-  }
-  applyPresetLabel();
+  const VP = window.VisualPresets;
+  chooseLook(lastLookIn(VP.nextFamily(VP.familyOf(presetId))));
 });
 
 els.perfBtn.addEventListener('click', () => {
