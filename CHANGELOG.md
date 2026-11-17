@@ -13,6 +13,16 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   streaks) is removed, with its button, settings copy and backend command.
   The local listening log stays: it is what Similar songs is built on, and
   ⚙ Settings → Clear my history still erases it.
+- **Lyrics found automatically where only a manual search found them.** The
+  automatic lookup made one search, built from the title plus the player's
+  raw artist string — and an artist like "Arijit SinghVEVO", "Artist - Topic"
+  or a long collaboration credit makes LRCLIB's search come back empty
+  (measured: 0 results, against 20 for the same song searched cleanly). It
+  now tries LRCLIB's structured title/artist search first, then title + main
+  artist, title + full credit, the halves of an "Artist - Song" video title,
+  and the title alone — keeping the best-scoring match and stopping early on
+  an exact one. Checked on real LRCLIB responses: two songs the old lookup
+  missed are found, and none gets a worse match than before.
 ## 0.60.0 — 2026-11-07
 
 - **Studio: your song as an FL Studio session, live.** A new look in the ◈

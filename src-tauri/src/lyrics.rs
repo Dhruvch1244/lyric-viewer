@@ -430,22 +430,109 @@ pub fn fetch_synced_checked(track: &Track) -> Result<Option<(Vec<Cue>, Value)>, 
             }
         }
     }
-    let query = format!("{} {}", clean_title(&track.title), track.artist);
-    let query = query.trim();
-    if query.is_empty() {
+    /*
+      One free-text query used to decide the whole lookup, and it was built from
+      the cleaned title plus the RAW artist. A player's artist string is often
+      not an artist ("Arijit SinghVEVO", "Artist - Topic", "A, B & C feat. D"),
+      and LRCLIB's search is a term match: measured, "Tum Hi Ho Arijit
+      SinghVEVO" returned 0 results while the structured search for the same
+      song returned 20. That is the "a manual search finds it, the automatic
+      one doesn't" bug — the manual box gets a clean title typed into it.
+
+      So: try a short list of queries, cleanest first, keeping the best match
+      across them, and stop early only on a strong one (STRONG_MATCH: title and
+      artist both exact). Stopping at the first match that merely cleared the
+      floor was measured to trade a better answer for a worse one: for
+      "Kesariya" by "Pritam, Arijit Singh & Amitabh Bhattacharya" the first
+      query's best was a Pritam-only entry (2.2) while the full credit was one
+      query later (3.0). The scoring is unchanged, so a looser query can only
+      win with a candidate that still matches title, artist and duration.
+    */
+    let queries = search_queries(track);
+    if queries.is_empty() {
         return Ok(None);
     }
+    let mut reached = false;
+    let mut best: Option<(Vec<Cue>, Value)> = None;
+    let score_of = |m: &(Vec<Cue>, Value)| m.1["score"].as_f64().unwrap_or(0.0);
+    for q in &queries {
+        let req = ureq::get(LRCLIB_SEARCH).set("User-Agent", USER_AGENT).timeout(std::time::Duration::from_secs(15));
+        let req = match q {
+            Query::Fields { title, artist } => req.query("track_name", title).query("artist_name", artist),
+            Query::Text(text) => req.query("q", text),
+        };
+        let resp = match call_lrclib_checked(req) {
+            Ok(Some(resp)) => resp,
+            Ok(None) => continue,
+            Err(Unreachable) => continue,
+        };
+        // A body that does not parse is LRCLIB answering badly, not a miss.
+        let Ok(results) = resp.into_json::<Value>() else { continue };
+        reached = true;
+        if let Some(found) = best_synced_match(results.as_array().map(Vec::as_slice).unwrap_or(&[]), track) {
+            if best.as_ref().map_or(true, |b| score_of(&found) > score_of(b)) {
+                best = Some(found);
+            }
+            if best.as_ref().is_some_and(|b| score_of(b) >= STRONG_MATCH) {
+                break;
+            }
+        }
+    }
+    if reached || best.is_some() { Ok(best) } else { Err(Unreachable) }
+}
 
-    let Some(resp) = call_lrclib_checked(ureq::get(LRCLIB_SEARCH)
-        .set("User-Agent", USER_AGENT)
-        .query("q", query)
-        .timeout(std::time::Duration::from_secs(15))
-    )? else {
-        return Ok(None);
+/// A match this good (title and artist both exact) ends the search early:
+/// a later, looser query cannot beat it on title and artist.
+const STRONG_MATCH: f64 = 3.0;
+
+/// One LRCLIB search request.
+#[derive(Debug, PartialEq)]
+enum Query {
+    /// The structured search: exact fields, no term soup.
+    Fields { title: String, artist: String },
+    /// The free-text `q` search.
+    Text(String),
+}
+
+/// The first credited artist: "A, B & C feat. D" -> "A".
+fn primary_artist(artist: &str) -> String {
+    let cleaned = clean_artist(artist);
+    let lower = cleaned.to_lowercase();
+    let mut cut = cleaned.len();
+    for sep in [",", " & ", " x ", " × ", " feat", " ft.", " ft ", " with ", " and ", ";", "/"] {
+        if let Some(i) = lower.find(sep) {
+            cut = cut.min(i);
+        }
+    }
+    cleaned[..cut].trim().to_string()
+}
+
+/// The searches to try for `track`, cleanest first, without duplicates.
+fn search_queries(track: &Track) -> Vec<Query> {
+    let title = clean_title(&track.title);
+    let artist = clean_artist(&track.artist);
+    let primary = primary_artist(&track.artist);
+    let mut out: Vec<Query> = Vec::new();
+    let push = |q: Query, out: &mut Vec<Query>| {
+        let empty = match &q {
+            Query::Fields { title, artist } => title.is_empty() || artist.is_empty(),
+            Query::Text(t) => t.trim().is_empty(),
+        };
+        if !empty && !out.contains(&q) {
+            out.push(q);
+        }
     };
-    // A body that does not parse is LRCLIB answering badly, not a miss.
-    let results: Value = resp.into_json().map_err(|_| Unreachable)?;
-    Ok(best_synced_match(results.as_array().map(Vec::as_slice).unwrap_or(&[]), track))
+    push(Query::Fields { title: title.clone(), artist: primary.clone() }, &mut out);
+    push(Query::Text(format!("{title} {primary}").trim().to_string()), &mut out);
+    push(Query::Text(format!("{title} {artist}").trim().to_string()), &mut out);
+    // A video title that carries the artist itself: "Artist - Song (Official Video)".
+    if let Some((left, right)) = title.split_once(" - ") {
+        let (left, right) = (left.trim(), right.trim());
+        push(Query::Fields { title: right.to_string(), artist: left.to_string() }, &mut out);
+        push(Query::Text(format!("{right} {left}")), &mut out);
+    }
+    push(Query::Text(title), &mut out);
+    out
 }
 
 /// The best-scoring synced candidate from an LRCLIB search response, or None
@@ -488,6 +575,61 @@ fn best_synced_match(arr: &[Value], track: &Track) -> Option<(Vec<Cue>, Value)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn track(title: &str, artist: &str) -> Track {
+        Track { title: title.into(), artist: artist.into(), duration_ms: 0 }
+    }
+
+    #[test]
+    fn the_first_query_is_structured_and_uses_the_real_artist() {
+        let q = search_queries(&track("Tum Hi Ho", "Arijit SinghVEVO"));
+        assert_eq!(q[0], Query::Fields { title: "Tum Hi Ho".into(), artist: "Arijit Singh".into() });
+    }
+
+    #[test]
+    fn collaborations_search_by_the_first_artist() {
+        assert_eq!(primary_artist("Seedhe Maut, DJ SA & Raftaar feat. KR$NA"), "Seedhe Maut");
+        assert_eq!(primary_artist("Pritam x Arijit Singh"), "Pritam");
+        assert_eq!(primary_artist("Calvin Harris - Topic"), "Calvin Harris");
+    }
+
+    #[test]
+    fn a_video_title_is_split_into_artist_and_song() {
+        let q = search_queries(&track("Arijit Singh - Tum Hi Ho (Official Video)", "T-Series"));
+        assert!(q.contains(&Query::Fields { title: "Tum Hi Ho".into(), artist: "Arijit Singh".into() }), "{q:?}");
+    }
+
+    #[test]
+    fn the_title_alone_is_the_last_resort_and_nothing_repeats() {
+        let q = search_queries(&track("Tum Hi Ho", "Arijit Singh"));
+        assert_eq!(q.last(), Some(&Query::Text("Tum Hi Ho".into())));
+        let texts: Vec<_> = q.iter().filter(|x| matches!(x, Query::Text(_))).collect();
+        assert_eq!(texts.len(), 2, "title+artist once (primary == full), then title alone: {q:?}");
+    }
+
+    /// The bug this fixes, against the real LRCLIB: player metadata that a
+    /// single free-text query could not find. Network:
+    /// `cargo test --workspace -- --ignored live_messy_metadata --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_messy_metadata_still_finds_synced_lyrics() {
+        for (title, artist) in [
+            ("Tum Hi Ho", "Arijit SinghVEVO"),
+            ("Arijit Singh - Tum Hi Ho (Official Video)", "T-Series"),
+            ("Blinding Lights", "The Weeknd - Topic"),
+            ("Kesariya", "Pritam, Arijit Singh & Amitabh Bhattacharya"),
+        ] {
+            let t = Track { title: title.into(), artist: artist.into(), duration_ms: 0 };
+            let found = fetch_synced(&t);
+            println!("{title} / {artist} -> {:?}", found.as_ref().map(|(c, s)| (c.len(), s["trackName"].clone())));
+            assert!(found.is_some(), "{title} / {artist}");
+        }
+    }
+
+    #[test]
+    fn an_empty_track_searches_nothing() {
+        assert!(search_queries(&track("", "")).is_empty());
+    }
 
     #[test]
     fn lrclib_retries_overload_and_rate_limit_but_not_a_miss() {
