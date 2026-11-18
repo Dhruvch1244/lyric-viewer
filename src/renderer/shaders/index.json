@@ -249,7 +249,11 @@
   "params": [
    "form",
    "warp",
-   "palette"
+   "palette",
+   "form2",
+   "warp2",
+   "palette2",
+   "morph"
   ]
  }
 ]

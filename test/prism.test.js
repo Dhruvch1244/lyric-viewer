@@ -53,11 +53,12 @@ test('Prism has 500+ modes with unique, stable ids', () => {
 test('Prism params stay inside the ranges prism.fs declares', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/renderer/shaders/prism.fs'), 'utf8');
   const meta = JSON.parse(src.slice(src.indexOf('/*') + 2, src.indexOf('*/')));
-  for (const name of ['form', 'warp', 'palette']) {
+  for (const name of ['form', 'warp', 'palette', 'form2', 'warp2', 'palette2']) {
     const input = meta.INPUTS.find((i) => i.NAME === name);
     assert.ok(input, `prism.fs has no ${name} input`);
     for (const m of Prism.MODES) {
-      assert.ok(m.params[name] >= input.MIN && m.params[name] <= input.MAX, `${m.id} ${name} out of range`);
+      const v = m.params[name.replace('2', '')];
+      assert.ok(v >= input.MIN && v <= input.MAX, `${m.id} ${name} out of range`);
     }
   }
 });
@@ -66,5 +67,42 @@ test('Prism is in the catalogue as a library, so Shader Mix never draws it', () 
   const index = JSON.parse(fs.readFileSync(path.join(__dirname, '../src/renderer/shaders/index.json'), 'utf8'));
   const entry = index.find((e) => e.file === 'prism.fs');
   assert.ok(entry && entry.library === 'prism');
-  assert.deepEqual(entry.params, ['form', 'warp', 'palette']);
+  assert.deepEqual(entry.params, ['form', 'warp', 'palette', 'form2', 'warp2', 'palette2', 'morph']);
+});
+
+test('Remix morphs to a related mode, one or two of form/warp/palette at a time', () => {
+  const r = Prism.createRemix('artist|title');
+  const start = r.params(0);
+  assert.equal(start.morph, 0);
+  assert.ok(r.trigger(10000, 'section'));
+  const mid = r.params(10800);
+  assert.ok(mid.morph > 0 && mid.morph < 1, `morph ${mid.morph}`);
+  const changed = ['form', 'warp', 'palette'].filter((k) => mid[k] !== mid[`${k}2`]).length;
+  assert.ok(changed >= 1 && changed <= 2, `${changed} dimensions changed`);
+  // Settles onto the new mode.
+  const done = r.params(12000);
+  assert.equal(done.morph, 0);
+  assert.equal(done.form, mid.form2);
+  assert.equal(done.palette, mid.palette2);
+});
+
+test('Remix will not morph again within its minimum gap, and drops morph faster', () => {
+  const r = Prism.createRemix('x');
+  assert.ok(r.trigger(10000, 'drop'));
+  assert.equal(r.trigger(12000, 'drop'), false);
+  assert.equal(r.params(10900).morph, 0); // a drop's 900ms morph is finished
+  assert.ok(r.trigger(16500, 'section'));
+});
+
+test('Remix is deterministic per song and keeps moving on its own', () => {
+  const a = Prism.createRemix('same song');
+  const b = Prism.createRemix('same song');
+  assert.deepEqual(a.params(0), b.params(0));
+  a.trigger(7000, 'section'); b.trigger(7000, 'section');
+  assert.deepEqual(a.params(7500), b.params(7500));
+  const idle = Prism.createRemix('quiet');
+  assert.equal(idle.params(0).morph, 0, 'no morph on the first frame');
+  assert.equal(idle.params(15000).morph, 0);
+  idle.params(16000); // IDLE_MS since the first frame: starts a morph
+  assert.ok(idle.params(16500).morph > 0, 'an idle song still morphs after IDLE_MS');
 });

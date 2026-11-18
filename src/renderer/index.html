@@ -160,7 +160,7 @@
              the MilkDrop browser for MilkDrop). Two chips instead of a 21-step
              cycle plus a separate MilkDrop door. -->
         <button id="btn-preset" class="chip" type="button" title="Mode — click for the next one (P)">◈ Overlay</button>
-        <button id="btn-browse" class="chip" type="button" title="Browse the looks in this mode (B)" aria-pressed="false">☰ Browse</button>
+        <button id="btn-browse" class="chip" type="button" title="Browse the looks in this mode (M)" aria-pressed="false">☰ Browse</button>
         <!-- Always on the bar, not in More and not only while MilkDrop is live:
              it is the way into 1755 looks, and a door that appears only once
              you are already through it is not a door. From a swirl scene it
@@ -349,6 +349,18 @@
             <option value="intense">Intense — hard kicks, preset changes every ~15s</option>
             <option value="normal">Normal — changes on drops (classic)</option>
             <option value="chill">Chill — gentle, slow changes</option>
+          </select>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">Lyric typography</span>
+          <select id="keybox-kinetic" class="chip" title="How the sung word reacts to each beat">
+            <option value="auto">Auto — styled to the song's genre and mood</option>
+            <option value="shatter">Shatter — a hard scale and twist</option>
+            <option value="bounce">Bounce — a springy hop</option>
+            <option value="glitch">Glitch — a sideways tear</option>
+            <option value="float">Float — a slow lift</option>
+            <option value="off">Off — words stay still</option>
           </select>
         </div>
 
@@ -578,6 +590,8 @@
       <header class="mdp__bar looks__bar">
         <h2 id="looks-title" class="mdp__title">Looks</h2>
         <input id="looks-search" class="looks__search" type="search" placeholder="Search" autocomplete="off" spellcheck="false" />
+        <button id="btn-director" class="chip" type="button" aria-pressed="false"
+                title="Director — changes the look for each part of the song: calm for intros and breaks, harder for builds, the heaviest scenes on drops (D)">🎬 Director</button>
         <button id="looks-close" class="chip chip--muted" type="button" title="Close (Esc)">✕</button>
       </header>
       <p id="looks-count" class="looks__count"></p>
@@ -828,6 +842,8 @@
           <div><dt>P</dt><dd>Scene</dd></div>
           <div><dt>V</dt><dd>MilkDrop presets (switches to MilkDrop if needed)</dd></div>
           <div><dt>B</dt><dd>Backdrop opacity</dd></div>
+          <div><dt>M</dt><dd>Browse the looks in this mode</dd></div>
+          <div><dt>D</dt><dd>Director — the look follows the song's sections</dd></div>
           <div><dt>Esc</dt><dd>Close whatever panel is open</dd></div>
           <div><dt>?</dt><dd>This list</dd></div>
         </dl>
@@ -864,6 +880,7 @@
     <script src="sprites.js"></script>
     <script src="studio.js"></script>
     <script src="prism.js"></script>
+    <script src="director.js"></script>
     <script src="audio.js"></script>
     <script src="capture.js"></script>
     <!-- Picks between the native (backend/sidecar) and webview recorders for
@@ -881,6 +898,7 @@
     <script src="renderer.js"></script>
     <script src="milkdrop-panel.js"></script>
     <script src="looks-browser.js"></script>
+    <script src="kinetic-type.js"></script>
     <script src="onboarding-cards.js"></script>
   </body>
 </html>
