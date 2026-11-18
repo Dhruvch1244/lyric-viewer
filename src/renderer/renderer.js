@@ -54,19 +54,6 @@ const els = {
   libraryEmpty: document.getElementById('library-empty'),
   libraryWatchFolder: document.getElementById('library-watch-folder'),
   libraryWatchedList: document.getElementById('library-watched-list'),
-  insightsBtn: document.getElementById('btn-insights'),
-  insights: document.getElementById('insights'),
-  insightsClose: document.getElementById('insights-close'),
-  insightsRange: document.getElementById('insights-range'),
-  insightsEmpty: document.getElementById('insights-empty'),
-  insightsBody: document.getElementById('insights-body'),
-  insightsPlays: document.getElementById('insights-plays'),
-  insightsTime: document.getElementById('insights-time'),
-  insightsStreak: document.getElementById('insights-streak'),
-  insightsArtists: document.getElementById('insights-artists'),
-  insightsGenres: document.getElementById('insights-genres'),
-  insightsSongs: document.getElementById('insights-songs'),
-  insightsWeekday: document.getElementById('insights-weekday'),
   songInfoBtn: document.getElementById('btn-song-info'),
   songInfo: document.getElementById('song-info'),
   songInfoClose: document.getElementById('songinfo-close'),
@@ -1722,6 +1709,7 @@ let milkdropShuffle = localStorage.getItem('milkdropShuffle') !== '0';
 const CANVAS_SCALES = [0.70, 0.85, 1.0];
 let canvasScale = 1.0;
 let lastCanvasScaleAt = 0;
+const canvasRungBlockedUntil = [];
 
 /**
  * Move the 2D canvas up or down a rung based on presented frame cadence.
@@ -1733,11 +1721,19 @@ function applyCanvasScale(now) {
   let rung = CANVAS_SCALES.indexOf(canvasScale);
   if (rung < 0) rung = CANVAS_SCALES.length - 1;
 
-  if (frameIntervalMs > 24 && rung > 0) {
+  /*
+    Rate-limited and rung-blocked exactly like applySwirlScale (see its 0.21.0
+    note). This one never got that fix: every frame over 24ms dropped a rung,
+    and the drop itself — a backing-store reallocation — made the next frame
+    long too, so one hitch walked the canvas from full scale to the floor in
+    consecutive frames, then climbed back and repeated.
+  */
+  if (frameIntervalMs > 24 && rung > 0 && now - lastCanvasScaleAt > 300) {
+    canvasRungBlockedUntil[rung] = now + 30000;
     rung -= 1;
     lastCanvasScaleAt = now;
   } else if (hasFrameHeadroom() && rung < CANVAS_SCALES.length - 1
-    && now - lastCanvasScaleAt > 1500) {
+    && now - lastCanvasScaleAt > 1500 && !(now < (canvasRungBlockedUntil[rung + 1] || 0))) {
     rung += 1;
     lastCanvasScaleAt = now;
   }
@@ -1762,8 +1758,15 @@ function sizeBackdropCanvas() {
   // hi-DPI is pure wasted fill-rate (the single biggest cause of lag on 4K).
   // Lyrics stay crisp regardless — they are DOM, not canvas.
   const dpr = Math.min(window.devicePixelRatio || 1, 1.0) * canvasScale;
-  els.canvas.width = Math.floor(window.innerWidth * dpr);
-  els.canvas.height = Math.floor(window.innerHeight * dpr);
+  const w = Math.floor(window.innerWidth * dpr);
+  const h = Math.floor(window.innerHeight * dpr);
+  // Assigning width/height clears and reallocates the backing store even when
+  // the value is unchanged; a resize event that did not change the size (a
+  // fullscreen toggle settling, a DPR re-report) need not pay for that.
+  if (els.canvas.width !== w || els.canvas.height !== h) {
+    els.canvas.width = w;
+    els.canvas.height = h;
+  }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
@@ -2837,13 +2840,25 @@ function stopShaderEngine() {
   shaderName = null;
 }
 
+/*
+  What the Shaders and Prism browsers chose (looks-browser.js). `shaderPick`
+  is a shader name for the Shaders look, or null for Mix; `prismModeId` is a
+  PrismLibrary id. Global rather than per song: the per-song choice is which
+  mode (presetId), and these are "which one in it" — the way MilkDrop's
+  shuffle preference is global too.
+*/
+let shaderPick = (() => { try { return localStorage.getItem('shaderPick') || null; } catch { return null; } })();
+let prismModeId = (() => { try { return localStorage.getItem('prismMode') || '0-0-0'; } catch { return '0-0-0'; } })();
+
 /**
- * Which shader this look shows. A named scene (Hyperspace, Club, ...) is that
- * shader; "Shader Mix" starts on a random one per song and moves on with the
- * same drop/beat/ceiling rules as MilkDrop's shuffle (VIS_INTENSITY).
+ * Which shader this look shows. Prism is its one shader; the Shaders look is
+ * the shader picked in its browser, or on Mix, a random one per song that
+ * moves on with the same drop/beat/ceiling rules as MilkDrop's shuffle
+ * (VIS_INTENSITY).
  */
 function shaderTargetFor(preset) {
   if (preset.shader) return preset.shader;
+  if (shaderPick) return shaderPick;
   const key = `${preset.id}|${currentTrack ? trackLookKey(currentTrack) : ''}`;
   const names = window.ShaderFX.names();
   if (key !== shaderSeededFor && names.length) {
@@ -2896,7 +2911,7 @@ function drawShaderEngine(preset, now, w, h) {
   if (want && want !== shaderName) loadShader(want, now);
 
   // Shader Mix moves on like MilkDrop's shuffle.
-  if (!preset.shader && milkdropShuffle && shaderName && !shaderLoading) {
+  if (!preset.shader && !shaderPick && milkdropShuffle && shaderName && !shaderLoading) {
     const vi = intensityCfg();
     const held = now - lastShaderSwitchAt;
     const kickNow = audioEnv && audioEnv.active ? audioEnv.kick : 0;
@@ -2919,6 +2934,8 @@ function drawShaderEngine(preset, now, w, h) {
   const calm = reducedMotion ? 0.3 : 1;
   const vi = intensityCfg();
   const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
+  // Prism's mode is three shader inputs, not a shader of its own.
+  if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(window.PrismLibrary.byId(prismModeId).params);
   fx.render({
     bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
     mid: punch(live ? audioEnv.mid : 0.2),
@@ -6315,7 +6332,6 @@ if (els.wallpaperBtn) {
       try {
         await window.player.clearListeningHistory();
         if (clearStatus) clearStatus.textContent = 'cleared';
-        if (els.insights && !els.insights.hidden) refreshInsights();
       } catch {
         if (clearStatus) clearStatus.textContent = 'could not clear history';
       } finally {
@@ -6529,7 +6545,7 @@ if (window.player.onWallpaperPointer) {
 // open. Leaving the More popover out would render it and let nothing in it be
 // pressed — the exact bug 0.22.0 hit with the other panels.
 const WALLPAPER_PANELS = [
-  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.hindiPack, els.cheatsheet, els.insights, els.songInfo, els.similar, moreMenu,
+  els.mdPanel, els.library, els.poster, els.keybox, els.presync, els.lyricSearch, els.modelConsent, els.hindiPack, els.cheatsheet, els.songInfo, els.similar, moreMenu,
 ].filter(Boolean);
 
 /* ------------------------------------------------------------ Hindi pack */
@@ -7050,11 +7066,62 @@ function defaultLookFor(track) {
  */
 function applyLookForTrack(track) {
   if (!track) return;
-  const override = readLookOverrides()[trackLookKey(track)];
+  let override = readLookOverrides()[trackLookKey(track)];
+  // A song saved on one of the old per-shader looks opens the Shaders look on
+  // that shader (presets.js LEGACY_SHADER_LOOKS).
+  const legacy = override && window.VisualPresets.LEGACY_SHADER_LOOKS[override];
+  if (legacy) {
+    override = 'shaders';
+    setShaderPick(legacy);
+  }
   presetId = override
     ? window.VisualPresets.byId(override).id
     : defaultLookFor(track);
   applyPresetLabel();
+}
+
+/** Choose the Shaders look's shader (null = Mix), remembered across songs. */
+function setShaderPick(name) {
+  shaderPick = name || null;
+  try {
+    if (shaderPick) localStorage.setItem('shaderPick', shaderPick);
+    else localStorage.removeItem('shaderPick');
+  } catch { /* ignore */ }
+}
+
+/** Choose the Prism mode, remembered across songs. */
+function setPrismMode(id) {
+  prismModeId = id;
+  try { localStorage.setItem('prismMode', id); } catch { /* ignore */ }
+}
+
+/**
+ * Make `id` this song's look: remembered for the song, and as the last look
+ * used in its mode so ◈ comes back to it.
+ */
+function chooseLook(id) {
+  presetId = window.VisualPresets.byId(id).id;
+  if (currentTrack) {
+    const overrides = readLookOverrides();
+    overrides[trackLookKey(currentTrack)] = presetId;
+    try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
+  }
+  try {
+    const last = JSON.parse(localStorage.getItem('modeLooks') || '{}') || {};
+    last[window.VisualPresets.familyOf(presetId)] = presetId;
+    localStorage.setItem('modeLooks', JSON.stringify(last));
+  } catch { /* ignore */ }
+  applyPresetLabel();
+}
+
+/** The look ◈ lands on when it enters a mode: the last one used there. */
+function lastLookIn(family) {
+  try {
+    const last = JSON.parse(localStorage.getItem('modeLooks') || '{}') || {};
+    const id = last[family.id];
+    if (id && window.VisualPresets.familyOf(id) === family.id) return id;
+  } catch { /* fall through */ }
+  return family.defaultLook;
 }
 
 /* Visual preset chip: cycles the named looks and persists the choice. The
@@ -7062,14 +7129,26 @@ function applyLookForTrack(track) {
    temporarily rendering a cheaper one — otherwise the chip would appear to
    change by itself. */
 function applyPresetLabel() {
-  const preset = window.VisualPresets.byId(presetId);
+  const VP = window.VisualPresets;
+  const preset = VP.byId(presetId);
+  const familyId = VP.familyOf(preset);
+  const family = VP.FAMILIES.find((f) => f.id === familyId);
+  // "Mode · what is chosen in it".
+  let inside = preset.name;
+  if (familyId === 'milkdrop') inside = (typeof milkdropShuffle !== 'undefined' && milkdropShuffle) ? 'Shuffle' : 'Pinned';
+  else if (familyId === 'shaders') inside = shaderPick || 'Mix';
+  else if (familyId === 'prism') inside = window.PrismLibrary ? window.PrismLibrary.byId(prismModeId).name : 'Prism';
+  const label = familyId === 'overlay' || inside !== family.name ? `${family.name} · ${inside}` : family.name;
   // When the governor has stepped in, say so. Silently rendering a different
   // look than the chip claims is worse than the dropped frames it prevents.
   const substituted = renderedPresetId && renderedPresetId !== presetId;
-  els.presetBtn.textContent = substituted ? `◈ ${preset.name} ⚡` : `◈ ${preset.name}`;
+  // The chip names only the mode — the bar is a rail of one-word buttons, and
+  // "Prism · Fire Spiral · Fisheye" wrapped it to four lines. What is chosen
+  // inside is in the tooltip and on ☰ Browse's selected card.
+  els.presetBtn.textContent = substituted ? `◈ ${family.name} ⚡` : `◈ ${family.name}`;
   els.presetBtn.title = substituted
-    ? `Scene: ${preset.name} — running "Minimal" to hold the frame rate`
-    : `Scene — ${preset.name}. This app's own look; click to cycle. (✳ is the MilkDrop catalogue.)`;
+    ? `${label} — running "Minimal" to hold the frame rate`
+    : `Mode: ${label}. Click for the next mode (Overlay, MilkDrop, Shaders, Prism); ☰ Browse picks inside it.`;
 }
 
 /*
@@ -7166,17 +7245,15 @@ if (mdNextBtn) {
 // switch or click happens, rather than waiting for the first one.
 updateMilkdropLiveChips();
 
-/* Clicking the chip re-rolls the look for the CURRENT song and remembers that
-   choice for it. Songs otherwise pick their own look automatically, so this is
-   an override rather than a global mode switch. */
+/* ◈ moves to the next mode (Overlay → MilkDrop → Shaders → Prism) and lands
+   on the look last used there; ☰ Browse (looks-browser.js) picks inside a
+   mode. It used to step through every look one at a time — 21 of them once
+   each shader was its own look — which is what "too many, not clean" meant.
+   The choice is remembered for the CURRENT song, as before: songs otherwise
+   pick their own look, so this is an override, not a global switch. */
 els.presetBtn.addEventListener('click', () => {
-  presetId = window.VisualPresets.next(presetId).id;
-  if (currentTrack) {
-    const overrides = readLookOverrides();
-    overrides[trackLookKey(currentTrack)] = presetId;
-    try { localStorage.setItem('visualLooks', JSON.stringify(overrides)); } catch { /* ignore */ }
-  }
-  applyPresetLabel();
+  const VP = window.VisualPresets;
+  chooseLook(lastLookIn(VP.nextFamily(VP.familyOf(presetId))));
 });
 
 els.perfBtn.addEventListener('click', () => {
@@ -8020,109 +8097,6 @@ function openLibrary() {
 function closeLibrary() {
   if (els.library) els.library.hidden = true;
 }
-
-/* ------------------------------------------------------------- insights */
-/*
-  Listening stats, built on stats.rs's unlimited local play log. Fetched
-  fresh each time the panel opens or the range changes — this is a look-back
-  query over a log that only grows between opens, not something worth
-  keeping live-synced the way the library grid is.
-*/
-
-const MS_PER_HOUR = 3_600_000;
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function openInsights() {
-  if (!els.insights) return;
-  els.insights.hidden = false;
-  document.body.classList.add('show-cursor');
-  refreshInsights();
-}
-
-function closeInsights() {
-  if (els.insights) els.insights.hidden = true;
-}
-
-/** One `<li>` for a top-N list — a rank, a label, and a right-aligned count. */
-function insightRow(label, count) {
-  const li = document.createElement('li');
-  li.className = 'insights__row';
-  const name = document.createElement('span');
-  name.className = 'insights__row-label';
-  name.textContent = label;
-  const n = document.createElement('span');
-  n.className = 'insights__row-count';
-  n.textContent = count;
-  li.append(name, n);
-  return li;
-}
-
-async function refreshInsights() {
-  if (!els.insightsBody || !window.player.getListeningStats) return;
-  const rangeVal = els.insightsRange ? els.insightsRange.value : '';
-  const days = rangeVal ? Number(rangeVal) : null;
-  let stats = null;
-  try {
-    stats = await window.player.getListeningStats(days);
-  } catch { /* show whatever defaults render below */ }
-
-  const totalPlays = stats && stats.totalPlays || 0;
-  const empty = totalPlays === 0;
-  if (els.insightsEmpty) els.insightsEmpty.hidden = !empty;
-  els.insightsBody.hidden = empty;
-  if (empty) return;
-
-  if (els.insightsPlays) els.insightsPlays.textContent = String(totalPlays);
-  if (els.insightsTime) {
-    const hours = (stats.totalListeningMs || 0) / MS_PER_HOUR;
-    els.insightsTime.textContent = hours >= 10 ? `${Math.round(hours)}h` : `${hours.toFixed(1)}h`;
-  }
-  if (els.insightsStreak) els.insightsStreak.textContent = String(stats.streakDays || 0);
-
-  if (els.insightsArtists) {
-    els.insightsArtists.textContent = '';
-    for (const a of stats.topArtists || []) els.insightsArtists.appendChild(insightRow(a.artist, a.plays));
-  }
-  if (els.insightsGenres) {
-    els.insightsGenres.textContent = '';
-    const genres = stats.topGenres || [];
-    if (genres.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'insights__row insights__row--muted';
-      li.textContent = 'Not enough songs identified yet';
-      els.insightsGenres.appendChild(li);
-    } else {
-      for (const g of genres) els.insightsGenres.appendChild(insightRow(g.genre, g.plays));
-    }
-  }
-  if (els.insightsSongs) {
-    els.insightsSongs.textContent = '';
-    for (const s of stats.topSongs || []) els.insightsSongs.appendChild(insightRow(`${s.title} — ${s.artist || 'Unknown'}`, s.plays));
-  }
-
-  if (els.insightsWeekday) {
-    els.insightsWeekday.textContent = '';
-    const byWeekday = stats.playsByWeekday || [0, 0, 0, 0, 0, 0, 0];
-    const max = Math.max(1, ...byWeekday);
-    for (let i = 0; i < 7; i += 1) {
-      const col = document.createElement('div');
-      col.className = 'insights__weekday-col';
-      const bar = document.createElement('div');
-      bar.className = 'insights__weekday-bar';
-      bar.style.height = `${Math.round((byWeekday[i] / max) * 100)}%`;
-      bar.title = `${byWeekday[i]} play${byWeekday[i] === 1 ? '' : 's'}`;
-      const label = document.createElement('span');
-      label.className = 'insights__weekday-label';
-      label.textContent = WEEKDAY_LABELS[i];
-      col.append(bar, label);
-      els.insightsWeekday.appendChild(col);
-    }
-  }
-}
-
-if (els.insightsBtn) els.insightsBtn.addEventListener('click', openInsights);
-if (els.insightsClose) els.insightsClose.addEventListener('click', closeInsights);
-if (els.insightsRange) els.insightsRange.addEventListener('change', refreshInsights);
 
 /* ------------------------------------------------------------ song info */
 /* "About this song" — wiki.rs's on-demand Wikipedia lookup for the CURRENT

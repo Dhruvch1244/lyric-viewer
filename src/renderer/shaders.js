@@ -126,6 +126,32 @@
         (bindAudioTexture) sidesteps both without forking the library.
       */
       renderer.contextState.reset = function reset() { this.textureIndex = RESERVED_UNITS; };
+      /*
+        Pass buffers at the DRAWING-BUFFER size, not the CSS size. The renderer
+        evaluates a pass's "$WIDTH"/"$HEIGHT" from offsetWidth first, so with
+        the canvas at half resolution (the governor's lever) the multi-pass
+        Vidvox scenes still allocated and drew 1920x1080 buffers into a 960x540
+        canvas: 4x the pixels, every frame, for nothing on screen (measured:
+        texImage2D 1920x1080 with the canvas at 960x540). Reading offsetWidth
+        every pass of every frame could also force a layout. The answer for a
+        given size and expression never changes, so it is memoised; anything
+        naming another input ($someInput) is left to the renderer as before.
+      */
+      const evaluateSize = renderer.evaluateSize;
+      const sizes = new Map();
+      renderer.evaluateSize = function sized(el, expr) {
+        const text = String(expr);
+        const box = { width: el.width, height: el.height };
+        if (/\$(?!WIDTH|HEIGHT)/.test(text)) return evaluateSize.call(this, box, expr);
+        const key = `${box.width}x${box.height}|${text}`;
+        let v = sizes.get(key);
+        if (v === undefined) {
+          v = evaluateSize.call(this, box, expr);
+          if (sizes.size > 64) sizes.clear();
+          sizes.set(key, v);
+        }
+        return v;
+      };
       failed = false;
     } catch (err) {
       console.warn('[shaders] init failed:', err && err.message);
@@ -158,6 +184,24 @@
   }
 
   /**
+   * Remember a program's uniform locations. The renderer asks the driver
+   * (gl.getUniformLocation, a string lookup across the GL boundary) for every
+   * uniform on every frame; a location is fixed for the program's life, and a
+   * new source makes a new program, so a per-program map is always right.
+   */
+  function cacheLocations(prog) {
+    if (!prog || prog.__cached || typeof prog.getUniformLocation !== 'function') return;
+    const lookup = prog.getUniformLocation;
+    const seen = new Map();
+    prog.getUniformLocation = function cached(name) {
+      let loc = seen.get(name);
+      if (loc === undefined) { loc = lookup.call(this, name); seen.set(name, loc); }
+      return loc;
+    };
+    prog.__cached = true;
+  }
+
+  /**
    * Switch to a shader by catalogue name. Resolves to the name actually
    * loaded, or null. A shader that fails to compile is reported and skipped,
    * never left half-loaded: the previous one keeps drawing.
@@ -181,19 +225,25 @@
     }
     if (token !== loadToken || !renderer) return null; // a newer choice won
     const prepared = prepare(src);
-    renderer.loadSource(prepared.src);
-    if (!renderer.valid) {
+    /* loadSource can THROW on a compile error rather than set valid=false:
+       the vendored renderer parses the driver's message for a line number,
+       and a message it cannot parse (seen with ANGLE: "'pow' : no matching
+       overloaded function") is a TypeError out of here. Uncaught, it skipped
+       the put-the-last-one-back below and left the engine on a dead program. */
+    let compiled = false;
+    try { renderer.loadSource(prepared.src); compiled = renderer.valid; } catch (err) { renderer.error = renderer.error || (err && err.message); }
+    if (compiled) { cacheLocations(renderer.program); cacheLocations(renderer.paintProgram); }
+    if (!compiled) {
       console.warn('[shaders]', entry.name, 'failed to compile:', renderer.error, renderer.errorLine);
       if (currentName) { // put the last good one back
-        const prev = prepare(sources.get(currentName));
-        renderer.loadSource(prev.src);
+        try { renderer.loadSource(prepare(sources.get(currentName)).src); } catch { /* stays failed */ }
       }
       return null;
     }
     currentName = entry.name;
     inputs = prepared.header.INPUTS || [];
     audioInputs = prepared.audio;
-    plan = planInputs(inputs, entry.drive || {});
+    plan = planInputs(inputs, entry.drive || {}, entry.params || []);
     return currentName;
   }
 
@@ -265,9 +315,19 @@
    *   { name, kind: 'color', role }                  a palette-tinted colour
    */
   let plan = [];
-  function planInputs(list, drive) {
+  /**
+   * Fixed per-mode values for inputs a catalogue entry lists under `params`
+   * (Prism's form/warp/palette): set by whoever picked the mode, held until
+   * changed, and written every frame like any other input.
+   */
+  let params = {};
+  function planInputs(list, drive, paramNames = []) {
     const out = [];
     for (const input of list) {
+      if (input.TYPE === 'float' && paramNames.includes(input.NAME)) {
+        out.push({ name: input.NAME, kind: 'param', fallback: typeof input.DEFAULT === 'number' ? input.DEFAULT : 0 });
+        continue;
+      }
       if (input.TYPE === 'color' && typeof drive[input.NAME] === 'string') {
         out.push({ name: input.NAME, kind: 'color', role: drive[input.NAME] });
       } else if (input.TYPE !== 'float') {
@@ -308,6 +368,8 @@
     for (const p of plan) {
       if (p.kind === 'signal') {
         renderer.setValue(p.name, sig[p.name] || 0);
+      } else if (p.kind === 'param') {
+        renderer.setValue(p.name, typeof params[p.name] === 'number' ? params[p.name] : p.fallback);
       } else if (p.kind === 'drive') {
         renderer.setValue(p.name, p.lo + (p.hi - p.lo) * Math.min(1, (sig[p.signal] || 0) * p.k));
       } else {
@@ -321,7 +383,10 @@
 
   window.ShaderFX = {
     init, destroy, load, resize, render,
-    names: () => catalogue.map((c) => c.name),
+    /* The shaders Shader Mix rotates through. A catalogue entry with a
+       `library` is a mode family of its own (Prism) and stays out of it. */
+    names: () => catalogue.filter((c) => !c.library).map((c) => c.name),
+    setParams: (p) => { params = p || {}; },
     catalogue: () => catalogue,
     ready: loadCatalogue,
     current: () => currentName,

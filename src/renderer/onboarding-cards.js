@@ -271,7 +271,6 @@ if (window.PanelFocus) {
   registerPanel(els.poster, () => closePoster());
   registerPanel(els.lyricSearch, () => closeLyricSearch());
   registerPanel(els.library, () => closeLibrary());
-  registerPanel(els.insights, () => closeInsights());
   registerPanel(els.songInfo, () => closeSongInfo());
   registerPanel(els.mdPanel, () => closeMilkdropPanel());
   registerPanel(els.cheatsheet, () => closeCheatsheet());

@@ -75,6 +75,46 @@
   "credit": "Lyric Overlay"
  },
  {
+  "name": "Aurora",
+  "file": "aurora.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Skyline",
+  "file": "skyline.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Ripples",
+  "file": "ripples.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Hex Pulse",
+  "file": "hexpulse.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Lightning",
+  "file": "lightning.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Fractal Bloom",
+  "file": "fractalbloom.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Glitch",
+  "file": "glitch.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
+  "name": "Lava Lamp",
+  "file": "metaballs.fs",
+  "credit": "Lyric Overlay"
+ },
+ {
   "name": "Ridgelines",
   "file": "vidvox/Ridgelines.fs",
   "credit": "VIDVOX ISF-Files (MIT)",
@@ -200,5 +240,16 @@
    "bottomColor": "hue",
    "strokeColor": "hueAlt"
   }
+ },
+ {
+  "name": "Prism",
+  "file": "prism.fs",
+  "credit": "Lyric Overlay",
+  "library": "prism",
+  "params": [
+   "form",
+   "warp",
+   "palette"
+  ]
  }
 ]

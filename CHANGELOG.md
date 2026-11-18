@@ -6,6 +6,74 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+
+## Unreleased
+
+- **Performance, measured** (Chromium, before → after):
+  - **Multi-pass shaders render at the canvas's real resolution.** The ISF
+    renderer sized its pass buffers from the canvas's CSS size, so when the
+    frame-rate governor dropped the shader canvas to 960x540 the Spectrogram
+    and Waveform scenes still drew 1920x1080 buffers every frame — 4x the
+    pixels for nothing on screen. Buffers now follow the drawing buffer
+    (verified: 1920x1080 → 960x540, output unchanged).
+  - **Less JavaScript per shader frame.** Pass sizes are memoised and uniform
+    locations cached per program instead of asked of the driver for every
+    uniform every frame: FFT Spectrogram ~21 → ~12µs, Hyperspace ~6 → ~3µs.
+  - **Studio draws only what moves.** Panels, labels, 96 unlit pads, mixer
+    wells and 48 piano keys are painted once into a cached layer per window
+    size; the frame draws clips, lit pads, meters and notes. ~2.4 → ~1.5ms a
+    frame at 1080p, pixel-identical output.
+  - **☰ Browse opens and filters instantly.** Cards are built once per mode
+    and filtered in place, and off-screen cards skip layout: reopening 576
+    Prism modes ~17 → 0.7ms, a search keystroke ~3 → 0.9ms.
+  - **The backdrop canvas no longer sheds resolution in a cascade.** Its
+    governor dropped a rung on every slow frame (two rungs 76ms apart in one
+    sag, measured), the reallocation itself causing the next slow frame; it
+    is now rate-limited and rung-blocked like the swirl governor (373ms apart,
+    no climb back for 30s), and a resize that changes nothing no longer
+    reallocates.
+- **Eight new shaders** in Shaders (34 now): **Aurora** (light curtains over a
+  starfield), **Skyline** (a city of equalizer towers on a reflective floor),
+  **Ripples** (interfering rings from five strike points), **Hex Pulse** (a
+  honeycomb lit by a wave every beat), **Lightning** (forked arcs, a new
+  strike per kick), **Fractal Bloom** (an eight-fold kaleidoscopic fractal),
+  **Glitch** (torn colour bars and RGB split) and **Lava Lamp** (merging
+  blobs). Each rendered headless at rest and on a kick to check it draws and
+  answers the beat.
+- **A shader that fails to compile no longer leaves the screen dead.** The
+  vendored ISF renderer can throw on a driver error message it cannot parse,
+  which skipped the fall-back to the previous shader.
+- **Four modes, each with a browser — instead of a 21-step ◈ cycle.** ◈ now
+  steps between **Overlay** (the app's own lyric looks: Liquid, Vinyl, Stage,
+  Studio, ...), **MilkDrop**, **Shaders** and the new **Prism**, and lands on
+  the last look you used in each. **☰ Browse** (or `B`) opens a searchable
+  grid of what is inside the mode on screen — the same idea as the MilkDrop
+  browser, for every mode. Shaders are no longer separate looks: pick one in
+  the browser, or Mix to rotate through all of them with the music. A song's
+  saved look from before (e.g. "Laser Show") opens as Shaders on that shader.
+- **Prism: a new library of 576 modes.** One new shader with 12 forms
+  (rings, spiral, grid, hex, cells, tunnel, rays, waves, plasma, flower,
+  starfield, weave), 6 warps (swirl, fisheye, 6- and 8-way kaleidoscope,
+  mirror) and 8 palettes (song colours, fire, ice, neon, sunset, mono,
+  rainbow, acid) — every combination is a mode, every one answers the kick
+  and bass, and switching between them is instant (three numbers handed to
+  the GPU, nothing to compile or download). Rendered all forms × warps in
+  headless Chromium: none blank, no two alike.
+- **Insights is gone.** The listening-stats panel (top artists, genres,
+  streaks) is removed, with its button, settings copy and backend command.
+  The local listening log stays: it is what Similar songs is built on, and
+  ⚙ Settings → Clear my history still erases it.
+- **Lyrics found automatically where only a manual search found them.** The
+  automatic lookup made one search, built from the title plus the player's
+  raw artist string — and an artist like "Arijit SinghVEVO", "Artist - Topic"
+  or a long collaboration credit makes LRCLIB's search come back empty
+  (measured: 0 results, against 20 for the same song searched cleanly). It
+  now tries LRCLIB's structured title/artist search first, then title + main
+  artist, title + full credit, the halves of an "Artist - Song" video title,
+  and the title alone — keeping the best-scoring match and stopping early on
+  an exact one. Checked on real LRCLIB responses: two songs the old lookup
+  missed are found, and none gets a worse match than before.
+
 ## 0.60.0 — 2026-11-07
 
 - **Studio: your song as an FL Studio session, live.** A new look in the ◈

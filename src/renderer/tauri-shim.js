@@ -180,7 +180,6 @@
 
     // Listening stats (stats.rs) — unlimited local play log behind the
     // Insights panel. `days` omitted covers the whole history.
-    getListeningStats: (days) => call('get_listening_stats', { days: days ?? null }, null),
     clearListeningHistory: () => call('clear_listening_history', {}),
 
     // "About this song" (wiki.rs) — on-demand Wikipedia lookup, cached

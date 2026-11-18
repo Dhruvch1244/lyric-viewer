@@ -264,25 +264,27 @@
     /*
       Shader looks — the third engine (shaders.js), ISF fragment shaders. Same
       `soloLayer` + `transparentBg` reasoning as MilkDrop: the shader canvas is
-      the whole picture. Each named one is a single shader written for this
-      app (src/renderer/shaders/); "Shader Mix" moves through the whole shader
-      catalogue the way MilkDrop's shuffle moves through presets.
+      the whole picture.
+
+      One look, not one per shader. Each shader used to be its own stop in the
+      ◈ cycle, which made ◈ a 21-step walk; now ◈ moves between modes
+      (FAMILIES below) and the Shaders browser picks a shader inside this one
+      look, or leaves it on Mix, which moves through the catalogue the way
+      MilkDrop's shuffle moves through presets. Looks saved per song under the
+      old per-shader ids still open their shader: see LEGACY_SHADER_LOOKS.
 
       Club and the laser scenes strobe. The strobe is capped at the beat rate
       in each shader and softened under the OS Reduce Motion setting, but it
-      is a strobe; none of these is handed out at random (SECOND_ENGINE below)
-      and they show only when chosen.
+      is a strobe; no shader look is handed out at random (SECOND_ENGINE
+      below) and they show only when chosen.
     */
-    { id: 'hyperspace', name: 'Hyperspace', cost: 2, engine: 'isf', shader: 'Hyperspace', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'club', name: 'Club', cost: 2, engine: 'isf', shader: 'Club', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'kaleidoscope', name: 'Kaleidoscope', cost: 2, engine: 'isf', shader: 'Kaleidoscope', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'spectrum3d', name: 'Spectrum 3D', cost: 2, engine: 'isf', shader: 'Spectrum 3D', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'laser-show', name: 'Laser Show', cost: 2, engine: 'isf', shader: 'Laser Show', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'laser-tunnel', name: 'Laser Tunnel', cost: 2, engine: 'isf', shader: 'Laser Tunnel', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'laser-grid', name: 'Laser Grid', cost: 2, engine: 'isf', shader: 'Laser Grid', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'starburst', name: 'Starburst', cost: 2, engine: 'isf', shader: 'Starburst', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'vortex', name: 'Vortex', cost: 2, engine: 'isf', shader: 'Vortex', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
-    { id: 'shaders', name: 'Shader Mix', cost: 2, engine: 'isf', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'shaders', name: 'Shaders', cost: 2, engine: 'isf', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    /*
+      Prism (prism.js, shaders/prism.fs): 576 generated modes from one shader.
+      Its own mode rather than part of Shaders: it is a library you browse,
+      not a scene in the Mix rotation.
+    */
+    { id: 'prism', name: 'Prism', cost: 2, engine: 'isf', shader: 'Prism', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
   ];
 
   const DEFAULT_ID = 'liquid';
@@ -510,6 +512,45 @@
     return preset;
   }
 
+  /*
+    Modes: what ◈ steps between. Each holds a family of looks and has its own
+    browser (☰ Browse): Overlay is this app's own canvas looks, MilkDrop the
+    1755-preset catalogue, Shaders the ISF scenes, Prism the generated library.
+  */
+  const FAMILIES = [
+    { id: 'overlay', name: 'Overlay', defaultLook: DEFAULT_ID },
+    { id: 'milkdrop', name: 'MilkDrop', defaultLook: 'milkdrop' },
+    { id: 'shaders', name: 'Shaders', defaultLook: 'shaders' },
+    { id: 'prism', name: 'Prism', defaultLook: 'prism' },
+  ];
+
+  /** Which mode a look belongs to. */
+  function familyOf(preset) {
+    const p = typeof preset === 'string' ? byId(preset) : preset;
+    if (p.engine === 'milkdrop') return 'milkdrop';
+    if (p.engine === 'isf') return p.id === 'prism' ? 'prism' : 'shaders';
+    return 'overlay';
+  }
+
+  /** The mode after `familyId` in ◈ order. */
+  function nextFamily(familyId) {
+    const i = FAMILIES.findIndex((f) => f.id === familyId);
+    return FAMILIES[(i + 1) % FAMILIES.length];
+  }
+
+  /** The looks a mode's browser lists (Overlay's are the canvas looks). */
+  function looksIn(familyId) {
+    return NORMALIZED.filter((p) => familyOf(p) === familyId);
+  }
+
+  /* Per-shader look ids from before Shaders became one look, so a look saved
+     for a song then (in localStorage) still opens the same shader. */
+  const LEGACY_SHADER_LOOKS = {
+    hyperspace: 'Hyperspace', club: 'Club', kaleidoscope: 'Kaleidoscope', spectrum3d: 'Spectrum 3D',
+    'laser-show': 'Laser Show', 'laser-tunnel': 'Laser Tunnel', 'laser-grid': 'Laser Grid',
+    starburst: 'Starburst', vortex: 'Vortex',
+  };
+
   window.VisualPresets = {
     all: NORMALIZED,
     byId,
@@ -521,5 +562,10 @@
     affordable,
     DEFAULT_ID,
     LAYER_KEYS,
+    FAMILIES,
+    familyOf,
+    nextFamily,
+    looksIn,
+    LEGACY_SHADER_LOOKS,
   };
 })();

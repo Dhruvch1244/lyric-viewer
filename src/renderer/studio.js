@@ -209,22 +209,156 @@
 
   /* -------------------------------------------------------------- drawing */
 
+  /*
+    Static chrome is drawn once into a cache, not every frame.
+
+    Measured in Chromium at 1920x1080: the old draw() cost 2.1-2.6ms a frame,
+    and most of that was furniture that never moves — four panels with titles,
+    the rack's 96 unlit pads and six labels, the mixer wells and names, and
+    the piano roll's 48 keys and lanes — each one a fillRect or a fillText
+    that re-parsed its font string. Now that layer is painted into an
+    offscreen canvas when the size changes and copied with one drawImage; the
+    frame draws only what moves (clips, lit pads, playhead, meters, grid,
+    notes). The one meter gradient is shared by every channel instead of
+    allocated per channel per frame.
+  */
+  let cache = null; // { key, canvas }
+  let lastFont = '';
+
+  function font(ctx, px) {
+    const f = `600 ${Math.round(px)}px system-ui, sans-serif`;
+    if (f !== lastFont) { ctx.font = f; lastFont = f; }
+  }
+
   function panel(ctx, x, y, w, h, title, s) {
     ctx.fillStyle = C.panel;
     ctx.fillRect(x, y, w, h);
     ctx.fillStyle = C.header;
     ctx.fillRect(x, y, w, 18 * s);
     ctx.fillStyle = C.text;
-    ctx.font = `600 ${Math.round(11 * s)}px system-ui, sans-serif`;
+    font(ctx, 11 * s);
     ctx.textBaseline = 'middle';
     ctx.fillText(title, x + 8 * s, y + 9 * s);
   }
 
+  /** The four panels' rectangles for a w x h view. */
+  function layout(w, h) {
+    const s = Math.max(0.75, Math.min(2, h / 800));
+    const m = 0.025 * w;
+    return {
+      s,
+      playlist: [m, h * 0.03, w - 2 * m, h * 0.13],
+      rack: [m, h * 0.18, w * 0.6 - m, h * 0.36],
+      mixer: [w * 0.62, h * 0.18, w * 0.38 - m, h * 0.36],
+      roll: [m, h * 0.56, w - 2 * m, h * 0.41],
+    };
+  }
+
+  function rackGeom(x, y, w, h, s) {
+    const labelW = 64 * s;
+    const top = y + 24 * s;
+    const rowH = (h - 30 * s) / ROWS.length;
+    const padW = (w - labelW - 12 * s) / STEPS;
+    return { labelW, top, rowH, padW };
+  }
+
+  function mixerGeom(x, y, w, h, s) {
+    const names = ['Master', ...ROWS];
+    const top = y + 24 * s;
+    return { names, top, mh: h - 46 * s, sw: w / names.length };
+  }
+
+  function rollGeom(x, y, w, h, s) {
+    const keyW = 34 * s;
+    const top = y + 20 * s;
+    const rh = h - 22 * s;
+    return { keyW, top, rh, noteH: rh / (ROLL_HIGH - ROLL_LOW) };
+  }
+
+  const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
+
+  function drawStatic(ctx, w, h, L) {
+    const s = L.s;
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, w, h);
+    panel(ctx, ...L.playlist, 'Playlist — Arrangement', s);
+
+    let [x, y, pw, ph] = L.rack;
+    panel(ctx, x, y, pw, ph, 'Channel rack', s);
+    const R = rackGeom(x, y, pw, ph, s);
+    for (let r = 0; r < ROWS.length; r += 1) {
+      const ry = R.top + r * R.rowH;
+      ctx.fillStyle = C.header;
+      ctx.fillRect(x + 6 * s, ry + 2, R.labelW - 10 * s, R.rowH - 4);
+      ctx.fillStyle = C.text;
+      font(ctx, Math.min(12 * s, R.rowH * 0.42));
+      ctx.fillText(ROWS[r], x + 12 * s, ry + R.rowH / 2);
+      for (let i = 0; i < STEPS; i += 1) {
+        ctx.fillStyle = Math.floor(i / 4) % 2 === 0 ? C.padOff : C.padOffAlt;
+        ctx.fillRect(x + R.labelW + i * R.padW + 2, ry + 3, R.padW - 4, R.rowH - 6);
+      }
+    }
+
+    [x, y, pw, ph] = L.mixer;
+    panel(ctx, x, y, pw, ph, 'Mixer', s);
+    const M = mixerGeom(x, y, pw, ph, s);
+    font(ctx, 9 * s);
+    ctx.textAlign = 'center';
+    for (let i = 0; i < M.names.length; i += 1) {
+      ctx.fillStyle = '#15181b';
+      ctx.fillRect(x + i * M.sw + M.sw * 0.28, M.top, M.sw * 0.44, M.mh);
+      ctx.fillStyle = C.dim;
+      ctx.fillText(M.names[i], x + i * M.sw + M.sw / 2, M.top + M.mh + 11 * s);
+    }
+    ctx.textAlign = 'left';
+
+    [x, y, pw, ph] = L.roll;
+    panel(ctx, x, y, pw, ph, 'Piano roll — Lead', s);
+    const P = rollGeom(x, y, pw, ph, s);
+    for (let m = ROLL_LOW; m < ROLL_HIGH; m += 1) {
+      const ny = P.top + (ROLL_HIGH - 1 - m) * P.noteH;
+      const black = BLACK_KEYS.has(m % 12);
+      ctx.fillStyle = black ? '#22272b' : '#2b3136';
+      ctx.fillRect(x + P.keyW, ny, pw - P.keyW, P.noteH);
+      ctx.fillStyle = black ? '#1a1d20' : '#e9edf0';
+      ctx.fillRect(x + 2, ny + 0.5, P.keyW - 4, P.noteH - 1);
+      if (m % 12 === 0 && P.noteH > 7) {
+        ctx.fillStyle = '#3a3f44';
+        font(ctx, Math.min(9, P.noteH));
+        ctx.fillText(`C${m / 12 - 1}`, x + 4, ny + P.noteH / 2);
+      }
+    }
+  }
+
+  /** The static layer for this size, painted on first use after a resize. */
+  function staticLayer(ctx, w, h, L) {
+    const t = typeof ctx.getTransform === 'function' ? ctx.getTransform() : { a: 1 };
+    const scale = t.a || 1;
+    const key = `${w}x${h}@${scale}`;
+    if (cache && cache.key === key) return cache.canvas;
+    const bw = Math.max(1, Math.round(w * scale));
+    const bh = Math.max(1, Math.round(h * scale));
+    let canvas;
+    if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(bw, bh);
+    else if (typeof document !== 'undefined') { canvas = document.createElement('canvas'); canvas.width = bw; canvas.height = bh; }
+    else return null;
+    const c = canvas.getContext('2d');
+    if (!c) return null;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    const savedFont = lastFont;
+    lastFont = '';
+    drawStatic(c, w, h, L);
+    lastFont = savedFont;
+    cache = { key, canvas };
+    return canvas;
+  }
+
   function drawPlaylist(ctx, x, y, w, h, s, accent) {
-    panel(ctx, x, y, w, h, 'Playlist — Arrangement', s);
     const top = y + 22 * s;
     const lane = h - 26 * s;
     const cw = w / PLAYLIST_BARS;
+    const labels = cw > 34 * s;
+    if (labels) font(ctx, 9 * s);
     for (let i = 0; i < state.clips.length; i += 1) {
       const clip = state.clips[i];
       const cx = x + i * cw;
@@ -233,9 +367,8 @@
       ctx.globalAlpha = 0.85;
       ctx.fillRect(cx + 1, top + lane - ch, cw - 2, ch);
       ctx.globalAlpha = 1;
-      if (cw > 34 * s) {
+      if (labels) {
         ctx.fillStyle = '#16191c';
-        ctx.font = `600 ${Math.round(9 * s)}px system-ui, sans-serif`;
         ctx.fillText(clip.label, cx + 4 * s, top + lane - ch + 8 * s);
       }
     }
@@ -246,38 +379,26 @@
   }
 
   function drawRack(ctx, x, y, w, h, s, step, kick) {
-    panel(ctx, x, y, w, h, 'Channel rack', s);
-    const labelW = 64 * s;
-    const top = y + 24 * s;
-    const rowH = (h - 30 * s) / ROWS.length;
-    const padW = (w - labelW - 12 * s) / STEPS;
+    const { labelW, top, rowH, padW } = rackGeom(x, y, w, h, s);
+    ctx.fillStyle = C.orange;
     for (let r = 0; r < ROWS.length; r += 1) {
       const ry = top + r * rowH;
-      ctx.fillStyle = C.header;
-      ctx.fillRect(x + 6 * s, ry + 2, labelW - 10 * s, rowH - 4);
-      ctx.fillStyle = C.text;
-      ctx.font = `600 ${Math.round(Math.min(12 * s, rowH * 0.42))}px system-ui, sans-serif`;
-      ctx.fillText(ROWS[r], x + 12 * s, ry + rowH / 2);
       for (let i = 0; i < STEPS; i += 1) {
-        const px = x + labelW + i * padW;
         const vel = state.pattern[r][i];
-        const beatGroup = Math.floor(i / 4) % 2 === 0;
-        ctx.fillStyle = beatGroup ? C.padOff : C.padOffAlt;
-        ctx.fillRect(px + 2, ry + 3, padW - 4, rowH - 6);
-        if (vel > 0) {
-          const live = i === step;
-          ctx.globalAlpha = 0.35 + vel * 0.65;
-          ctx.fillStyle = C.orange;
-          if (live) {
-            ctx.shadowColor = C.orange;
-            ctx.shadowBlur = 10 * s * (0.6 + kick);
-          }
+        if (vel <= 0) continue;
+        const px = x + labelW + i * padW;
+        ctx.globalAlpha = 0.35 + vel * 0.65;
+        if (i === step) {
+          ctx.shadowColor = C.orange;
+          ctx.shadowBlur = 10 * s * (0.6 + kick);
           ctx.fillRect(px + 2, ry + 3, padW - 4, rowH - 6);
           ctx.shadowBlur = 0;
-          ctx.globalAlpha = 1;
+        } else {
+          ctx.fillRect(px + 2, ry + 3, padW - 4, rowH - 6);
         }
       }
     }
+    ctx.globalAlpha = 1;
     // Playhead column.
     const hx = x + labelW + step * padW;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
@@ -287,56 +408,26 @@
   }
 
   function drawMixer(ctx, x, y, w, h, s) {
-    panel(ctx, x, y, w, h, 'Mixer', s);
-    const names = ['Master', ...ROWS];
-    const top = y + 24 * s;
-    const mh = h - 46 * s;
-    const sw = w / names.length;
+    const { names, top, mh, sw } = mixerGeom(x, y, w, h, s);
+    const grad = ctx.createLinearGradient(0, top + mh, 0, top);
+    grad.addColorStop(0, C.meterLow);
+    grad.addColorStop(0.7, C.meterMid);
+    grad.addColorStop(1, C.meterHigh);
     for (let i = 0; i < names.length; i += 1) {
       const v = state.meters[i];
       state.peaks[i] = Math.max(v, state.peaks[i] - 0.008);
       const mx = x + i * sw + sw * 0.28;
       const mw = sw * 0.44;
-      ctx.fillStyle = '#15181b';
-      ctx.fillRect(mx, top, mw, mh);
       const lh = mh * v;
-      const grad = ctx.createLinearGradient(0, top + mh, 0, top);
-      grad.addColorStop(0, C.meterLow);
-      grad.addColorStop(0.7, C.meterMid);
-      grad.addColorStop(1, C.meterHigh);
       ctx.fillStyle = grad;
       ctx.fillRect(mx, top + mh - lh, mw, lh);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(mx, top + mh - mh * state.peaks[i] - 1, mw, 2);
-      ctx.fillStyle = C.dim;
-      ctx.font = `600 ${Math.round(9 * s)}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.fillText(names[i], x + i * sw + sw / 2, top + mh + 11 * s);
-      ctx.textAlign = 'left';
     }
   }
 
   function drawRoll(ctx, x, y, w, h, s, phase) {
-    panel(ctx, x, y, w, h, 'Piano roll — Lead', s);
-    const keyW = 34 * s;
-    const top = y + 20 * s;
-    const rh = h - 22 * s;
-    const range = ROLL_HIGH - ROLL_LOW;
-    const noteH = rh / range;
-    // Keyboard and lanes.
-    for (let m = ROLL_LOW; m < ROLL_HIGH; m += 1) {
-      const ny = top + (ROLL_HIGH - 1 - m) * noteH;
-      const black = [1, 3, 6, 8, 10].includes(m % 12);
-      ctx.fillStyle = black ? '#22272b' : '#2b3136';
-      ctx.fillRect(x + keyW, ny, w - keyW, noteH);
-      ctx.fillStyle = black ? '#1a1d20' : '#e9edf0';
-      ctx.fillRect(x + 2, ny + 0.5, keyW - 4, noteH - 1);
-      if (m % 12 === 0 && noteH > 7) {
-        ctx.fillStyle = '#3a3f44';
-        ctx.font = `600 ${Math.round(Math.min(9, noteH))}px system-ui, sans-serif`;
-        ctx.fillText(`C${m / 12 - 1}`, x + 4, ny + noteH / 2);
-      }
-    }
+    const { keyW, top, rh, noteH } = rollGeom(x, y, w, h, s);
     // Beat and bar lines, scrolling with the notes: global step g sits
     // (now - g) steps left of the right edge.
     const stepW = (w - keyW) / ROLL_STEPS;
@@ -402,17 +493,20 @@
       state.meters[0] = Math.max(0.5 * f, state.meters[0] * 0.9);
     }
 
-    const s = Math.max(0.75, Math.min(2, h / 800));
-    const m = 0.025 * w;
+    const L = layout(w, h);
+    const s = L.s;
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = C.bg;
-    ctx.fillRect(0, 0, w, h);
+    lastFont = ''; // the caller's canvas may have had its font changed since
+    const layer = staticLayer(ctx, w, h, L);
+    if (layer) ctx.drawImage(layer, 0, 0, w, h);
+    else drawStatic(ctx, w, h, L);
+    ctx.textBaseline = 'middle';
     const accent = input.accent || '#9a6bff';
-    drawPlaylist(ctx, m, h * 0.03, w - 2 * m, h * 0.13, s, accent);
-    drawRack(ctx, m, h * 0.18, w * 0.6 - m, h * 0.36, s, step, (env && env.kick) || input.beatFlash || 0);
-    drawMixer(ctx, w * 0.62, h * 0.18, w * 0.38 - m, h * 0.36, s);
-    drawRoll(ctx, m, h * 0.56, w - 2 * m, h * 0.41, s, (input.beatPhase || 0) * 4 % 1);
+    drawPlaylist(ctx, ...L.playlist, s, accent);
+    drawRack(ctx, ...L.rack, s, step, (env && env.kick) || input.beatFlash || 0);
+    drawMixer(ctx, ...L.mixer, s);
+    drawRoll(ctx, ...L.roll, s, (input.beatPhase || 0) * 4 % 1);
     ctx.restore();
   }
 
