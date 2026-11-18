@@ -285,6 +285,13 @@
       not a scene in the Mix rotation.
     */
     { id: 'prism', name: 'Prism', cost: 2, engine: 'isf', shader: 'Prism', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    /*
+      Cover 3D: the song's cover art as a lit relief the camera flies over
+      (shaders/cover3d.fs, depth from cover3d.js). An ISF scene, but it lives
+      in the Overlay mode with the other looks built from the song itself,
+      not in the Shaders rotation — `family` says so.
+    */
+    { id: 'cover3d', name: 'Cover 3D', cost: 2, engine: 'isf', shader: 'Cover 3D', family: 'overlay', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
   ];
 
   const DEFAULT_ID = 'liquid';
@@ -527,6 +534,7 @@
   /** Which mode a look belongs to. */
   function familyOf(preset) {
     const p = typeof preset === 'string' ? byId(preset) : preset;
+    if (p.family) return p.family;
     if (p.engine === 'milkdrop') return 'milkdrop';
     if (p.engine === 'isf') return p.id === 'prism' ? 'prism' : 'shaders';
     return 'overlay';

@@ -287,6 +287,50 @@
     gl.uniform1i(renderer.program.getUniformLocation(name), unit);
   }
 
+  /*
+    Picture inputs (Cover 3D's cover and depth map). Same reserved-unit
+    discipline as the audio rows, after them. A picture is uploaded once per
+    new source (`version`), and only re-bound to its unit each frame.
+  */
+  const images = new Map(); // name -> { source, version }
+
+  function setImage(name, source) {
+    const prev = images.get(name);
+    if (prev && prev.source === source) return;
+    images.set(name, { source, version: (prev ? prev.version : 0) + 1 });
+  }
+
+  function bindImages() {
+    if (images.size === 0) return;
+    let unit = audioInputs.audio.length + audioInputs.audioFFT.length;
+    for (const [name, img] of images) {
+      const uniform = renderer.uniforms[name];
+      if (!uniform || !uniform.texture || !img.source || unit >= RESERVED_UNITS) continue;
+      renderer.program.use();
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, uniform.texture.texture);
+      if (uniform.imageVersion !== img.version) {
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        try {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img.source);
+        } finally {
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        }
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        uniform.imageVersion = img.version;
+        renderer.setValue(`_${name}_imgSize`, [img.source.width, img.source.height]);
+        renderer.setValue(`_${name}_imgRect`, [0, 0, 1, 1]);
+        renderer.setValue(`_${name}_flip`, false);
+      }
+      gl.uniform1i(renderer.program.getUniformLocation(name), unit);
+      unit += 1;
+    }
+  }
+
   /** Fill the audio textures from the analyser and hand them to the shader. */
   function feedAudio() {
     if (!audioInputs.audio.length && !audioInputs.audioFFT.length) return;
@@ -365,6 +409,7 @@
   function render(sig) {
     if (!renderer || !renderer.valid || !currentName || !canvas) return;
     feedAudio();
+    bindImages();
     for (const p of plan) {
       if (p.kind === 'signal') {
         renderer.setValue(p.name, sig[p.name] || 0);
@@ -387,6 +432,7 @@
        `library` is a mode family of its own (Prism) and stays out of it. */
     names: () => catalogue.filter((c) => !c.library).map((c) => c.name),
     setParams: (p) => { params = p || {}; },
+    setImage,
     catalogue: () => catalogue,
     ready: loadCatalogue,
     current: () => currentName,

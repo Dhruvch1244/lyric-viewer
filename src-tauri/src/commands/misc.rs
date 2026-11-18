@@ -291,3 +291,22 @@ pub(crate) fn get_similar_songs(app: AppHandle, title: String, artist: String) -
     let key = track_key(&artist, &title);
     crate::stats::similar_songs(&app, &key, 20)
 }
+
+/// Find the music video for a song (youtube.rs). `(async)` is load-bearing:
+/// two blocking HTTPS calls with 12s timeouts, which would otherwise freeze
+/// the whole UI on Tauri's main thread for as long as YouTube takes.
+#[tauri::command(async)]
+pub(crate) fn find_music_video(artist: String, title: String, duration_ms: u64) -> Value {
+    match crate::youtube::find(&artist, &title, duration_ms) {
+        Ok(Some((c, score))) => json!({
+            "status": "ok",
+            "id": c.id,
+            "title": c.title,
+            "channel": c.channel,
+            "durationSec": c.duration_secs,
+            "score": score,
+        }),
+        Ok(None) => json!({ "status": "none", "message": "no music video found for this song — paste its link" }),
+        Err(message) => json!({ "status": "error", "message": message }),
+    }
+}

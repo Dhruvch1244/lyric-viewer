@@ -9,6 +9,27 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 ## Unreleased
 
+- **▶ Music video — the song's video, playing in time under the visuals.**
+  More → ▶ Video. YouTube's own player, muted, full-screen behind
+  everything, kept in sync with whatever you are actually listening to
+  (Spotify, a browser, the app's own player): it follows the song's
+  position, pauses and plays with it, and re-seeks if it drifts by more than
+  half a second. Nothing is downloaded. The app's visuals blend over it
+  (soft, full, or video only), it gets a colour grade (Neon, Song colours,
+  Noir, Dream, VHS) and it punches in on the kick. Music videos rarely match
+  the album track exactly — an intro, a skit, a longer outro — so the first
+  guess treats extra length as an intro, and `[` / `]` nudge it a quarter
+  second at a time; the video and its sync are remembered per song. With a
+  YouTube API key (⚙ Settings, free) the official video is found
+  automatically — ranked over lyric videos, live cuts, covers, sped-up
+  edits and audio-only uploads by title, channel, wording and length;
+  without one, paste the link once.
+- **Cover 3D** — a new Overlay look: the song's cover art as a lit relief
+  you fly over. A depth map estimated from the cover (bright, saturated,
+  central parts come forward; fine detail gets its own small relief) is
+  ray-marched for real parallax: the camera sways, dollies in on the kick,
+  the relief deepens on a drop, and a circling light picks out the shapes.
+  The Director uses it for calm sections too.
 - **🎬 Director: the look follows the song.** Press `D`, or 🎬 in ☰ Browse,
   and the app directs the visuals like a VJ who has heard the song before:
   calm Prism or an Overlay look for the intro, breaks and outro; flowing

@@ -255,5 +255,11 @@
    "palette2",
    "morph"
   ]
+ },
+ {
+  "name": "Cover 3D",
+  "file": "cover3d.fs",
+  "credit": "Lyric Overlay",
+  "library": "cover"
  }
 ]

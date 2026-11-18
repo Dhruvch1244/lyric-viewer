@@ -3034,3 +3034,59 @@ html.webkitgtk * {
 .looks__swatch { height: 2.6rem; border-radius: 6px; background: rgba(255, 255, 255, 0.08); }
 .looks__name { font-weight: 600; font-size: 0.9em; }
 .looks__meta { opacity: 0.6; font-size: 0.75em; }
+
+/* ▶ Music video (music-video.js). The layer sits under every engine's canvas
+   (same z-index, earlier in the document); the player is scaled to COVER the
+   window like a background video, never letterboxed. */
+.mv-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #000;
+  will-change: transform;
+}
+.mv-layer[hidden] { display: none; }
+.mv-frame {
+  position: absolute;
+  inset: 0;
+}
+.mv-frame iframe {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100vw, 177.78vh);
+  height: max(56.25vw, 100vh);
+  transform: translate(-50%, -50%);
+  border: 0;
+  pointer-events: none;
+}
+.mv-tint {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: color;
+  opacity: 0.45;
+}
+.mv-tint[hidden] { display: none; }
+
+/* The visuals on top of the video: screen-blended, so their dark ground
+   lets the picture through and their light adds to it. */
+body.mv-on #swirl,
+body.mv-on #shaderfx,
+body.mv-on #milkdrop,
+body.mv-on #backdrop { mix-blend-mode: screen; }
+body.mv-on.mv-mix-soft #swirl,
+body.mv-on.mv-mix-soft #shaderfx,
+body.mv-on.mv-mix-soft #milkdrop,
+body.mv-on.mv-mix-soft #backdrop { opacity: 0.55; }
+body.mv-on.mv-mix-off #swirl,
+body.mv-on.mv-mix-off #shaderfx,
+body.mv-on.mv-mix-off #milkdrop,
+body.mv-on.mv-mix-off #backdrop { opacity: 0; }
+
+.mvp { width: min(560px, 92vw); }
+.mvp__body { display: flex; flex-direction: column; gap: 0.6rem; padding: 0 1rem 1rem; }
+.mvp__row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.mvp__link { flex: 1 1 14rem; min-width: 0; }
+.mvp__offset { min-width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums; }
