@@ -5265,6 +5265,11 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.62.0': [
+    '<b>▶ Music video</b> — the song\'s video, muted, playing in time under the visuals, with colour grades. More → ▶ Video; [ and ] fix the sync.',
+    '<b>🎬 Director</b> (D) — the look follows the song: calm intros, harder builds, the heaviest scenes on drops. Plus <b>Prism Remix</b> and <b>Cover 3D</b>.',
+    '<b>Lyrics that take the beat</b> — the sung word hits on every kick; a drop ripples the whole line. Browse is now M.',
+  ],
   '0.61.0': [
     '<b>Four modes, each with a browser</b> — ◈ steps Overlay, MilkDrop, Shaders and Prism; ☰ Browse (or M) picks anything inside the one on screen.',
     '<b>Prism</b> — a new library of 576 modes, plus <b>8 new shaders</b>: Aurora, Skyline, Lightning, Fractal Bloom and more.',

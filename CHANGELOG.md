@@ -7,7 +7,7 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
-## Unreleased
+## 0.62.0 — 2026-11-18
 
 - **▶ Music video — the song's video, playing in time under the visuals.**
   More → ▶ Video. YouTube's own player, muted, full-screen behind
