@@ -767,7 +767,30 @@ function swirlTarget(positionMs) {
  * Fire a "drop": a lyric just landed after a long instrumental gap. Punches the
  * background flash, spikes the pulse, rotates the hue, and shakes the stage.
  */
+/*
+  Beat typography (kinetic-type.js): the sung word takes each beat.
+
+  `audioEnv.kick` is an envelope — it jumps on a kick and decays over the
+  next frames — so testing it against a floor would fire on every frame of
+  the decay. This fires on the ONSET only: a jump of 0.15 over the last
+  frame's value.
+*/
+let kineticPrevKick = 0;
+function kineticKick(kick, floor, now) {
+  const onset = kick > floor && kick > kineticPrevKick + 0.15;
+  kineticPrevKick = kick;
+  if (onset) kineticBeat(kick, false, now);
+}
+function kineticBeat(strength, drop, now) {
+  if (!window.KineticType || activeWords.length === 0) return;
+  window.KineticType.onBeat(activeWords, strength, {
+    mood: moodProfile && moodProfile.key, genre: currentGenre, reduced: reducedMotion, drop, now,
+  });
+}
+
 function triggerDrop() {
+  kineticBeat(1, true, performance.now());
+  noteDirectionMoment('drop');
   dropFlash = 1;
   pulse = 2.2;               // harder body punch
   flicker = 1;               // hard strobe burst on the drop
@@ -2850,6 +2873,97 @@ function stopShaderEngine() {
 let shaderPick = (() => { try { return localStorage.getItem('shaderPick') || null; } catch { return null; } })();
 let prismModeId = (() => { try { return localStorage.getItem('prismMode') || '0-0-0'; } catch { return '0-0-0'; } })();
 
+/*
+  🎬 Director (director.js) and Prism Remix (prism.js createRemix).
+
+  Both follow the song's sections (heatmap.js) and its drops. The Director
+  puts a look on screen per section WITHOUT saving it — presetId changes, the
+  per-song override does not — so switching it off brings the song's own look
+  straight back, and picking a look yourself switches it off. Remix is a
+  Prism mode of its own (PrismLibrary.REMIX_ID) that morphs to a related mode
+  on every drop and section change.
+*/
+let directorOn = (() => { try { return localStorage.getItem('director') === '1'; } catch { return false; } })();
+let directed = null;           // the Director's current plan: { look, shader?, prism?, label }
+let directedSectionAt = NaN;   // start of the section it was planned for
+let lookBeforeDirector = null; // the look the Director took over from, put back when it stops
+let prismRemix = null;
+let prismRemixFor = '';
+let remixSectionAt = NaN;
+
+function remixFor(track) {
+  const key = track ? trackLookKey(track) : '';
+  if (!prismRemix || prismRemixFor !== key) {
+    prismRemix = window.PrismLibrary.createRemix(key);
+    prismRemixFor = key;
+  }
+  return prismRemix;
+}
+
+const remixOn = () => Boolean(window.PrismLibrary) && prismModeId === window.PrismLibrary.REMIX_ID;
+
+/** Put the Director's scene for a section on screen (not saved). */
+function directTo(kind, startMs) {
+  if (!window.Director || !currentTrack) return;
+  directed = window.Director.plan({
+    trackKey: trackLookKey(currentTrack), kind, startMs,
+    mood: moodProfile && moodProfile.key, genre: currentGenre,
+  });
+  presetId = window.VisualPresets.byId(directed.look).id;
+  applyPresetLabel();
+}
+
+/** A drop landed: Remix morphs, the Director cuts to a drop scene. */
+function noteDirectionMoment(kind) {
+  if (remixOn() && prismRemix) prismRemix.trigger(performance.now(), kind);
+  if (directorOn && kind === 'drop') directTo('drop', estimatePosition());
+}
+
+/** Every frame: notice a new section. */
+function followSections(now) {
+  if (!window.HeatMap || !currentTrack) return;
+  const sec = window.HeatMap.sectionAt(estimatePosition());
+  if (directorOn) {
+    if (sec && sec.startMs !== directedSectionAt) {
+      directedSectionAt = sec.startMs;
+      directTo(sec.kind, sec.startMs);
+    } else if (!sec && !directed) {
+      // Sections are not known yet (the first listen learns them): open
+      // quietly, and let the first drop or section take it from there.
+      directTo('intro', 0);
+    }
+  }
+  if (sec && sec.startMs !== remixSectionAt) {
+    const first = Number.isNaN(remixSectionAt);
+    remixSectionAt = sec.startMs;
+    if (!first && remixOn() && prismRemix) prismRemix.trigger(now, 'section');
+  }
+}
+
+/** Switch the Director on or off. Off restores the song's own look. */
+function setDirector(on) {
+  if (directorOn === Boolean(on)) return;
+  directorOn = Boolean(on);
+  try { localStorage.setItem('director', directorOn ? '1' : '0'); } catch { /* ignore */ }
+  const wasDirected = directed;
+  directed = null;
+  directedSectionAt = NaN;
+  if (directorOn) lookBeforeDirector = presetId;
+  else if (wasDirected) presetId = window.VisualPresets.byId(lookBeforeDirector || presetId).id;
+  const btn = document.getElementById('btn-director');
+  if (btn) btn.setAttribute('aria-pressed', String(directorOn));
+  applyPresetLabel();
+  setStatus(directorOn ? 'Director on — the look follows the song' : 'Director off');
+}
+
+/** Prism's three-or-seven inputs for this frame. */
+function prismParams(now) {
+  const L = window.PrismLibrary;
+  if (directorOn && directed && directed.prism) return L.byId(directed.prism).params;
+  if (remixOn()) return remixFor(currentTrack).params(now);
+  return L.byId(prismModeId).params;
+}
+
 /**
  * Which shader this look shows. Prism is its one shader; the Shaders look is
  * the shader picked in its browser, or on Mix, a random one per song that
@@ -2858,6 +2972,7 @@ let prismModeId = (() => { try { return localStorage.getItem('prismMode') || '0-
  */
 function shaderTargetFor(preset) {
   if (preset.shader) return preset.shader;
+  if (directorOn && directed && directed.shader) return directed.shader;
   if (shaderPick) return shaderPick;
   const key = `${preset.id}|${currentTrack ? trackLookKey(currentTrack) : ''}`;
   const names = window.ShaderFX.names();
@@ -2935,7 +3050,7 @@ function drawShaderEngine(preset, now, w, h) {
   const vi = intensityCfg();
   const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
   // Prism's mode is three shader inputs, not a shader of its own.
-  if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(window.PrismLibrary.byId(prismModeId).params);
+  if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(prismParams(now));
   fx.render({
     bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
     mid: punch(live ? audioEnv.mid : 0.2),
@@ -3865,6 +3980,8 @@ function drawBackdrop(now) {
         beatFlash = 1;
         flicker = Math.max(flicker, 0.28 + intensity * 0.4); // strobe tick on the beat
         spawnRipple(0.3 + intensity * 0.4);
+        // The learned beat map, when there is one, is the better clock.
+        if (!(window.BeatMap && window.BeatMap.hasPlayback())) kineticBeat(0.35 + intensity * 0.4, false, now);
       }
     }
     beatPhase = beatClockMs / beatPeriodMs;
@@ -3984,6 +4101,7 @@ function drawBackdrop(now) {
     if (audioActive) {
       intensity = Math.max(intensity, Math.min(1, audioEnv.level * 1.6));
       const vi = intensityCfg();
+      kineticKick(audioEnv.kick, vi.kickFloor, now);
       if (audioEnv.kick > vi.kickFloor) {
         // Snap to a solid flash even on a modest kick, so every thump lands
         // visibly instead of scaling faintly with a hot-mastered bass band.
@@ -4034,6 +4152,7 @@ function drawBackdrop(now) {
       } else if (playbackStatus === 'Playing' && window.BeatMap.hasPlayback()) {
         const bm = window.BeatMap.tick(pos);
         if (bm.buildup > buildup) buildup = bm.buildup;
+        kineticKick(bm.kick, 0.12, now);
         if (bm.kick > 0.12) {
           beatFlash = Math.max(beatFlash, bm.kick);
           pulse = Math.max(pulse, 0.5 + bm.kick);
@@ -4058,6 +4177,7 @@ function drawBackdrop(now) {
     // not the rate we are currently choosing to draw at — a deliberately
     // throttled 31fps is not the same as a machine that cannot do better.
     const achievableFps = 1000 / Math.max(1, drawCostMs);
+    followSections(now);
     const activePreset = window.VisualPresets.affordable(
       window.VisualPresets.byId(presetId), achievableFps, liteMode
     );
@@ -5128,7 +5248,7 @@ const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
   '0.61.0': [
-    '<b>Four modes, each with a browser</b> — ◈ steps Overlay, MilkDrop, Shaders and Prism; ☰ Browse (or B) picks anything inside the one on screen.',
+    '<b>Four modes, each with a browser</b> — ◈ steps Overlay, MilkDrop, Shaders and Prism; ☰ Browse (or M) picks anything inside the one on screen.',
     '<b>Prism</b> — a new library of 576 modes, plus <b>8 new shaders</b>: Aurora, Skyline, Lightning, Fractal Bloom and more.',
     '<b>Lyrics found automatically</b> for songs that only a manual search used to find — and smoother, lighter visuals throughout.',
   ],
@@ -6253,6 +6373,9 @@ document.addEventListener('keydown', (e) => {
     case 'b': case 'B':
       if (els.backdropBtn) els.backdropBtn.click();
       break;
+    case 'd': case 'D':
+      setDirector(!directorOn);
+      break;
     default:
       return;
   }
@@ -7071,6 +7194,10 @@ function defaultLookFor(track) {
  */
 function applyLookForTrack(track) {
   if (!track) return;
+  // A new song is directed and remixed from its own first section.
+  directed = null;
+  directedSectionAt = NaN;
+  remixSectionAt = NaN;
   let override = readLookOverrides()[trackLookKey(track)];
   // A song saved on one of the old per-shader looks opens the Shaders look on
   // that shader (presets.js LEGACY_SHADER_LOOKS).
@@ -7082,6 +7209,8 @@ function applyLookForTrack(track) {
   presetId = override
     ? window.VisualPresets.byId(override).id
     : defaultLookFor(track);
+  // The Director takes over from this song's own look; that is what comes back.
+  if (directorOn) lookBeforeDirector = presetId;
   applyPresetLabel();
 }
 
@@ -7105,6 +7234,8 @@ function setPrismMode(id) {
  * used in its mode so ◈ comes back to it.
  */
 function chooseLook(id) {
+  // Picking a look yourself takes the wheel back from the Director.
+  if (directorOn) setDirector(false);
   presetId = window.VisualPresets.byId(id).id;
   if (currentTrack) {
     const overrides = readLookOverrides();
@@ -7141,16 +7272,24 @@ function applyPresetLabel() {
   // "Mode · what is chosen in it".
   let inside = preset.name;
   if (familyId === 'milkdrop') inside = (typeof milkdropShuffle !== 'undefined' && milkdropShuffle) ? 'Shuffle' : 'Pinned';
-  else if (familyId === 'shaders') inside = shaderPick || 'Mix';
-  else if (familyId === 'prism') inside = window.PrismLibrary ? window.PrismLibrary.byId(prismModeId).name : 'Prism';
-  const label = familyId === 'overlay' || inside !== family.name ? `${family.name} · ${inside}` : family.name;
+  else if (familyId === 'shaders') inside = (directorOn && directed && directed.shader) || shaderPick || 'Mix';
+  else if (familyId === 'prism') {
+    const L = window.PrismLibrary;
+    if (!L) inside = 'Prism';
+    else if (directorOn && directed && directed.prism) inside = L.byId(directed.prism).name;
+    else if (remixOn()) inside = 'Remix';
+    else inside = L.byId(prismModeId).name;
+  }
+  let label = familyId === 'overlay' || inside !== family.name ? `${family.name} · ${inside}` : family.name;
+  if (directorOn && directed) label = `🎬 ${directed.label} — ${label}`;
   // When the governor has stepped in, say so. Silently rendering a different
   // look than the chip claims is worse than the dropped frames it prevents.
   const substituted = renderedPresetId && renderedPresetId !== presetId;
   // The chip names only the mode — the bar is a rail of one-word buttons, and
   // "Prism · Fire Spiral · Fisheye" wrapped it to four lines. What is chosen
   // inside is in the tooltip and on ☰ Browse's selected card.
-  els.presetBtn.textContent = substituted ? `◈ ${family.name} ⚡` : `◈ ${family.name}`;
+  const mark = directorOn ? '🎬' : '◈';
+  els.presetBtn.textContent = substituted ? `${mark} ${family.name} ⚡` : `${mark} ${family.name}`;
   els.presetBtn.title = substituted
     ? `${label} — running "Minimal" to hold the frame rate`
     : `Mode: ${label}. Click for the next mode (Overlay, MilkDrop, Shaders, Prism); ☰ Browse picks inside it.`;
@@ -7260,6 +7399,14 @@ els.presetBtn.addEventListener('click', () => {
   const VP = window.VisualPresets;
   chooseLook(lastLookIn(VP.nextFamily(VP.familyOf(presetId))));
 });
+
+{
+  const directorBtn = document.getElementById('btn-director');
+  if (directorBtn) {
+    directorBtn.setAttribute('aria-pressed', String(directorOn));
+    directorBtn.addEventListener('click', () => setDirector(!directorOn));
+  }
+}
 
 els.perfBtn.addEventListener('click', () => {
   liteMode = !liteMode;

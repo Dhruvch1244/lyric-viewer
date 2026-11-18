@@ -7,6 +7,32 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## Unreleased
+
+- **🎬 Director: the look follows the song.** Press `D`, or 🎬 in ☰ Browse,
+  and the app directs the visuals like a VJ who has heard the song before:
+  calm Prism or an Overlay look for the intro, breaks and outro; flowing
+  shaders for verses; tunnels and pulses for builds; the heaviest scenes
+  (lasers, hyperspace, lightning) on drops. It reads the sections the app
+  already learns for every song, the mood picks Prism's colours, and the
+  genre sets how hard a drop goes (lasers for metal and EDM, a full-tilt
+  Prism for jazz or lo-fi). The same song is directed the same way every
+  time. Nothing is saved: turn it off, or pick a look yourself, and you are
+  back on your own look.
+- **Prism Remix.** The first card in Prism's browser: one mode morphing into
+  the next on every drop and section change — a twist and zoom from one shape
+  into a related one (it changes one or two of form, warp and palette, never
+  all three), so it evolves instead of cutting. A plain Prism mode costs
+  exactly what it did; the second mode is only drawn during a morph.
+- **Lyrics that take the beat.** Every kick now lands on the word being sung,
+  and a drop or a hard kick ripples through the whole line. The style fits
+  the song: *shatter* for metal and hard music, *glitch* for electronic,
+  *float* for calm and lo-fi, *bounce* otherwise. ⚙ Settings → Lyric
+  typography picks one or turns it off; Reduce Motion keeps it to a gentle
+  lift.
+- **Fixed: `B` opened ☰ Browse and changed the backdrop at the same time**
+  (0.61.0 gave Browse the key Backdrop already had). Browse is now `M`.
+
 ## 0.61.0 — 2026-11-18
 
 - **Performance, measured** (Chromium, before → after):

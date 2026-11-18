@@ -10,7 +10,8 @@
   ids (form-warp-palette, so a saved choice survives the list being
   extended), display names, and a colour per palette for the browser.
 
-  Exposed on window.PrismLibrary: { MODES, count, byIndex, byId, indexOf, FORMS, WARPS, PALETTES }.
+  Exposed on window.PrismLibrary: { MODES, count, byIndex, byId, indexOf, FORMS, WARPS, PALETTES,
+  REMIX_ID, createRemix }.
 */
 
 (function () {
@@ -64,6 +65,101 @@
 
   const index = new Map(MODES.map((m, i) => [m.id, i]));
 
+  /* The id that means "Remix" rather than one mode: saved like any other
+     choice, so it survives a restart. */
+  const REMIX_ID = 'remix';
+
+  /** Small deterministic PRNG (mulberry32), so a song remixes the same way twice. */
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function hashString(text) {
+    let h = 5381;
+    for (let i = 0; i < text.length; i += 1) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    return h;
+  }
+
+  /*
+    Prism Remix: one mode morphing into the next on the music's big moments.
+
+    The next mode changes one or two of form / warp / palette, never all
+    three, so each change reads as the same picture turning into something
+    related, not a channel flip. The shader blends the two over `durMs`
+    (prism.fs: the morph input); a drop morphs faster than a section change.
+    `MIN_GAP_MS` stops a run of kicks from morphing every bar, and an idle
+    timer keeps a song with no detected structure from sitting still.
+  */
+  const MIN_GAP_MS = 6000;
+  const IDLE_MS = 16000;
+
+  function createRemix(seedText) {
+    const rand = rng(hashString(String(seedText || 'remix')));
+    let from = { ...MODES[Math.floor(rand() * MODES.length)].params };
+    let to = null;
+    let startAt = 0;
+    let durMs = 1400;
+    let lastAt = -Infinity;
+
+    function pickNext(base) {
+      const next = { ...base };
+      const dims = [['form', FORMS.length], ['warp', WARPS.length], ['palette', PALETTES.length]];
+      const changes = rand() < 0.35 ? 2 : 1;
+      const order = dims.slice().sort(() => rand() - 0.5).slice(0, changes);
+      for (const [key, n] of order) {
+        const step = 1 + Math.floor(rand() * (n - 1));
+        next[key] = (base[key] + step) % n;
+      }
+      return next;
+    }
+
+    /** Settle a finished morph so `from` is what is on screen. */
+    function settle(now) {
+      if (to && now - startAt >= durMs) { from = to; to = null; }
+    }
+
+    return {
+      /**
+       * A musical moment happened. kind: 'drop' | 'section' | 'idle'.
+       * Returns true when it started a morph.
+       */
+      trigger(now, kind) {
+        settle(now);
+        if (to || now - lastAt < MIN_GAP_MS) return false;
+        to = pickNext(from);
+        startAt = now;
+        durMs = kind === 'drop' ? 900 : 1600;
+        lastAt = now;
+        return true;
+      },
+      /** Shader params for this frame (ShaderFX.setParams). */
+      params(now) {
+        if (lastAt === -Infinity) lastAt = now; // the idle clock starts on the first frame
+        settle(now);
+        if (!to && now - lastAt >= IDLE_MS) this.trigger(now, 'idle');
+        const morph = to ? Math.min(1, (now - startAt) / durMs) : 0;
+        const b = to || from;
+        return {
+          form: from.form, warp: from.warp, palette: from.palette,
+          form2: b.form, warp2: b.warp, palette2: b.palette,
+          morph,
+        };
+      },
+      /** The mode currently showing (or arriving), for labels. */
+      current() {
+        const p = to || from;
+        return MODES[(p.form * WARPS.length + p.warp) * PALETTES.length + p.palette];
+      },
+    };
+  }
+
   window.PrismLibrary = {
     MODES,
     count: MODES.length,
@@ -71,5 +167,7 @@
     byIndex: (i) => MODES[((Math.floor(i) % MODES.length) + MODES.length) % MODES.length],
     byId: (id) => MODES[index.has(id) ? index.get(id) : 0],
     indexOf: (id) => (index.has(id) ? index.get(id) : 0),
+    REMIX_ID,
+    createRemix,
   };
 })();

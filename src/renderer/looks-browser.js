@@ -56,11 +56,18 @@
       })));
     }
     if (fam === 'prism' && window.PrismLibrary) {
-      return window.PrismLibrary.MODES.map((m) => ({
+      const L = window.PrismLibrary;
+      // Remix first, like Mix in Shaders: the way to have all of them.
+      return [{
+        key: L.REMIX_ID, name: 'Remix', meta: 'Morphs into a new mode on every drop and section',
+        swatch: 'conic-gradient(from 0deg, #ff4d4d, #ffe14d, #4dff88, #4db8ff, #c44dff, #ff4d4d)',
+        selected: presetId === 'prism' && prismModeId === L.REMIX_ID,
+        pick: () => { setPrismMode(L.REMIX_ID); chooseLook('prism'); },
+      }].concat(L.MODES.map((m) => ({
         key: m.id, name: m.name, meta: `${m.form} · ${m.warp}`, swatch: m.swatch,
         selected: presetId === 'prism' && prismModeId === m.id,
         pick: () => { setPrismMode(m.id); chooseLook('prism'); },
-      }));
+      })));
     }
     return [];
   }
@@ -169,7 +176,7 @@
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const t = document.activeElement;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if (e.key === 'b' || e.key === 'B') browseBtn.click();
+    if (e.key === 'm' || e.key === 'M') browseBtn.click();
   });
 
   window.LooksBrowser = { open, close, isOpen: () => !panel.hidden };
