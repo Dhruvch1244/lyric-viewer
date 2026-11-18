@@ -3012,6 +3012,23 @@ function applyShaderScale(now) {
   shaderScale = SHADER_SCALES[Math.min(rung, ceiling)];
 }
 
+/*
+  Cover 3D's pictures: the cover and its depth map (cover3d.js), built once
+  per cover — the depth pass reads the image back (getImageData), which is a
+  few milliseconds on a 128px copy and must not happen per frame. A song with
+  no art gets a placeholder in the accent hue until its cover arrives.
+*/
+let cover3dSource = null;
+function feedCover3D(fx) {
+  if (!window.Cover3D || !fx.setImage) return;
+  const key = artImage || `none|${currentTrack ? trackLookKey(currentTrack) : ''}`;
+  if (key === cover3dSource) return;
+  cover3dSource = key;
+  const pics = window.Cover3D.prepare(artImage, Math.round(bgHue));
+  fx.setImage('cover', pics.cover);
+  fx.setImage('depthMap', pics.depth);
+}
+
 function drawShaderEngine(preset, now, w, h) {
   const fx = window.ShaderFX;
   if (!fx) return;
@@ -3051,6 +3068,7 @@ function drawShaderEngine(preset, now, w, h) {
   const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
   // Prism's mode is three shader inputs, not a shader of its own.
   if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(prismParams(now));
+  if (preset.id === 'cover3d') feedCover3D(fx);
   fx.render({
     bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
     mid: punch(live ? audioEnv.mid : 0.2),
