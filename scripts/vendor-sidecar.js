@@ -32,6 +32,21 @@ function main() {
   const triple = hostTriple();
   const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 
+  /*
+    Cargo 1.100 moved build-script output one level deeper
+    (target/release/build/<pkg>/<hash>/out, was build/<pkg>-<hash>/out).
+    ort-sys's `copy-dylibs` finds "the target dir" as OUT_DIR's third
+    ancestor, which is now target/release/build, and copies DirectML.dll into
+    it and into its `examples` and `deps` — which do not exist there, so on
+    Windows (no symlinks without Developer Mode, so it copies) the build
+    script panicked with "The system cannot find the path specified" and the
+    v0.61.0 Windows release could not build. Creating both directories lets
+    the copy land; nothing ships from them (ONNX Runtime is linked
+    statically, see below), so where the copies end up does not matter.
+  */
+  const buildDir = path.join(ROOT, 'src-tauri', 'target', 'release', 'build');
+  for (const sub of ['examples', 'deps']) fs.mkdirSync(path.join(buildDir, sub), { recursive: true });
+
   console.log(`[vendor-sidecar] building lyric-inference for ${triple}`);
   execFileSync('cargo', ['build', '--release', '--manifest-path', MANIFEST, '-p', 'lyric-inference'], { stdio: 'inherit' });
 
