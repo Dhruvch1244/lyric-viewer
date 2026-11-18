@@ -5127,6 +5127,11 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.61.0': [
+    '<b>Four modes, each with a browser</b> — ◈ steps Overlay, MilkDrop, Shaders and Prism; ☰ Browse (or B) picks anything inside the one on screen.',
+    '<b>Prism</b> — a new library of 576 modes, plus <b>8 new shaders</b>: Aurora, Skyline, Lightning, Fractal Bloom and more.',
+    '<b>Lyrics found automatically</b> for songs that only a manual search used to find — and smoother, lighter visuals throughout.',
+  ],
   '0.60.0': [
     '<b>Studio</b> — your song as a live FL Studio session: channel rack, piano roll, mixer and arrangement, written from the music as it plays. Press ◈ to find it.',
     '<b>Updates that tell you what is new</b>, checked every 6 hours — and on Arch, the app now updates itself through pacman.',

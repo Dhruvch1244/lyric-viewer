@@ -7,7 +7,7 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
-## Unreleased
+## 0.61.0 — 2026-11-18
 
 - **Performance, measured** (Chromium, before → after):
   - **Multi-pass shaders render at the canvas's real resolution.** The ISF
