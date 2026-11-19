@@ -248,7 +248,7 @@ pub fn detect() -> Value {
 /// — Claude's own installer puts it in `~/.local/bin`, which a Hyprland or
 /// GNOME session started by a display manager often does not have. So PATH,
 /// then those directories.
-fn resolve_cmd(cmd: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_cmd(cmd: &str) -> Option<std::path::PathBuf> {
     if cfg!(windows) {
         let out = run_direct("where", &[cmd.to_string()], DETECT_TIMEOUT, None).ok()?;
         return out.lines().map(str::trim).find(|l| !l.is_empty()).map(std::path::PathBuf::from);
@@ -382,7 +382,7 @@ fn run_cli(file: &str, args: &[String], timeout: Duration, stdin_data: &str) -> 
 /// drained on their own threads throughout (not just after exit) so a CLI
 /// that writes more than fits in one pipe buffer before exiting can't
 /// deadlock the wait.
-fn run_direct(program: &str, args: &[String], timeout: Duration, stdin_data: Option<&str>) -> Result<String, String> {
+pub(crate) fn run_direct(program: &str, args: &[String], timeout: Duration, stdin_data: Option<&str>) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]

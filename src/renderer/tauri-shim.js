@@ -173,6 +173,11 @@
     clearManualLyrics: (track) => call('clear_manual_lyrics', { track }),
     searchLyrics: (query) => call('search_lyrics', { query }, { status: 'error', message: 'unavailable' }),
     findMusicVideo: (artist, title, durationMs) => call('find_music_video', { artist, title, durationMs }, { status: 'error', message: 'unavailable' }),
+    videoTools: () => call('video_tools', {}, { ytdlp: false }),
+    localVideoFor: (id) => call('local_video_for', { id }, { path: null }),
+    downloadMusicVideo: (id) => call('download_music_video', { id }, { status: 'error', message: 'unavailable' }),
+    pickVideoFile: () => call('pick_video_file', {}, { path: null }),
+    onVideoDownload: (cb) => on('video-download', cb),
     chooseLyricsCandidate: (track, id) => call('choose_lyrics_candidate', { track, id }, { status: 'error', message: 'unavailable' }),
 
     presyncList: (text) => call('presync_list', { text }),

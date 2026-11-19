@@ -55,3 +55,31 @@ test('sync: follows play/pause, and holds before the video starts or after it en
   assert.equal(syncAction({ videoTime: 299, target: 310, playing: true, wantPlaying: true, sinceSeekMs: 5000, duration: 300 }), 'pause', 'past the end');
   assert.equal(syncAction({ videoTime: 0, target: -3, playing: false, wantPlaying: true, sinceSeekMs: 5000, duration: 300 }), null);
 });
+
+test('local sync eases small drift through the rate and seeks only on a jump', () => {
+  const { localSync } = global.window.MusicVideo;
+  const base = { wantPlaying: true, duration: 200 };
+  assert.deepEqual(localSync({ ...base, videoTime: 50, target: 50 }), { action: 'steer', rate: 1 });
+  const ahead = localSync({ ...base, videoTime: 50, target: 50.1 });
+  assert.equal(ahead.action, 'steer');
+  assert.ok(ahead.rate > 1 && ahead.rate <= 1.1, 'behind the song: play a little fast');
+  const behind = localSync({ ...base, videoTime: 50.1, target: 50 });
+  assert.ok(behind.rate < 1 && behind.rate >= 0.9, 'ahead of the song: play a little slow');
+  assert.equal(localSync({ ...base, videoTime: 50, target: 52 }).action, 'seek');
+  assert.equal(localSync({ ...base, videoTime: 50, target: 50.3 }).rate, 1.1, 'rate is clamped to ±10%');
+});
+
+test('local sync pauses when the song does, or when the song is outside the video', () => {
+  const { localSync } = global.window.MusicVideo;
+  assert.equal(localSync({ wantPlaying: false, videoTime: 5, target: 5, duration: 200 }).action, 'pause');
+  assert.equal(localSync({ wantPlaying: true, videoTime: 0, target: -3, duration: 200 }).action, 'pause');
+  assert.equal(localSync({ wantPlaying: true, videoTime: 199, target: 205, duration: 200 }).action, 'pause');
+});
+
+test('video files get the MIME type their container needs', () => {
+  const { videoMime } = global.window.MusicVideo;
+  assert.equal(videoMime('/v/dQw4w9WgXcQ.mp4'), 'video/mp4');
+  assert.equal(videoMime('C:\\Videos\\Song.WEBM'), 'video/webm');
+  assert.equal(videoMime('song.mkv'), 'video/x-matroska');
+  assert.equal(videoMime('song'), 'video/mp4');
+});

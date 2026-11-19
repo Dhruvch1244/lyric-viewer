@@ -7,6 +7,43 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## Unreleased
+
+- **🎬 Director 2.0 — it directs a song from its first play, and every cut
+  lands.** It used to learn a song's sections only after hearing half of it,
+  so a new song from Spotify or YouTube sat on one look; it now reads the
+  sections off what you are hearing as it plays (judged against the song's
+  own loudest part, held long enough never to flicker). Scene changes wait
+  for the next bar line, and each one is covered: a white hit into a drop, a
+  dip to black into a quiet part, a bloom in the song's colour otherwise — so
+  a switch (and a shader warming up) is never a raw cut. A drop now cuts in
+  once per section and never in a quiet one. Fixed: the song's own look no
+  longer jumps back over the Director's scene when its mood arrives.
+- **Video Director.** With ▶ Video and 🎬 Director both on, the video's
+  style follows the song too: dreamy and alone in the intro, natural under
+  soft visuals in a verse, tightening through a build, neon under full
+  visuals with a harder kick punch on the drop, noir in a break.
+
+- **▶ Video can play from your disk.** ⬇ Download saves the song's video
+  with *your own* `yt-dlp` (shown when it is installed — `pacman -S yt-dlp`,
+  `pip install yt-dlp` or `winget install yt-dlp`; the app never ships a
+  downloader) and plays it from there; 📁 Open file… links any video you
+  already have. A file is kept in time far more tightly than the YouTube
+  player — it is steered by its playback speed instead of re-seeked, and
+  learns how late a seek lands — works offline, and is remembered per song.
+
+- **Effects on the video itself.** With a downloaded or linked video, ▶ Video
+  can bend the footage: Kaleido, RGB split, Mosaic, Neon edges, Mirror —
+  all moving with the kick, the bass and the drop. On *Auto* the 🎬 Director
+  picks one per section: the split tightening through a build, the
+  kaleidoscope on the drop, neon outlines in a break.
+
+- **Find works without an API key** when yt-dlp is installed: it searches
+  with your yt-dlp and ranks the results the same way. Ranking fixed: a
+  re-upload copying the official title could tie with the real video and
+  win; the artist's own channel now counts for more than their name in a
+  title, and popularity breaks ties.
+
 ## 0.62.2 — 2026-11-19
 
 - **Fix: ▶ Video showed YouTube's "Video player configuration error" on

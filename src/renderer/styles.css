@@ -3052,6 +3052,16 @@ html.webkitgtk * {
   position: absolute;
   inset: 0;
 }
+.mv-frame video,
+.mv-frame canvas.mv-fx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.mv-frame canvas.mv-fx[hidden] { display: none; }
 .mv-frame iframe {
   position: absolute;
   top: 50%;
@@ -3089,4 +3099,20 @@ body.mv-on.mv-mix-off #backdrop { opacity: 0; }
 .mvp__body { display: flex; flex-direction: column; gap: 0.6rem; padding: 0 1rem 1rem; }
 .mvp__row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .mvp__link { flex: 1 1 14rem; min-width: 0; }
+.mvp__source { opacity: 0.7; font-size: 0.85em; }
 .mvp__offset { min-width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* 🎬 Director's cut veil (renderer.js playVeil). Opacity is animated with the
+   Web Animations API; at rest it is fully transparent and takes no input.
+   Same z-index as #backdrop and later in the document, so it covers every
+   engine and the music video but not the lyric stage (z-index 2). */
+.cut-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+}
+.cut-veil--flash { background: radial-gradient(circle at 50% 50%, #fff 0%, #fff 35%, rgba(255, 255, 255, 0.85) 100%); }
+.cut-veil--dip { background: #000; }
+.cut-veil--glow { background: radial-gradient(circle at 50% 55%, var(--accent-live, #8af) 0%, rgba(0, 0, 0, 0.92) 85%); }

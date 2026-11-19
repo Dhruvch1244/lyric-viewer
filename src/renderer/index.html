@@ -74,6 +74,10 @@
          same exclusivity as the other two. -->
     <canvas id="shaderfx" aria-hidden="true" hidden></canvas>
     <canvas id="backdrop" aria-hidden="true"></canvas>
+    <!-- 🎬 Director's cut veil (renderer.js playVeil): covers the visuals for
+         the instant a look switches. Above every engine and the music video,
+         below the lyrics. -->
+    <div id="cut-veil" class="cut-veil" aria-hidden="true"></div>
 
     <header id="topbar" class="topbar">
       <!-- One row: a small playing indicator, then the title and artist side by
@@ -341,7 +345,7 @@
              a link. -->
         <div class="keybox__local">
           <label class="keybox__label" for="keybox-youtube">YouTube API key — find music videos automatically</label>
-          <span class="keybox__note">Optional: without it, paste a song's video link once in ▶ Video.
+          <span class="keybox__note">Optional: without it, ▶ Video searches with yt-dlp if you have it installed, or you paste a song's video link once.
             Free from console.cloud.google.com (YouTube Data API v3).</span>
           <input id="keybox-youtube" class="keybox__input" type="password"
                  placeholder="YouTube Data API v3 key" autocomplete="off" spellcheck="false" />
@@ -634,7 +638,12 @@
         <div class="mvp__row">
           <input id="mv-link" class="looks__search mvp__link" type="text" placeholder="Paste the song's YouTube link" autocomplete="off" spellcheck="false" />
           <button id="mv-use" class="chip" type="button">Use</button>
-          <button id="mv-find" class="chip" type="button" title="Search YouTube for the official video (needs a YouTube API key in Settings)">Find</button>
+          <button id="mv-find" class="chip" type="button" title="Search YouTube for the official video (uses your YouTube API key from Settings, or your yt-dlp if you have one)">Find</button>
+        </div>
+        <div class="mvp__row">
+          <button id="mv-download" class="chip" type="button" disabled>⬇ Download</button>
+          <button id="mv-file" class="chip" type="button" title="Link a video file on this computer to the song">📁 Open file…</button>
+          <span id="mv-source" class="mvp__source"></span>
         </div>
         <p id="mv-status" class="looks__count" role="status"></p>
         <div class="mvp__row">
@@ -653,6 +662,16 @@
             <option value="dream">Dream</option>
             <option value="vhs">VHS</option>
             <option value="none">None</option>
+          </select>
+          <span class="keybox__label">Effect</span>
+          <select id="mv-fx" class="chip">
+            <option value="auto">Auto (with 🎬)</option>
+            <option value="none">None</option>
+            <option value="kaleido">Kaleido</option>
+            <option value="split">RGB split</option>
+            <option value="mosaic">Mosaic</option>
+            <option value="edges">Neon edges</option>
+            <option value="mirror">Mirror</option>
           </select>
           <span class="keybox__label">Visuals</span>
           <select id="mv-mix" class="chip">
@@ -969,6 +988,7 @@
     <script src="milkdrop-panel.js"></script>
     <script src="looks-browser.js"></script>
     <script src="kinetic-type.js"></script>
+    <script src="video-fx.js"></script>
     <script src="music-video.js"></script>
     <script src="onboarding-cards.js"></script>
   </body>
