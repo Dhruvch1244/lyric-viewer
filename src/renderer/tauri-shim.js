@@ -175,6 +175,7 @@
     findMusicVideo: (artist, title, durationMs) => call('find_music_video', { artist, title, durationMs }, { status: 'error', message: 'unavailable' }),
     videoTools: () => call('video_tools', {}, { ytdlp: false }),
     localVideoFor: (id) => call('local_video_for', { id }, { path: null }),
+    playableVideo: (path) => call('playable_video', { path }, { path }),
     downloadMusicVideo: (id) => call('download_music_video', { id }, { status: 'error', message: 'unavailable' }),
     pickVideoFile: () => call('pick_video_file', {}, { path: null }),
     onVideoDownload: (cb) => on('video-download', cb),

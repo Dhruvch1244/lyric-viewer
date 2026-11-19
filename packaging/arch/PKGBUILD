@@ -13,7 +13,7 @@
 # never from the app rewriting its own binary.
 
 pkgname=lyric-overlay
-pkgver=0.63.0
+pkgver=0.63.1
 pkgrel=1
 pkgdesc='Beat-aware synced lyric overlay with an audio-reactive backdrop'
 arch=('x86_64' 'aarch64')
@@ -27,7 +27,9 @@ depends=(
   'hicolor-icon-theme'
 )
 makedepends=('rust' 'cargo' 'nodejs' 'npm' 'git')
-optdepends=('libpulse: audio-reactive mode (system audio capture via parec)')
+optdepends=('libpulse: audio-reactive mode (system audio capture via parec)'
+            'yt-dlp: ▶ Video — download a song'\''s music video to play from disk'
+            'ffmpeg: ▶ Video — make downloaded videos playable (fragmented MP4 remux)')
 options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # The tarball is GitHub's tag archive. release.yml drops a `git archive` of

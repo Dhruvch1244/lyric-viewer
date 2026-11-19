@@ -40,9 +40,10 @@
   LOCAL VIDEO. The same song can instead play a video FILE: one the user
   links (Open file…), or a copy of its YouTube video downloaded with the
   user's own yt-dlp (video.rs — the app never ships a downloader, and why).
-  A file wins over the embed when there is one. It plays in a <video>,
-  muted, kept in time by steering playbackRate (localSync) — small drift is
-  eased out by playing up to 10% fast or slow, only a real jump seeks — which
+  A file wins over the embed when there is one, unless the panel's switch
+  has put that song back on YouTube (remembered per song). It plays in a <video>,
+  muted, kept in time by steering playbackRate (localSync) — drift past
+  0.12s is eased out by playing 5% fast or slow, only a real jump seeks — which
   the embed cannot do; and its pixels are readable, which is what lets the
   shaders work on the footage itself (frameSource()).
 
@@ -103,16 +104,32 @@
   }
 
   /**
-   * Keeping a local <video> on the song: ease small drift out through the
-   * playback rate, seek only past `seekPast` seconds.
+   * Keeping a local <video> on the song: ease drift out through the playback
+   * rate, seek only past `seekPast` seconds.
+   *
+   * WHY HYSTERESIS AND TWO FIXED RATES. The rate used to be re-aimed on every
+   * 100ms tick (1 + drift * 0.8, any change over 0.005). Chromium shrugs that
+   * off, but WebKitGTK implements a rate change as a GStreamer flush seek:
+   * measured on a 25fps 720p H.264 file, playback fell from 25.1 fps to 4.1
+   * with ~1 rate change a second. Now the rate leaves 1 only when drift is
+   * past 0.12s, at one fixed ±5% (≈2.4s to pull 0.12s back), and returns to 1
+   * once drift is under 0.03s or has crossed over — two changes per
+   * correction instead of a stream of them.
+   * @param {{videoTime: number, target: number, wantPlaying: boolean, duration: number, rate?: number, seekPast?: number}} q
+   *   `rate` is the video's current playbackRate.
    * @returns {{action: 'pause'|'seek'|'steer', rate: number}}
    */
-  function localSync({ videoTime, target, wantPlaying, duration, seekPast = 0.35 }) {
+  function localSync({ videoTime, target, wantPlaying, duration, rate = 1, seekPast = 0.35 }) {
     const inRange = target >= 0 && (!(duration > 0) || target < duration - 0.1);
     if (!wantPlaying || !inRange) return { action: 'pause', rate: 1 };
     const drift = target - videoTime;
     if (Math.abs(drift) > seekPast) return { action: 'seek', rate: 1 };
-    return { action: 'steer', rate: Math.max(0.9, Math.min(1.1, 1 + drift * 0.8)) };
+    if (rate !== 1) {
+      const crossed = (rate > 1) !== (drift > 0);
+      return { action: 'steer', rate: crossed || Math.abs(drift) < 0.03 ? 1 : rate };
+    }
+    if (Math.abs(drift) > 0.12) return { action: 'steer', rate: drift > 0 ? 1.05 : 0.95 };
+    return { action: 'steer', rate: 1 };
   }
 
   /** The MIME type a blob of this file should carry. */
@@ -137,6 +154,7 @@
     later: $('mv-later'), offset: $('mv-offset'), auto: $('mv-auto'), grade: $('mv-grade'),
     mix: $('mv-mix'), openBtn: $('btn-video'),
     download: $('mv-download'), file: $('mv-file'), source: $('mv-source'), fx: $('mv-fx'),
+    switchSrc: $('mv-switch'),
   };
 
   /* --------------------------------------------------------------- state */
@@ -161,6 +179,11 @@
   let videoUrl = '';        // its blob URL, revoked on teardown
   let localPath = null;     // the file it is playing
   let linkedFile = null;    // a file the user linked to this song (beats a download)
+  /* Which source plays when a song has both a file and a YouTube video.
+     The file wins by default (exact sync, shaders on the footage); the
+     panel's switch flips it either way, remembered per song as `yt`. */
+  let preferYoutube = false;
+  let localAvail = null;    // the playable file this song has, even while YouTube plays
   let tools = { ytdlp: false };
   let downloading = '';     // video id being downloaded
   let loadSeq = 0;          // guards async loads against a newer one
@@ -208,7 +231,9 @@
 
   function remember() {
     if (!trackKey) return;
-    if (videoId || linkedFile) saved[trackKey] = { id: videoId, offset, ...(linkedFile ? { file: linkedFile } : {}) };
+    if (videoId || linkedFile) {
+      saved[trackKey] = { id: videoId, offset, ...(linkedFile ? { file: linkedFile } : {}), ...(preferYoutube ? { yt: true } : {}) };
+    }
     else delete saved[trackKey];
     write('musicVideos', JSON.stringify(saved));
   }
@@ -249,6 +274,13 @@
         ? (linkedFile ? '📁 Your file' : '💾 Downloaded copy')
         : videoId ? '▶ YouTube' : '';
     }
+    if (ui.switchSrc) {
+      const can = Boolean(videoId && localAvail);
+      ui.switchSrc.hidden = !can;
+      ui.switchSrc.textContent = localPath
+        ? '▶ Switch to YouTube'
+        : linkedFile ? '📁 Switch to your file' : '💾 Switch to downloaded copy';
+    }
     if (ui.download) {
       const can = tools.ytdlp && videoId && !localPath && !downloading;
       ui.download.disabled = !can;
@@ -288,14 +320,19 @@
     videoId = id || null;
     linkedFile = file || null;
     teardown();
+    localAvail = null;
     if (!hasVideo() || !on) { applyLook(); return; }
-    let path = linkedFile;
-    if (!path && videoId && window.player && window.player.localVideoFor) {
-      const res = await window.player.localVideoFor(videoId);
-      if (seq !== loadSeq) return;
-      path = res && res.path;
-    }
-    if (path && await loadLocal(path, seq)) return;
+    // The file to play: a linked one (or the app's regular-MP4 copy of it —
+    // see playable_video), else a downloaded copy of the YouTube video.
+    let res = null;
+    if (linkedFile && window.player && window.player.playableVideo) res = await window.player.playableVideo(linkedFile);
+    else if (linkedFile) res = { path: linkedFile };
+    else if (videoId && window.player && window.player.localVideoFor) res = await window.player.localVideoFor(videoId);
+    if (seq !== loadSeq) return;
+    const path = res && res.path;
+    if (res && res.warning) say(res.warning.charAt(0).toUpperCase() + res.warning.slice(1));
+    localAvail = path || null;
+    if (path && !(preferYoutube && videoId) && await loadLocal(path, seq)) return;
     if (seq !== loadSeq) return;
     if (videoId) loadEmbed(videoId);
     else applyLook();
@@ -330,6 +367,17 @@
     v.addEventListener('seeked', () => {
       const missed = estimatePosition() / 1000 + offset - v.currentTime;
       if (Number.isFinite(missed)) seekLead = Math.max(0, Math.min(0.8, seekLead + missed * 0.6));
+    });
+    /* A file the player cannot stream (a fragmented MP4 with no ffmpeg to
+       fix it, on WebKitGTK) does not error: it plays a few seconds and then
+       reports `ended` mid-song. Treat that as the failure it is, once, and
+       fall back to YouTube rather than seeking back into it forever. */
+    v.addEventListener('ended', () => {
+      if (seq !== loadSeq || !(v.duration > 0)) return;
+      const target = estimatePosition() / 1000 + offset;
+      if (target >= v.duration - 1) return; // the real end
+      say('This video file stops early here (a fragmented MP4?) — install ffmpeg and the app will fix it; using YouTube for now');
+      if (videoId) { preferYoutube = true; teardown(); loadEmbed(videoId); }
     });
     v.addEventListener('error', () => {
       if (seq !== loadSeq) return;
@@ -386,16 +434,19 @@
 
   function tickLocal() {
     const v = videoEl;
-    if (!on || !v || !ready) return;
+    // A seek still landing reports its target as currentTime; deciding on
+    // that would stack a second seek on a slow decoder.
+    if (!on || !v || !ready || v.seeking) return;
     const r = localSync({
       videoTime: v.currentTime,
       target: estimatePosition() / 1000 + offset,
       wantPlaying: playbackStatus === 'Playing',
       duration: v.duration,
+      rate: v.playbackRate,
     });
-    if (r.action === 'pause') { if (!v.paused) v.pause(); v.playbackRate = 1; return; }
+    if (r.action === 'pause') { if (!v.paused) v.pause(); if (v.playbackRate !== 1) v.playbackRate = 1; return; }
     if (r.action === 'seek') v.currentTime = Math.max(0, estimatePosition() / 1000 + offset + seekLead);
-    if (Math.abs(v.playbackRate - r.rate) > 0.005) v.playbackRate = r.rate;
+    if (v.playbackRate !== r.rate) v.playbackRate = r.rate;
     if (v.paused) v.play().catch(() => {});
   }
   setInterval(tickLocal, 100);
@@ -467,6 +518,7 @@
     trackKey = key;
     const s = saved[key];
     offset = s && typeof s.offset === 'number' ? s.offset : 0;
+    preferYoutube = Boolean(s && s.yt);
     showOffset();
     if (ui.now) ui.now.textContent = currentTrack ? `${currentTrack.artist || ''} — ${currentTrack.title || ''}` : 'Nothing playing';
     if (s && (s.id || s.file)) { load(s.id, s.file); say('Remembered for this song'); return; }
@@ -573,7 +625,7 @@
     showSource();
     say('Starting the download…');
     const res = await window.player.downloadMusicVideo(videoId);
-    if (res && res.status === 'done' && res.path) { downloading = ''; load(videoId, linkedFile); say('Already downloaded — playing from disk'); return; }
+    if (res && res.status === 'done' && res.path) { downloading = ''; preferYoutube = false; remember(); load(videoId, linkedFile); say('Already downloaded — playing from disk'); return; }
     if (!res || res.status === 'error') { downloading = ''; showSource(); say((res && res.message) || 'Download failed'); }
   });
   if (window.player && window.player.onVideoDownload) window.player.onVideoDownload((d) => {
@@ -584,12 +636,19 @@
     } else {
       if (downloading === d.id) downloading = '';
       if (d.id === videoId) {
-        if (d.status === 'done') { load(videoId, linkedFile); say('Downloaded — now playing from disk'); }
+        if (d.status === 'done') { preferYoutube = false; remember(); load(videoId, linkedFile); say('Downloaded — now playing from disk'); }
         else if (d.status === 'error') say(`Download failed: ${d.message || 'unknown error'}`);
         else if (d.status === 'cancelled') say('Download cancelled');
       }
     }
     showSource();
+  });
+  if (ui.switchSrc) ui.switchSrc.addEventListener('click', () => {
+    if (!videoId || !localAvail) return;
+    preferYoutube = Boolean(localPath);
+    remember();
+    load(videoId, linkedFile);
+    say(preferYoutube ? 'Playing YouTube for this song — switch back any time' : 'Playing from disk for this song');
   });
   if (ui.file) ui.file.addEventListener('click', async () => {
     if (!trackKey) { say('Play a song first, then link its video'); return; }
@@ -598,6 +657,7 @@
     searchedFor = trackKey;
     if (!on) setOn(true);
     offset = 0;
+    preferYoutube = false;
     await load(videoId, res.path);
     remember();
     say('Linked this file to the song');

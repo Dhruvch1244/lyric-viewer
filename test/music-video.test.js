@@ -56,17 +56,25 @@ test('sync: follows play/pause, and holds before the video starts or after it en
   assert.equal(syncAction({ videoTime: 0, target: -3, playing: false, wantPlaying: true, sinceSeekMs: 5000, duration: 300 }), null);
 });
 
-test('local sync eases small drift through the rate and seeks only on a jump', () => {
+test('local sync leaves the rate alone for small drift and seeks only on a jump', () => {
   const { localSync } = global.window.MusicVideo;
   const base = { wantPlaying: true, duration: 200 };
   assert.deepEqual(localSync({ ...base, videoTime: 50, target: 50 }), { action: 'steer', rate: 1 });
-  const ahead = localSync({ ...base, videoTime: 50, target: 50.1 });
-  assert.equal(ahead.action, 'steer');
-  assert.ok(ahead.rate > 1 && ahead.rate <= 1.1, 'behind the song: play a little fast');
-  const behind = localSync({ ...base, videoTime: 50.1, target: 50 });
-  assert.ok(behind.rate < 1 && behind.rate >= 0.9, 'ahead of the song: play a little slow');
+  // Under 0.12s: no rate change at all (each one is a pipeline flush on WebKitGTK).
+  assert.equal(localSync({ ...base, videoTime: 50, target: 50.1 }).rate, 1);
+  assert.equal(localSync({ ...base, videoTime: 50.1, target: 50 }).rate, 1);
+  assert.equal(localSync({ ...base, videoTime: 50, target: 50.2 }).rate, 1.05, 'behind the song: play a little fast');
+  assert.equal(localSync({ ...base, videoTime: 50.2, target: 50 }).rate, 0.95, 'ahead of the song: play a little slow');
   assert.equal(localSync({ ...base, videoTime: 50, target: 52 }).action, 'seek');
-  assert.equal(localSync({ ...base, videoTime: 50, target: 50.3 }).rate, 1.1, 'rate is clamped to ±10%');
+});
+
+test('local sync holds a correction until the drift is gone, then returns to 1', () => {
+  const { localSync } = global.window.MusicVideo;
+  const base = { wantPlaying: true, duration: 200 };
+  assert.equal(localSync({ ...base, rate: 1.05, videoTime: 50, target: 50.08 }).rate, 1.05, 'keeps going, no re-aim');
+  assert.equal(localSync({ ...base, rate: 1.05, videoTime: 50, target: 50.02 }).rate, 1, 'close enough: back to 1');
+  assert.equal(localSync({ ...base, rate: 1.05, videoTime: 50.05, target: 50 }).rate, 1, 'overshot: back to 1');
+  assert.equal(localSync({ ...base, rate: 0.95, videoTime: 50.1, target: 50 }).rate, 0.95);
 });
 
 test('local sync pauses when the song does, or when the song is outside the video', () => {
