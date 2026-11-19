@@ -32,6 +32,12 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   player — it is steered by its playback speed instead of re-seeked, and
   learns how late a seek lands — works offline, and is remembered per song.
 
+- **Effects on the video itself.** With a downloaded or linked video, ▶ Video
+  can bend the footage: Kaleido, RGB split, Mosaic, Neon edges, Mirror —
+  all moving with the kick, the bass and the drop. On *Auto* the 🎬 Director
+  picks one per section: the split tightening through a build, the
+  kaleidoscope on the drop, neon outlines in a break.
+
 ## 0.62.2 — 2026-11-19
 
 - **Fix: ▶ Video showed YouTube's "Video player configuration error" on

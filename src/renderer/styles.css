@@ -3052,7 +3052,8 @@ html.webkitgtk * {
   position: absolute;
   inset: 0;
 }
-.mv-frame video {
+.mv-frame video,
+.mv-frame canvas.mv-fx {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -3060,6 +3061,7 @@ html.webkitgtk * {
   object-fit: cover;
   pointer-events: none;
 }
+.mv-frame canvas.mv-fx[hidden] { display: none; }
 .mv-frame iframe {
   position: absolute;
   top: 50%;

@@ -136,7 +136,7 @@
     use: $('mv-use'), find: $('mv-find'), status: $('mv-status'), earlier: $('mv-earlier'),
     later: $('mv-later'), offset: $('mv-offset'), auto: $('mv-auto'), grade: $('mv-grade'),
     mix: $('mv-mix'), openBtn: $('btn-video'),
-    download: $('mv-download'), file: $('mv-file'), source: $('mv-source'),
+    download: $('mv-download'), file: $('mv-file'), source: $('mv-source'), fx: $('mv-fx'),
   };
 
   /* --------------------------------------------------------------- state */
@@ -175,14 +175,27 @@
      grade takes to arrive: a build tightens over its whole length, the rest
      switch under the veil. */
   const SECTION_LOOK = {
-    intro: { grade: 'dream', mix: 'off', punch: 0.3, ramp: 0.3 },
-    outro: { grade: 'dream', mix: 'soft', punch: 0.3, ramp: 0.3 },
-    break: { grade: 'noir', mix: 'off', punch: 0.35, ramp: 0.3 },
-    verse: { grade: 'song', mix: 'soft', punch: 0.5, ramp: 0.3 },
-    build: { grade: 'neon', mix: 'soft', punch: 0.75, ramp: 8 },
-    drop: { grade: 'neon', mix: 'full', punch: 1, ramp: 0.15 },
+    intro: { grade: 'dream', mix: 'off', punch: 0.3, ramp: 0.3, fx: 'none' },
+    outro: { grade: 'dream', mix: 'soft', punch: 0.3, ramp: 0.3, fx: 'mirror' },
+    break: { grade: 'none', mix: 'off', punch: 0.35, ramp: 0.3, fx: 'edges' },
+    verse: { grade: 'song', mix: 'soft', punch: 0.5, ramp: 0.3, fx: 'none' },
+    build: { grade: 'neon', mix: 'soft', punch: 0.75, ramp: 8, fx: 'split' },
+    drop: { grade: 'neon', mix: 'full', punch: 1, ramp: 0.15, fx: 'kaleido' },
   };
   let directedLook = null;
+  let directedAt = 0;
+
+  /* Effects on the footage itself (video-fx.js) — local video only. 'auto'
+     takes the Director's per-section effect, and none without it. */
+  let fxPick = read('musicVideoFx', 'auto');
+  let fxCanvas = null;
+  let fx = null;
+  let fxBroken = false;
+  const liveFx = () => {
+    if (!localPath || fxBroken || !window.VideoFX) return 'none';
+    if (fxPick === 'auto') return directedLook ? directedLook.fx : 'none';
+    return window.VideoFX.MODES.includes(fxPick) ? fxPick : 'none';
+  };
 
   const GRADES = {
     none: '',
@@ -213,6 +226,13 @@
     frameBox.style.filter = GRADES[liveGrade()] || '';
     tint.hidden = liveGrade() !== 'song';
     if (ui.grade) ui.grade.value = grade;
+    if (ui.fx) {
+      ui.fx.value = fxPick;
+      ui.fx.disabled = !localPath;
+      ui.fx.title = localPath
+        ? 'Effects on the footage itself; Auto lets the 🎬 Director pick one per section'
+        : 'Needs a downloaded or linked video — YouTube\'s player cannot be read';
+    }
     if (ui.mix) ui.mix.value = mix;
     if (ui.toggle) {
       ui.toggle.setAttribute('aria-pressed', String(on));
@@ -255,6 +275,7 @@
     iframe = null;
     if (videoEl) { videoEl.removeAttribute('src'); videoEl.load(); videoEl = null; }
     if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = ''; }
+    if (fxCanvas) fxCanvas.hidden = true;
     localPath = null;
     ready = false;
     info = { time: 0, at: 0, state: -1, duration: 0 };
@@ -396,8 +417,31 @@
   }
   setInterval(tick, 300);
 
+  function drawFx(now) {
+    const mode = liveFx();
+    if (mode === 'none' || !videoEl || layer.hidden) { if (fxCanvas) fxCanvas.hidden = true; return; }
+    if (!fxCanvas) {
+      fxCanvas = document.createElement('canvas');
+      fxCanvas.className = 'mv-fx';
+      fx = window.VideoFX.create(fxCanvas);
+      if (!fx) { fxBroken = true; fxCanvas = null; applyLook(); return; }
+    }
+    if (fxCanvas.parentNode !== frameBox) frameBox.appendChild(fxCanvas);
+    const kick = audioEnv && audioEnv.active ? audioEnv.kick : Math.min(1, (beatFlash || 0) * 0.5);
+    const drawn = fx.render(videoEl, {
+      mode, time: now / 1000, kick,
+      bass: audioEnv && audioEnv.active ? audioEnv.bass || 0 : kick * 0.6,
+      drop: typeof dropFlash === 'number' ? Math.min(1, dropFlash) : 0,
+      // A build's effect tightens over the build, like its grade does.
+      amount: directedLook && directedLook === SECTION_LOOK.build ? Math.min(1, (now - directedAt) / 8000) : 0.5,
+      hue: typeof bgHue === 'number' ? bgHue : 0,
+    });
+    fxCanvas.hidden = !drawn;
+  }
+
   /* The kick punch, like the other engines get. */
-  function punch() {
+  function punch(now) {
+    if (window.VideoFX) drawFx(now || performance.now());
     if (on && hasVideo() && !layer.hidden && typeof applyKickPunch === 'function') {
       const k = audioEnv && audioEnv.active ? audioEnv.kick : Math.min(1, (beatFlash || 0) * 0.5);
       const gain = directedLook ? directedLook.punch : 0.6;
@@ -413,6 +457,7 @@
   window.addEventListener('director-scene', (e) => {
     const kind = e.detail && e.detail.kind;
     directedLook = kind ? SECTION_LOOK[kind] || SECTION_LOOK.verse : null;
+    directedAt = performance.now();
     applyLook();
   });
 
@@ -504,6 +549,11 @@
     showOffset(); remember(); lastSeekAt = 0;
   });
   if (ui.grade) ui.grade.addEventListener('change', () => { grade = ui.grade.value in GRADES ? ui.grade.value : 'none'; write('musicVideoGrade', grade); applyLook(); });
+  if (ui.fx) ui.fx.addEventListener('change', () => {
+    fxPick = ui.fx.value === 'auto' || (window.VideoFX && window.VideoFX.MODES.includes(ui.fx.value)) ? ui.fx.value : 'auto';
+    write('musicVideoFx', fxPick);
+    applyLook();
+  });
   if (ui.mix) ui.mix.addEventListener('change', () => { mix = ['full', 'soft', 'off'].includes(ui.mix.value) ? ui.mix.value : 'soft'; write('musicVideoMix', mix); applyLook(); });
 
   document.addEventListener('keydown', (e) => {
