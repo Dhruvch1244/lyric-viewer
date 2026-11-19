@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Music video</title>
+<!--
+  Relay for the app's ▶ Video (src/renderer/music-video.js). The app frames
+  this page; this page frames YouTube's player and passes the player's
+  postMessage traffic through in both directions, unchanged.
+
+  WHY IT EXISTS. YouTube's embed refuses to play (error 153, "Video player
+  configuration error") unless the request carries a Referer from a real
+  web origin. The app's page is served from tauri://localhost on Linux and
+  macOS, which yields no usable Referer, so a direct embed fails there.
+  Measured against youtube-nocookie.com/embed: no Referer → ERROR,
+  tauri://localhost → UNPLAYABLE, this site → OK. Framed from here, the
+  player sees this site as its embedder on every platform.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  iframe { display: block; border: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script>
+(function () {
+  var YT = 'https://www.youtube-nocookie.com';
+  var id = new URLSearchParams(location.search).get('v') || '';
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return;
+
+  var params = new URLSearchParams({
+    enablejsapi: '1', autoplay: '1', mute: '1', controls: '0', disablekb: '1', fs: '0',
+    iv_load_policy: '3', modestbranding: '1', playsinline: '1', rel: '0', origin: location.origin,
+  });
+  var frame = document.createElement('iframe');
+  frame.title = 'Music video';
+  frame.allow = 'autoplay; encrypted-media';
+  frame.referrerPolicy = 'strict-origin-when-cross-origin';
+  frame.src = YT + '/embed/' + id + '?' + params;
+  frame.addEventListener('load', function () {
+    // Subscribe to the player's state ourselves: the app's own "listening"
+    // can arrive before this inner frame exists and be lost.
+    frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), YT);
+  });
+  document.body.appendChild(frame);
+
+  window.addEventListener('message', function (e) {
+    if (e.source === frame.contentWindow) {
+      // The app's origin differs per platform (tauri://localhost,
+      // http://tauri.localhost, a dev server), and this is only player
+      // state, so '*' is fine.
+      if (window.parent !== window) window.parent.postMessage(e.data, '*');
+    } else if (e.source === window.parent && window.parent !== window && frame.contentWindow) {
+      frame.contentWindow.postMessage(e.data, YT);
+    }
+  });
+})();
+</script>
+</body>
+</html>

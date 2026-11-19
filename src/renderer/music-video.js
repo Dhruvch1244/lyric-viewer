@@ -11,6 +11,14 @@
   player is controlled through its documented postMessage API
   (enablejsapi=1), the same messages the IFrame API sends.
 
+  WHY A RELAY. The player is not framed directly: it is framed by
+  web/embed/youtube.html on the project's website (RELAY below), which passes
+  the postMessage traffic through unchanged. YouTube refuses an embed whose
+  request has no Referer from a real web origin (error 153, "Video player
+  configuration error"), and this page is tauri://localhost on Linux/macOS —
+  measured: no Referer → ERROR, tauri://localhost → UNPLAYABLE, the website
+  → OK. One path for every platform rather than a per-OS special case.
+
   WHY AN OFFSET. A music video is rarely the album track: there is an intro,
   a skit, a longer outro. The first guess is that the extra length is an
   intro (most common), capped at 30s; after that, `[` and `]` (or the panel's
@@ -150,9 +158,12 @@
 
   /* -------------------------------------------------------------- player */
 
+  const RELAY_ORIGIN = 'https://lyricoverlay.dhruvchoudhary.com';
+  const RELAY = `${RELAY_ORIGIN}/embed/youtube.html`;
+
   function post(func, args = []) {
     if (!iframe || !iframe.contentWindow) return;
-    iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube-nocookie.com');
+    iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), RELAY_ORIGIN);
   }
 
   function load(id) {
@@ -167,15 +178,12 @@
     iframe.allow = 'autoplay; encrypted-media';
     iframe.referrerPolicy = 'strict-origin-when-cross-origin';
     iframe.tabIndex = -1;
-    const params = new URLSearchParams({
-      enablejsapi: '1', autoplay: '1', mute: '1', controls: '0', disablekb: '1', fs: '0',
-      iv_load_policy: '3', modestbranding: '1', playsinline: '1', rel: '0', origin: location.origin,
-    });
-    iframe.src = `https://www.youtube-nocookie.com/embed/${id}?${params}`;
+    // The player's own parameters are set by the relay page.
+    iframe.src = `${RELAY}?v=${encodeURIComponent(id)}`;
     iframe.addEventListener('load', () => {
       // Ask the player to report its state; it answers with onReady and a
       // stream of infoDelivery messages carrying currentTime.
-      iframe.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), 'https://www.youtube-nocookie.com');
+      iframe.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), RELAY_ORIGIN);
     });
     frameBox.appendChild(iframe);
     applyLook();

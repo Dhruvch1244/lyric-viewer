@@ -18,11 +18,12 @@
          This is HuggingFace's own infrastructure changing under an
          allowlist written before Xet existed, not a bug here.
 
-         frame-src must list youtube-nocookie.com for ▶ Video (music-video.js):
-         its player is that cross-origin iframe, and with only 'self' WebView2
-         drops the frame silently — the layer turns on and shows plain black. -->
+         frame-src must list lyricoverlay.dhruvchoudhary.com for ▶ Video
+         (music-video.js): its player is framed through that site's relay page
+         (web/embed/youtube.html — see music-video.js for why), and a frame
+         the policy doesn't list is dropped silently, leaving plain black. -->
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-TzmFh45c44H05Ni+whdF2YUd4jerVgJw8OS7kYJQECU='; img-src 'self' data: blob: https://upload.wikimedia.org; font-src 'self'; media-src blob:; frame-src 'self' https://www.youtube-nocookie.com; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://hf.co https://*.hf.co;" />
+          content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-TzmFh45c44H05Ni+whdF2YUd4jerVgJw8OS7kYJQECU='; img-src 'self' data: blob: https://upload.wikimedia.org; font-src 'self'; media-src blob:; frame-src 'self' https://lyricoverlay.dhruvchoudhary.com; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://huggingface.co https://*.huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://hf.co https://*.hf.co;" />
     <!-- transformers.web.min.js has two static (unconditional) top-level
          bare-specifier imports buried in its chunks — `onnxruntime-web/webgpu`
          and `onnxruntime-common` — present regardless of whisper.js always
