@@ -80,3 +80,84 @@ test('genre sets how hard a drop goes', () => {
     assert.equal(p.look, 'prism', 'a soft-genre drop is Prism, not lasers');
   }
 });
+
+/* ---- Director 2.0: live sections and cut timing ---- */
+
+/** Run a scripted song through createLive at 60fps; returns the section log. */
+function runLive(script, durationMs) {
+  const live = Director.createLive();
+  const log = [];
+  let pos = 0;
+  for (const part of script) {
+    for (let t = 0; t < part.ms; t += 16) {
+      const r = live.step({
+        dt: 16, posMs: pos, durationMs, level: part.level,
+        build: part.build || 0, drop: Boolean(part.dropAt !== undefined && t === part.dropAt),
+      });
+      if (r.changed || log.length === 0) log.push({ kind: r.kind, at: pos });
+      pos += 16;
+    }
+  }
+  return log;
+}
+
+const SONG = [
+  { ms: 20000, level: 0.12 },                 // intro
+  { ms: 40000, level: 0.35 },                 // verse
+  { ms: 12000, level: 0.38, build: 0.6 },     // build
+  { ms: 25000, level: 0.5, dropAt: 0 },       // drop
+  { ms: 20000, level: 0.1 },                  // break
+  { ms: 30000, level: 0.36 },                 // verse
+];
+
+test('live sections follow a first listen: intro, verse, build, drop, break', () => {
+  const kinds = runLive(SONG, 180000).map((e) => e.kind);
+  assert.equal(kinds[0], 'intro');
+  for (const k of ['verse', 'build', 'drop', 'break']) assert.ok(kinds.includes(k), `missing ${k}: ${kinds}`);
+  assert.ok(kinds.indexOf('build') < kinds.indexOf('drop'));
+  assert.ok(kinds.indexOf('drop') < kinds.indexOf('break'));
+});
+
+test('a real drop cuts in at once', () => {
+  const log = runLive(SONG, 180000);
+  const drop = log.find((e) => e.kind === 'drop');
+  assert.ok(drop && drop.at >= 72000 && drop.at < 72100, `drop at ${drop && drop.at}`);
+});
+
+test('live sections never flicker: each holds at least its dwell', () => {
+  // Level jittering around the quiet threshold every second must not thrash.
+  const jitter = Array.from({ length: 120 }, (_, i) => ({ ms: 1000, level: i % 2 ? 0.2 : 0.45 }));
+  const log = runLive([{ ms: 30000, level: 0.45 }, ...jitter], 200000);
+  for (let i = 1; i < log.length; i += 1) {
+    const held = log[i].at - log[i - 1].at;
+    const min = log[i - 1].kind === 'drop' ? Director.LIVE.dropHoldMs : Director.LIVE.dwellMs;
+    assert.ok(held >= min - 16, `${log[i - 1].kind} held ${held}ms`);
+  }
+});
+
+test('section cuts land on a bar line when the tempo is locked', () => {
+  const P = 500;
+  for (let beatCount = 0; beatCount < 8; beatCount += 1) {
+    for (const clock of [0, 120, 499]) {
+      const d = Director.cutDelay({ beatPeriodMs: P, beatClockMs: clock, beatCount, locked: true, leadMs: 380, kind: 'verse' });
+      const beatsAhead = (clock + d) / P;
+      assert.ok(Math.abs(beatsAhead - Math.round(beatsAhead)) < 1e-9, 'on a beat');
+      assert.equal((beatCount + Math.round(beatsAhead)) % 4, 0, 'on a bar line');
+      assert.ok(d >= 380, 'never sooner than the lead-in');
+    }
+  }
+});
+
+test('unlocked tempo cuts on the next beat; drops go now', () => {
+  assert.equal(Director.cutDelay({ beatPeriodMs: 500, beatClockMs: 100, beatCount: 3, locked: false, leadMs: 220, kind: 'verse' }), 400);
+  assert.equal(Director.cutDelay({ beatPeriodMs: 500, beatClockMs: 400, beatCount: 3, locked: false, leadMs: 220, kind: 'verse' }), 600);
+  assert.equal(Director.cutDelay({ beatPeriodMs: 500, beatClockMs: 400, beatCount: 3, locked: true, leadMs: 40, kind: 'drop' }), 40);
+});
+
+test('every section kind has a transition', () => {
+  for (const k of Director.kinds) {
+    const t = Director.transitionFor(k);
+    assert.ok(['flash', 'dip', 'glow'].includes(t.style));
+  }
+  assert.equal(Director.transitionFor('drop').style, 'flash');
+});

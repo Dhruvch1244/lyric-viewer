@@ -1464,6 +1464,7 @@ let beatClockMs = 0;        // accumulates dt, wraps every beatPeriodMs
 */
 let songBeatsMs = null;
 let beatPhase = 0;          // 0..1 within the current beat
+let beatCount = 0;          // beats elapsed — the Director cuts on bar lines (every 4th)
 let beatFlash = 0;          // decays after each beat, drives pulses/flicker
 /* Screen flicker/strobe (0..1). Rises on drops + high energy, and micro-strobes
    on the beat, then decays. Applied as a brief white veil + hue jitter. */
@@ -2902,35 +2903,138 @@ function remixFor(track) {
 
 const remixOn = () => Boolean(window.PrismLibrary) && prismModeId === window.PrismLibrary.REMIX_ID;
 
-/** Put the Director's scene for a section on screen (not saved). */
-function directTo(kind, startMs) {
-  if (!window.Director || !currentTrack) return;
-  directed = window.Director.plan({
+/*
+  How the Director moves (Director 2.0).
+
+  WHEN. A section's look is SCHEDULED, not applied: it lands on the next bar
+  line while the tempo is locked (the next beat otherwise), so a scene change
+  arrives with the music instead of on whatever frame the boundary was
+  noticed. A drop goes at once — it is already on the beat.
+
+  HOW. Every cut is covered by the veil (#cut-veil, above the visuals, below
+  the lyrics): a white hit into a drop, a dip to black into a quiet part, a
+  bloom in the song's colour otherwise. The look switches at the veil's peak,
+  where nothing underneath is visible — which also hides a GPU engine's cold
+  start (a shader compile is a black or frozen frame or two). Before this,
+  every switch was a raw cut: presetFadeAt is recorded but nothing ever
+  faded.
+
+  WHAT. Learned sections (heatmap.js) when the song has been heard; otherwise
+  Director.createLive() reads them off the audio as it plays, so a first
+  listen is directed too. A drop cuts in at most once per section and never
+  inside a quiet one — one false drop used to slam a laser scene into a verse
+  and leave it there.
+*/
+const QUIET_KINDS = new Set(['intro', 'outro', 'break']);
+let directorLive = null;        // Director.createLive() for the song below
+let directorFor = '';           // track key the Director state belongs to
+let directedDropAt = NaN;       // section start that already had its drop cut
+let pendingCut = null;          // { plan, at } — applied at the veil's peak
+let liveDropPending = false;    // a drop landed since the live tracker last ran
+let directorFrameAt = 0;
+let veilAnim = null;
+
+function directorPlan(kind, startMs) {
+  const plan = window.Director.plan({
     trackKey: trackLookKey(currentTrack), kind, startMs,
     mood: moodProfile && moodProfile.key, genre: currentGenre,
   });
-  presetId = window.VisualPresets.byId(directed.look).id;
+  plan.kind = kind;
+  return plan;
+}
+
+/** Put a planned scene on screen now (not saved). */
+function applyDirected(plan) {
+  directed = plan;
+  presetId = window.VisualPresets.byId(plan.look).id;
   applyPresetLabel();
+  window.dispatchEvent(new CustomEvent('director-scene', { detail: { kind: plan.kind, label: plan.label } }));
+}
+
+/** Run the veil so that it peaks `delayMs` from now. */
+function playVeil(style, delayMs, leadMs, tailMs) {
+  const veil = document.getElementById('cut-veil');
+  if (!veil || typeof veil.animate !== 'function') return;
+  if (veilAnim) veilAnim.cancel();
+  const s = reducedMotion ? 'dip' : style;
+  veil.className = `cut-veil cut-veil--${s}`;
+  const total = delayMs + tailMs;
+  const peak = delayMs / total;
+  const rise = Math.max(0, (delayMs - leadMs) / total);
+  const top = s === 'flash' ? 0.92 : s === 'dip' ? 1 : 0.8;
+  const hold = s === 'dip' ? Math.min(0.999, peak + 90 / total) : peak;
+  veilAnim = veil.animate([
+    { offset: 0, opacity: 0 },
+    { offset: rise, opacity: 0, easing: s === 'flash' ? 'ease-out' : 'ease-in' },
+    { offset: peak, opacity: top },
+    { offset: hold, opacity: top, easing: 'ease-out' },
+    { offset: 1, opacity: 0 },
+  ], { duration: total, fill: 'none' });
+}
+
+/** Cue a section's scene: the veil starts now, the look switches at its peak. */
+function scheduleCut(kind, startMs, now) {
+  if (!window.Director || !currentTrack) return;
+  const plan = directorPlan(kind, startMs);
+  if (!directed) { applyDirected(plan); return; } // the first look of a song just appears
+  const t = window.Director.transitionFor(kind);
+  const delay = window.Director.cutDelay({
+    beatPeriodMs, beatClockMs, beatCount, locked: tempoLocked, leadMs: t.leadMs, kind,
+  });
+  pendingCut = { plan, at: now + delay };
+  playVeil(t.style, delay, t.leadMs, t.tailMs);
+}
+
+function resetDirector() {
+  directed = null;
+  directedSectionAt = NaN;
+  directedDropAt = NaN;
+  pendingCut = null;
+  liveDropPending = false;
+  directorLive = null;
+  if (veilAnim) { veilAnim.cancel(); veilAnim = null; }
 }
 
 /** A drop landed: Remix morphs, the Director cuts to a drop scene. */
 function noteDirectionMoment(kind) {
   if (remixOn() && prismRemix) prismRemix.trigger(performance.now(), kind);
-  if (directorOn && kind === 'drop') directTo('drop', estimatePosition());
+  if (!directorOn || kind !== 'drop' || !currentTrack) return;
+  const sec = window.HeatMap ? window.HeatMap.sectionAt(estimatePosition()) : null;
+  if (!sec) { liveDropPending = true; return; } // the live tracker decides
+  if (QUIET_KINDS.has(sec.kind) || directedDropAt === sec.startMs) return;
+  if ((pendingCut && pendingCut.plan.kind === 'drop') || (directed && directed.kind === 'drop')) return;
+  directedDropAt = sec.startMs;
+  scheduleCut('drop', estimatePosition(), performance.now());
 }
 
 /** Every frame: notice a new section. */
 function followSections(now) {
+  const dt = directorFrameAt ? now - directorFrameAt : 0;
+  directorFrameAt = now;
   if (!window.HeatMap || !currentTrack) return;
-  const sec = window.HeatMap.sectionAt(estimatePosition());
-  if (directorOn) {
-    if (sec && sec.startMs !== directedSectionAt) {
-      directedSectionAt = sec.startMs;
-      directTo(sec.kind, sec.startMs);
-    } else if (!sec && !directed) {
-      // Sections are not known yet (the first listen learns them): open
-      // quietly, and let the first drop or section take it from there.
-      directTo('intro', 0);
+  const pos = estimatePosition();
+  const sec = window.HeatMap.sectionAt(pos);
+  if (directorOn && window.Director) {
+    const key = trackLookKey(currentTrack);
+    if (key !== directorFor) { resetDirector(); directorFor = key; }
+    if (pendingCut && now >= pendingCut.at) { applyDirected(pendingCut.plan); pendingCut = null; }
+    if (sec) {
+      if (sec.startMs !== directedSectionAt) {
+        directedSectionAt = sec.startMs;
+        scheduleCut(sec.kind, sec.startMs, now);
+      }
+    } else if (playbackStatus === 'Playing') {
+      if (!directorLive) directorLive = window.Director.createLive();
+      const live = directorLive.step({
+        dt, posMs: pos, durationMs,
+        level: audioEnv && audioEnv.active ? audioEnv.level : intensity,
+        build: buildup, anticipation, drop: liveDropPending,
+      });
+      liveDropPending = false;
+      if (!directed && !pendingCut) applyDirected(directorPlan(live.kind, live.startMs));
+      else if (live.changed) scheduleCut(live.kind, live.startMs, now);
+    } else if (!directed && !pendingCut) {
+      applyDirected(directorPlan('intro', 0));
     }
   }
   if (sec && sec.startMs !== remixSectionAt) {
@@ -2946,8 +3050,9 @@ function setDirector(on) {
   directorOn = Boolean(on);
   try { localStorage.setItem('director', directorOn ? '1' : '0'); } catch { /* ignore */ }
   const wasDirected = directed;
-  directed = null;
-  directedSectionAt = NaN;
+  resetDirector();
+  directorFor = '';
+  if (!directorOn) window.dispatchEvent(new CustomEvent('director-scene', { detail: { kind: null } }));
   if (directorOn) lookBeforeDirector = presetId;
   else if (wasDirected) presetId = window.VisualPresets.byId(lookBeforeDirector || presetId).id;
   const btn = document.getElementById('btn-director');
@@ -3992,6 +4097,7 @@ function drawBackdrop(now) {
     }
     if (beatClockMs >= beatPeriodMs) {
       beatClockMs -= beatPeriodMs;
+      beatCount += 1;
       // When real audio is driving the pulse, suppress the synthetic downbeat so
       // the two clocks don't fight — kicks below own the flash instead.
       if (!audioActive) {
@@ -7235,11 +7341,15 @@ function applyLookForTrack(track) {
     override = 'shaders';
     setShaderPick(legacy);
   }
-  presetId = override
+  const own = override
     ? window.VisualPresets.byId(override).id
     : defaultLookFor(track);
-  // The Director takes over from this song's own look; that is what comes back.
-  if (directorOn) lookBeforeDirector = presetId;
+  // The Director takes over from this song's own look; that is what comes
+  // back. This also runs again when mood/genre arrive a few seconds in, and
+  // used to put the song's look straight back over the Director's scene —
+  // so while it is directing, only remember the look; leave the screen alone.
+  if (directorOn) lookBeforeDirector = own;
+  if (!(directorOn && directed && directorFor === trackLookKey(track))) presetId = own;
   applyPresetLabel();
 }
 

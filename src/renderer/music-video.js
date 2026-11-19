@@ -25,6 +25,13 @@
   buttons) nudge it by a quarter second and the value is remembered for the
   song along with the video, so it only ever needs fixing once.
 
+  VIDEO DIRECTOR. While the 🎬 Director is on, the section it is directing
+  (renderer.js fires 'director-scene' at the cut veil's peak) also styles
+  the video: dreamy and on its own in an intro, plain under soft visuals in a
+  verse, the grade tightening through a build, neon under full visuals with
+  a harder kick punch on a drop, noir in a break. Not saved — the panel's
+  own grade and mix come straight back when the Director stops.
+
   THE LOOK. A colour grade on the video (CSS filters — the player is a
   cross-origin frame, so its pixels cannot be read or shaded, only filtered
   and composited), the app's visuals screen-blended on top at full, soft or
@@ -122,6 +129,19 @@
   let lastSeekAt = 0;
   let searchedFor = '';
 
+  /* Per-section styling while the Director runs. `ramp` is how long the
+     grade takes to arrive: a build tightens over its whole length, the rest
+     switch under the veil. */
+  const SECTION_LOOK = {
+    intro: { grade: 'dream', mix: 'off', punch: 0.3, ramp: 0.3 },
+    outro: { grade: 'dream', mix: 'soft', punch: 0.3, ramp: 0.3 },
+    break: { grade: 'noir', mix: 'off', punch: 0.35, ramp: 0.3 },
+    verse: { grade: 'song', mix: 'soft', punch: 0.5, ramp: 0.3 },
+    build: { grade: 'neon', mix: 'soft', punch: 0.75, ramp: 8 },
+    drop: { grade: 'neon', mix: 'full', punch: 1, ramp: 0.15 },
+  };
+  let directedLook = null;
+
   const GRADES = {
     none: '',
     neon: 'saturate(1.7) contrast(1.15) brightness(1.05)',
@@ -141,11 +161,15 @@
   function say(text) { if (ui.status) ui.status.textContent = text; }
   function showOffset() { if (ui.offset) ui.offset.textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s`; }
 
+  const liveGrade = () => (directedLook ? directedLook.grade : grade);
+  const liveMix = () => (directedLook ? directedLook.mix : mix);
+
   function applyLook() {
     document.body.classList.toggle('mv-on', on && Boolean(videoId));
-    for (const m of ['full', 'soft', 'off']) document.body.classList.toggle(`mv-mix-${m}`, mix === m);
-    frameBox.style.filter = GRADES[grade] || '';
-    tint.hidden = grade !== 'song';
+    for (const m of ['full', 'soft', 'off']) document.body.classList.toggle(`mv-mix-${m}`, liveMix() === m);
+    frameBox.style.transition = `filter ${directedLook ? directedLook.ramp : 0.3}s ease-in`;
+    frameBox.style.filter = GRADES[liveGrade()] || '';
+    tint.hidden = liveGrade() !== 'song';
     if (ui.grade) ui.grade.value = grade;
     if (ui.mix) ui.mix.value = mix;
     if (ui.toggle) {
@@ -234,14 +258,21 @@
   function punch() {
     if (on && videoId && !layer.hidden && typeof applyKickPunch === 'function') {
       const k = audioEnv && audioEnv.active ? audioEnv.kick : Math.min(1, (beatFlash || 0) * 0.5);
-      applyKickPunch(layer, k * (reducedMotion ? 0.3 : 0.6));
-      if (grade === 'song') tint.style.background = `hsl(${Math.round(bgHue)} 85% 50%)`;
+      const gain = directedLook ? directedLook.punch : 0.6;
+      applyKickPunch(layer, k * (reducedMotion ? Math.min(0.3, gain) : gain));
+      if (liveGrade() === 'song') tint.style.background = `hsl(${Math.round(bgHue)} 85% 50%)`;
     }
     requestAnimationFrame(punch);
   }
   requestAnimationFrame(punch);
 
   /* ------------------------------------------------- following the song */
+
+  window.addEventListener('director-scene', (e) => {
+    const kind = e.detail && e.detail.kind;
+    directedLook = kind ? SECTION_LOOK[kind] || SECTION_LOOK.verse : null;
+    applyLook();
+  });
 
   function trackChanged() {
     const key = currentTrack ? trackLookKey(currentTrack) : '';

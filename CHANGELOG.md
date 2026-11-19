@@ -7,6 +7,23 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## Unreleased
+
+- **🎬 Director 2.0 — it directs a song from its first play, and every cut
+  lands.** It used to learn a song's sections only after hearing half of it,
+  so a new song from Spotify or YouTube sat on one look; it now reads the
+  sections off what you are hearing as it plays (judged against the song's
+  own loudest part, held long enough never to flicker). Scene changes wait
+  for the next bar line, and each one is covered: a white hit into a drop, a
+  dip to black into a quiet part, a bloom in the song's colour otherwise — so
+  a switch (and a shader warming up) is never a raw cut. A drop now cuts in
+  once per section and never in a quiet one. Fixed: the song's own look no
+  longer jumps back over the Director's scene when its mood arrives.
+- **Video Director.** With ▶ Video and 🎬 Director both on, the video's
+  style follows the song too: dreamy and alone in the intro, natural under
+  soft visuals in a verse, tightening through a build, neon under full
+  visuals with a harder kick punch on the drop, noir in a break.
+
 ## 0.62.2 — 2026-11-19
 
 - **Fix: ▶ Video showed YouTube's "Video player configuration error" on
