@@ -19,6 +19,13 @@
 //! two network calls around it (search, then the candidates' durations,
 //! which the search endpoint does not return).
 //!
+//! **Without a key: the user's own yt-dlp.** If they have installed yt-dlp
+//! (video.rs, which also downloads with it), its `ytsearch` returns the same
+//! candidates — id, title, channel and running time in one call, no quota —
+//! and they go through the same `score`. The app still never scrapes YouTube
+//! itself; it drives a tool the user chose to install, exactly as it does
+//! for downloads. With neither, pasting the link works as before.
+//!
 //! Quota: a search costs 100 units of the 10,000 a free key gets per day, so
 //! about 100 lookups a day. The renderer only asks when a song has no
 //! remembered video, so a library played on repeat costs nothing.
@@ -44,6 +51,9 @@ pub struct Candidate {
     pub title: String,
     pub channel: String,
     pub duration_secs: Option<u64>,
+    /// View count when the source reports one (yt-dlp does; the API search
+    /// does not, and a second quota-costing call is not worth it for this).
+    pub views: Option<u64>,
 }
 
 /// `PT3M45S` → 225. YouTube's contentDetails.duration is ISO 8601.
@@ -124,10 +134,23 @@ pub fn score(c: &Candidate, artist: &str, title: &str, song_secs: Option<u64>) -
         return -10.0;
     }
     s += 2.0;
-    // The artist's own channel, or VEVO, or the artist named in the title.
+    // The artist's own channel counts for more than the artist merely being
+    // named in the title: re-uploads copy the official title word for word
+    // ("Rick Astley - Never Gonna Give You Up (Official Music Video)" from
+    // a channel called "Enjoy it") and used to tie with the real thing.
     let first_artist = sa.split(" feat ").next().unwrap_or(&sa).split(" x ").next().unwrap_or(&sa).trim().to_string();
-    if !first_artist.is_empty() && (ch.contains(&first_artist) || vt.contains(&first_artist)) {
-        s += 2.0;
+    if !first_artist.is_empty() {
+        if ch.contains(&first_artist) {
+            s += 2.0;
+        } else if vt.contains(&first_artist) {
+            s += 1.0;
+        }
+    }
+    // Popularity, gently: log-scaled so it breaks ties between otherwise
+    // equal uploads (1.8B views ≈ +0.93, 25k ≈ +0.44) but cannot carry a
+    // lyric video or a live cut past the penalties above and below.
+    if let Some(v) = c.views.filter(|v| *v > 0) {
+        s += ((v as f64).log10() / 10.0).min(1.0);
     }
     if c.channel.trim_end().ends_with("VEVO") {
         s += 1.5;
@@ -173,13 +196,36 @@ pub fn best(cands: &[Candidate], artist: &str, title: &str, song_secs: Option<u6
         .iter()
         .map(|c| (c.clone(), score(c, artist, title, song_secs)))
         .filter(|(_, s)| *s >= MIN_SCORE)
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        // First of the best: on an exact tie YouTube's own ranking (result
+        // order) decides, where max_by would take the LAST one.
+        .fold(None::<(Candidate, f64)>, |acc, cur| match acc {
+            Some(a) if a.1 >= cur.1 => Some(a),
+            _ => Some(cur),
+        })
 }
 
 /// Search YouTube for the song's music video. `Ok(None)` is "searched, found
-/// nothing good"; `Err` is "could not search" (no key, quota, network).
+/// nothing good"; `Err` is "could not search" (no key or yt-dlp, quota,
+/// network). The API when there is a key, else the user's yt-dlp.
 pub fn find(artist: &str, title: &str, duration_ms: u64) -> Result<Option<(Candidate, f64)>, String> {
-    let key = api_key().ok_or_else(|| "no YouTube API key — add one in Settings, or paste the video's link".to_string())?;
+    find_with(api_key(), crate::video::ytdlp(), artist, title, duration_ms)
+}
+
+fn find_with(
+    key: Option<String>,
+    ytdlp: Option<std::path::PathBuf>,
+    artist: &str,
+    title: &str,
+    duration_ms: u64,
+) -> Result<Option<(Candidate, f64)>, String> {
+    let song_secs = (duration_ms > 0).then_some(duration_ms / 1000);
+    let Some(key) = key else {
+        let exe = ytdlp.ok_or_else(|| {
+            "no YouTube API key — add one in Settings, install yt-dlp, or paste the video's link".to_string()
+        })?;
+        let cands = search_ytdlp(&exe, artist, title)?;
+        return Ok(best(&cands, artist, title, song_secs));
+    };
     let q = format!("{artist} {title} official video");
     let resp = ureq::get(SEARCH)
         .query("part", "snippet")
@@ -203,6 +249,7 @@ pub fn find(artist: &str, title: &str, duration_ms: u64) -> Result<Option<(Candi
                         title: unescape(it["snippet"]["title"].as_str().unwrap_or("")),
                         channel: unescape(it["snippet"]["channelTitle"].as_str().unwrap_or("")),
                         duration_secs: None,
+                        views: None,
                     })
                 })
                 .collect()
@@ -229,8 +276,41 @@ pub fn find(artist: &str, title: &str, duration_ms: u64) -> Result<Option<(Candi
             }
         }
     }
-    let song_secs = (duration_ms > 0).then_some(duration_ms / 1000);
     Ok(best(&cands, artist, title, song_secs))
+}
+
+/// Candidates from `yt-dlp --flat-playlist -J "ytsearch8:..."`. A flat search
+/// lists each result's id, title, channel and duration without resolving
+/// any video, so it is one quick request.
+fn search_ytdlp(exe: &std::path::Path, artist: &str, title: &str) -> Result<Vec<Candidate>, String> {
+    let query = format!("ytsearch8:{artist} {title} official video");
+    let args = ["--flat-playlist", "-J", "--no-warnings", "--", query.as_str()].map(String::from);
+    let out = crate::localcli::run_direct(&exe.to_string_lossy(), &args, Duration::from_secs(25), None)
+        .map_err(|e| format!("yt-dlp search failed: {e}"))?;
+    Ok(parse_ytdlp_search(&out))
+}
+
+/// The candidates in yt-dlp's `-J` output for a flat search.
+pub fn parse_ytdlp_search(json: &str) -> Vec<Candidate> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
+    v["entries"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|e| {
+                    let id = e["id"].as_str().filter(|id| crate::video::valid_id(id))?;
+                    Some(Candidate {
+                        id: id.to_string(),
+                        title: e["title"].as_str().unwrap_or("").to_string(),
+                        channel: e["channel"].as_str().or_else(|| e["uploader"].as_str()).unwrap_or("").to_string(),
+                        duration_secs: e["duration"].as_f64().filter(|d| *d > 0.0).map(|d| d.round() as u64),
+                        views: e["view_count"].as_u64(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A message a person can act on, from a failed API call.
@@ -255,7 +335,7 @@ mod tests {
     use super::*;
 
     fn c(title: &str, channel: &str, secs: u64) -> Candidate {
-        Candidate { id: title.into(), title: title.into(), channel: channel.into(), duration_secs: Some(secs) }
+        Candidate { id: title.into(), title: title.into(), channel: channel.into(), duration_secs: Some(secs), views: None }
     }
 
     #[test]
@@ -321,9 +401,69 @@ mod tests {
     }
 
     #[test]
-    fn without_a_key_find_says_so_instead_of_calling_out() {
-        std::env::remove_var(KEY_NAME);
-        let err = find("a", "b", 0).unwrap_err();
-        assert!(err.contains("API key"), "{err}");
+    fn without_a_key_or_ytdlp_find_says_so_instead_of_calling_out() {
+        let err = find_with(None, None, "a", "b", 0).unwrap_err();
+        assert!(err.contains("API key") && err.contains("yt-dlp"), "{err}");
+    }
+
+    #[test]
+    fn ytdlp_search_output_becomes_ranked_candidates() {
+        let json = r#"{"_type":"playlist","entries":[
+          {"id":"AAAAAAAAAAA","title":"Artist - Song (Lyrics)","channel":"Lyric Hub","duration":214.0},
+          {"id":"BBBBBBBBBBB","title":"Artist - Song (Official Video)","channel":"ArtistVEVO","duration":236.0},
+          {"id":"not-an-id","title":"junk","channel":"x","duration":10},
+          {"id":"CCCCCCCCCCC","title":"Song","uploader":"Artist - Topic","duration":null}
+        ]}"#;
+        let cands = parse_ytdlp_search(json);
+        assert_eq!(cands.len(), 3, "an invalid id is dropped");
+        assert_eq!(cands[2].channel, "Artist - Topic", "uploader stands in for a missing channel");
+        assert_eq!(cands[2].duration_secs, None);
+        let (pick, _) = best(&cands, "Artist", "Song", Some(214)).expect("a pick");
+        assert_eq!(pick.id, "BBBBBBBBBBB");
+    }
+
+    /// The real search that exposed the tie (2026-11-19): a re-upload copying
+    /// the official title used to score level with the official video and,
+    /// being later in the list, win.
+    #[test]
+    fn the_artists_own_upload_beats_a_reupload_with_the_same_title() {
+        let mk = |id: &str, title: &str, channel: &str, secs, views| Candidate {
+            id: id.into(), title: title.into(), channel: channel.into(), duration_secs: Some(secs), views: Some(views),
+        };
+        let cands = vec![
+            mk("dQw4w9WgXcQ", "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)", "Rick Astley", 214, 1_838_766_163),
+            mk("LM8dsLtUs2A", "Rick Astley - Never Gonna Give You Up (Official Music Video)", "Rick Astley", 213, 492),
+            mk("LQ4w9xiHkrY", "Rick Astley - Never Gonna Give You Up [Remastered In 4K] (Official Music Video)", "Enjoy it🤍", 212, 25_746),
+            mk("7FwDP17XPlk", "Rick Astley - Never Gonna Give You Up", "Amazing Lyrics", 214, 1_257_187),
+        ];
+        let (pick, _) = best(&cands, "Rick Astley", "Never Gonna Give You Up", Some(213)).unwrap();
+        assert_eq!(pick.id, "dQw4w9WgXcQ");
+    }
+
+    #[test]
+    fn on_an_exact_tie_the_first_result_wins() {
+        let a = c("Artist - Song (Official Video)", "Artist", 200);
+        let mut b = a.clone();
+        b.id = "second".into();
+        let (pick, _) = best(&[a.clone(), b], "Artist", "Song", Some(200)).unwrap();
+        assert_eq!(pick.id, a.id);
+    }
+
+    #[test]
+    fn unreadable_ytdlp_output_is_no_candidates() {
+        assert!(parse_ytdlp_search("").is_empty());
+        assert!(parse_ytdlp_search("{\"entries\": 5}").is_empty());
+    }
+
+    /// Live: `LYRIC_TEST_YTDLP=/path/to/yt-dlp cargo test --workspace --
+    /// --ignored real_ytdlp_search`.
+    #[test]
+    #[ignore]
+    fn real_ytdlp_search_finds_an_official_video() {
+        let exe = std::env::var("LYRIC_TEST_YTDLP").map(std::path::PathBuf::from).expect("set LYRIC_TEST_YTDLP");
+        let found = find_with(None, Some(exe), "Rick Astley", "Never Gonna Give You Up", 213_000).expect("search ran");
+        let (c, score) = found.expect("a match");
+        eprintln!("picked {} — {} · {} ({:?}s, score {score:.1})", c.id, c.title, c.channel, c.duration_secs);
+        assert_eq!(c.id, "dQw4w9WgXcQ");
     }
 }

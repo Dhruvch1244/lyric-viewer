@@ -345,7 +345,7 @@
              a link. -->
         <div class="keybox__local">
           <label class="keybox__label" for="keybox-youtube">YouTube API key — find music videos automatically</label>
-          <span class="keybox__note">Optional: without it, paste a song's video link once in ▶ Video.
+          <span class="keybox__note">Optional: without it, ▶ Video searches with yt-dlp if you have it installed, or you paste a song's video link once.
             Free from console.cloud.google.com (YouTube Data API v3).</span>
           <input id="keybox-youtube" class="keybox__input" type="password"
                  placeholder="YouTube Data API v3 key" autocomplete="off" spellcheck="false" />
@@ -638,7 +638,7 @@
         <div class="mvp__row">
           <input id="mv-link" class="looks__search mvp__link" type="text" placeholder="Paste the song's YouTube link" autocomplete="off" spellcheck="false" />
           <button id="mv-use" class="chip" type="button">Use</button>
-          <button id="mv-find" class="chip" type="button" title="Search YouTube for the official video (needs a YouTube API key in Settings)">Find</button>
+          <button id="mv-find" class="chip" type="button" title="Search YouTube for the official video (uses your YouTube API key from Settings, or your yt-dlp if you have one)">Find</button>
         </div>
         <div class="mvp__row">
           <button id="mv-download" class="chip" type="button" disabled>⬇ Download</button>

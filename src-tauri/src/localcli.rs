@@ -382,7 +382,7 @@ fn run_cli(file: &str, args: &[String], timeout: Duration, stdin_data: &str) -> 
 /// drained on their own threads throughout (not just after exit) so a CLI
 /// that writes more than fits in one pipe buffer before exiting can't
 /// deadlock the wait.
-fn run_direct(program: &str, args: &[String], timeout: Duration, stdin_data: Option<&str>) -> Result<String, String> {
+pub(crate) fn run_direct(program: &str, args: &[String], timeout: Duration, stdin_data: Option<&str>) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]

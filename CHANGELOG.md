@@ -38,6 +38,12 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   picks one per section: the split tightening through a build, the
   kaleidoscope on the drop, neon outlines in a break.
 
+- **Find works without an API key** when yt-dlp is installed: it searches
+  with your yt-dlp and ranks the results the same way. Ranking fixed: a
+  re-upload copying the official title could tie with the real video and
+  win; the artist's own channel now counts for more than their name in a
+  title, and popularity breaks ties.
+
 ## 0.62.2 — 2026-11-19
 
 - **Fix: ▶ Video showed YouTube's "Video player configuration error" on
