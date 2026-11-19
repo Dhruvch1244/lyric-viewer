@@ -269,6 +269,7 @@ pub fn run() {
             commands::misc::find_music_video,
             commands::misc::video_tools,
             commands::misc::local_video_for,
+            commands::misc::playable_video,
             commands::misc::download_music_video,
             commands::misc::pick_video_file,
             commands::lyrics_cmds::choose_lyrics_candidate,

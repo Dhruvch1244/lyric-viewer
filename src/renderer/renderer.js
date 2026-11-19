@@ -5371,6 +5371,10 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.63.1': [
+    '<b>▶ Video from disk plays smoothly on Linux</b> — downloaded videos no longer stutter or loop (your ffmpeg quietly fixes the file).',
+    '<b>Switch between your file and YouTube</b> any time from the ▶ Video panel, remembered per song.',
+  ],
   '0.63.0': [
     '<b>🎬 Director 2.0</b> (D) — directs a song from its first play, and every scene change lands on the beat behind a flash, a dip or a glow.',
     '<b>▶ Video from disk</b> — ⬇ Download with your own yt-dlp, or 📁 link a file: tighter sync, offline, and <b>effects on the footage</b> (Kaleido, RGB split, Mosaic, Neon edges, Mirror).',

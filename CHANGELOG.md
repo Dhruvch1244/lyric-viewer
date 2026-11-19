@@ -7,6 +7,26 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## 0.63.1 — 2026-11-19
+
+- **▶ Video from disk actually plays on Linux.** yt-dlp saves YouTube's
+  video-only stream as a *fragmented* MP4, which WebKitGTK cannot play from
+  memory: it ran ~5 seconds, jumped to the end, was seeked back, and looped
+  like that — the video stuttered or never showed. Downloads are now
+  rewritten as a regular MP4 with your own ffmpeg (a stream copy, about a
+  fifth of a second; nothing is re-encoded), and videos you already
+  downloaded are fixed the next time they play. A fragmented file you link
+  with 📁 Open file… plays from a fixed copy — your own file is never
+  touched. Without ffmpeg the app says so and falls back to YouTube instead
+  of looping.
+- **Smooth video playback on Linux.** Keeping the video in time used to
+  nudge its speed ten times a second, and on WebKitGTK every speed change
+  stalls the picture: measured 4 fps instead of 25. It now only corrects
+  drift past 0.12s, at one gentle ±5%, back to full frame rate.
+- **Switch between your file and YouTube.** A song with both a downloaded or
+  linked video and a YouTube one gets a ▶ Switch to YouTube / 💾 Switch to
+  downloaded copy button in the ▶ Video panel, remembered per song.
+
 ## 0.63.0 — 2026-11-19
 
 - **🎬 Director 2.0 — it directs a song from its first play, and every cut

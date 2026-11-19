@@ -225,4 +225,28 @@ mod tests {
             assert_eq!(package_name("0.60.0"), "lyric-overlay-0.60.0-1-x86_64.pkg.tar.zst");
         }
     }
+
+    /// Live: the latest published release, end to end, exactly as an
+    /// installed Arch build sees it — `latest.json`, then the package and its
+    /// `.sig`, verified against the real public key in tauri.conf.json. A
+    /// release signed without the key (release.yml only warns) or with a
+    /// different one fails here instead of silently on every user's machine.
+    /// `cargo test --workspace -- --ignored real_release`. Needs network.
+    #[test]
+    #[ignore]
+    fn real_release_package_verifies_against_the_app_key() {
+        let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let key = conf["plugins"]["updater"]["pubkey"].as_str().unwrap();
+        let get = |url: &str| ureq::get(url).timeout(TIMEOUT).call().unwrap_or_else(|e| panic!("{url}: {e}"));
+        let manifest: Value =
+            get(&format!("https://github.com/{REPO}/releases/latest/download/latest.json")).into_json().unwrap();
+        let version = manifest["version"].as_str().unwrap();
+        let name = package_name(version);
+        let base = format!("https://github.com/{REPO}/releases/download/v{version}");
+        let mut data = Vec::new();
+        get(&format!("{base}/{name}")).into_reader().read_to_end(&mut data).unwrap();
+        let sig = get(&format!("{base}/{name}.sig")).into_string().unwrap();
+        verify(&data, &sig, key).unwrap_or_else(|e| panic!("{name}: {e}"));
+        eprintln!("{name}: {} bytes, signature OK", data.len());
+    }
 }

@@ -319,11 +319,38 @@ pub(crate) fn video_tools() -> Value {
     json!({ "ytdlp": crate::video::ytdlp().is_some() })
 }
 
-/// A finished download for this YouTube id, if one is on disk.
+/// A finished download for this YouTube id, if one is on disk. A download
+/// still in YouTube's fragmented DASH layout (anything saved before
+/// `DownloadJob` started remuxing) is remuxed here first, since WebKitGTK
+/// cannot play one from a blob (`video::is_fragmented`). Done inline rather
+/// than as a job because the renderer is waiting on this answer to load the
+/// video, and it happens once per file; `(async)` keeps it off the main thread.
 #[tauri::command(async)]
 pub(crate) fn local_video_for(app: AppHandle, id: String) -> Value {
     let path = crate::video::videos_dir(&app).and_then(|d| crate::video::cached_in(&d, &id));
-    json!({ "path": path.map(|p| p.to_string_lossy().into_owned()) })
+    let mut warning = None;
+    if let Some(p) = &path {
+        match crate::video::defragment(p) {
+            Ok(false) if crate::video::is_fragmented(p) => warning = Some(crate::video::FRAGMENTED_NO_FFMPEG),
+            Err(e) => eprintln!("[video] {e}"),
+            _ => {}
+        }
+    }
+    json!({ "path": path.map(|p| p.to_string_lossy().into_owned()), "warning": warning })
+}
+
+/// The file to actually play for a video the user linked: the file itself,
+/// or a regular-MP4 copy of a fragmented one (`video::playable_linked` — the
+/// user's own file is never rewritten). `(async)`: it may run ffmpeg.
+#[tauri::command(async)]
+pub(crate) fn playable_video(app: AppHandle, path: String) -> Value {
+    let src = std::path::PathBuf::from(&path);
+    let Some(videos) = crate::video::videos_dir(&app) else { return json!({ "path": path }) };
+    match crate::video::playable_linked(&videos, &src) {
+        Ok(Some(copy)) => json!({ "path": copy.to_string_lossy() }),
+        Ok(None) => json!({ "path": path }),
+        Err(e) => json!({ "path": path, "warning": e }),
+    }
 }
 
 /// Download a music video with the user's yt-dlp, as a job (progress arrives
