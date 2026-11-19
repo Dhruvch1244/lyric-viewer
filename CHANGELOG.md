@@ -7,6 +7,12 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## 0.62.1 — 2026-11-19
+
+- **Fix: ▶ Video showed a black screen instead of the music video.** The
+  page's security policy didn't allow YouTube's player frame, so it was
+  blocked without any error. The video now plays.
+
 ## 0.62.0 — 2026-11-18
 
 - **▶ Music video — the song's video, playing in time under the visuals.**

@@ -5265,6 +5265,9 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.62.1': [
+    '<b>▶ Music video fixed</b> — the video now actually plays under the visuals instead of a black screen.',
+  ],
   '0.62.0': [
     '<b>▶ Music video</b> — the song\'s video, muted, playing in time under the visuals, with colour grades. More → ▶ Video; [ and ] fix the sync.',
     '<b>🎬 Director</b> (D) — the look follows the song: calm intros, harder builds, the heaviest scenes on drops. Plus <b>Prism Remix</b> and <b>Cover 3D</b>.',
