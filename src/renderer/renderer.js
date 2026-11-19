@@ -5371,6 +5371,11 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.63.0': [
+    '<b>🎬 Director 2.0</b> (D) — directs a song from its first play, and every scene change lands on the beat behind a flash, a dip or a glow.',
+    '<b>▶ Video from disk</b> — ⬇ Download with your own yt-dlp, or 📁 link a file: tighter sync, offline, and <b>effects on the footage</b> (Kaleido, RGB split, Mosaic, Neon edges, Mirror).',
+    '<b>Find without an API key</b> when yt-dlp is installed, and it now picks the official video over re-uploads.',
+  ],
   '0.62.2': [
     '<b>▶ Music video fixed on Linux and macOS</b> — no more "Video player configuration error".',
   ],

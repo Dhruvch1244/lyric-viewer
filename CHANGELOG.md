@@ -7,7 +7,7 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
-## Unreleased
+## 0.63.0 — 2026-11-19
 
 - **🎬 Director 2.0 — it directs a song from its first play, and every cut
   lands.** It used to learn a song's sections only after hearing half of it,
