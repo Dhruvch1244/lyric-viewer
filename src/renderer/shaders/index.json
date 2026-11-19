@@ -261,5 +261,21 @@
   "file": "cover3d.fs",
   "credit": "Lyric Overlay",
   "library": "cover"
+ },
+ {
+  "name": "Cover Earth",
+  "file": "cover-earth.fs",
+  "credit": "Lyric Overlay",
+  "library": "cover",
+  "params": [
+   "zoom",
+   "speed"
+  ]
+ },
+ {
+  "name": "Cover Glass",
+  "file": "cover-glass.fs",
+  "credit": "Lyric Overlay",
+  "library": "cover"
  }
 ]

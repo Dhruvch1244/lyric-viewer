@@ -7,6 +7,32 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## 0.64.0 — 2026-11-19
+
+- **The cover, in motion — two new looks.** **Cover Earth** dives endlessly
+  into the album art, Google Earth style: the cover holds a smaller copy of
+  itself at its centre, which fades in as the camera nears it, so the loop
+  never jumps and the cover's middle (usually a face) is never hidden. The
+  dive is tempo-locked, surges on each kick, and on a drop throws itself
+  into reverse — the pull back out to orbit. **Cover Glass** is the Apple
+  Music look: a soft, slowly flowing wash of the cover's own colours behind
+  the sharp, rounded cover, which breathes with the beat, slowly zooms, and
+  catches a sheen of light on a drop. The 🎬 Director now uses Cover Glass
+  for quiet passages too.
+- **Ten new effects on a downloaded music video, three of them only
+  possible from disk.** **Echo trails** (each frame over a zooming, turning
+  copy of the last — the VJ feedback loop), **Time warp** (slit-scan: every
+  row a different moment of the last second) and **Datamosh** (old pixels
+  slide along the motion and only refresh where the video changes) all need
+  the video's past frames, which YouTube's player never gives up. Plus
+  **Neon glow**, **Neon halftone**, **Glitch**, **Zoom rush**, **Tunnel**,
+  **Dive** (an endless zoom into the video) and **Thermal**. All measured at
+  a full 61-62 fps in WebKitGTK on 720p footage.
+- **Five new neon-family grades:** Ultra neon, Cyber (pink/cyan), Acid,
+  Sunset and Neon negative.
+- **Video Director:** builds now rush (Zoom rush), drops glow (Neon glow),
+  outros trail (Echo).
+
 ## 0.63.1 — 2026-11-19
 
 - **▶ Video from disk actually plays on Linux.** yt-dlp saves YouTube's

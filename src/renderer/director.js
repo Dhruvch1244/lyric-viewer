@@ -24,7 +24,7 @@
 
 (function () {
   /* Overlay looks that suit a quiet passage under lyrics. */
-  const CALM_OVERLAY = ['liquid', 'starfield', 'vinyl', 'wormhole', 'cover3d'];
+  const CALM_OVERLAY = ['liquid', 'starfield', 'vinyl', 'wormhole', 'cover3d', 'coverglass'];
 
   /* Shader scenes by how hard they hit. Names are catalogue names
      (shaders/index.json). */
