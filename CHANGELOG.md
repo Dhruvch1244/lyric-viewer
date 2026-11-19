@@ -7,6 +7,13 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## 0.62.2 — 2026-11-19
+
+- **Fix: ▶ Video showed YouTube's "Video player configuration error" on
+  Linux and macOS.** YouTube only plays embeds on a real website, and the
+  app's page isn't one there. The video now plays through a small relay page
+  on the Lyric Overlay website, the same way on every platform.
+
 ## 0.62.1 — 2026-11-19
 
 - **Fix: ▶ Video showed a black screen instead of the music video.** The

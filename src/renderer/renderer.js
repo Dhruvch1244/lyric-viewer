@@ -5265,6 +5265,9 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.62.2': [
+    '<b>▶ Music video fixed on Linux and macOS</b> — no more "Video player configuration error".',
+  ],
   '0.62.1': [
     '<b>▶ Music video fixed</b> — the video now actually plays under the visuals instead of a black screen.',
   ],
