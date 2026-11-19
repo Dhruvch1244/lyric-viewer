@@ -75,6 +75,16 @@ if (-not $SkipBuild) {
         # copied during BUNDLING, so the overlay config would do nothing here.
         # The MSIX layout below places it beside the app exe by hand, which is
         # exactly where inference.rs::sidecar_path looks for it at runtime.
+        # Cargo 1.100's deeper build-script layout sends ort-sys's DirectML.dll
+        # copy into target\release\build\{examples,deps}, which do not exist,
+        # and the build script panics ("The system cannot find the path
+        # specified"). scripts/vendor-sidecar.js pre-creates them for the NSIS
+        # release (1c82687); this script builds the sidecar itself, so it must
+        # too — without it every Store build since 0.62.1 failed here. Nothing
+        # ships from those folders: ONNX Runtime is linked statically.
+        foreach ($sub in 'examples', 'deps') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $srcTauri "target\release\build\$sub") | Out-Null
+        }
         Write-Host "==> cargo build --release -p lyric-inference" -ForegroundColor Cyan
         & cargo build --release --manifest-path (Join-Path $srcTauri 'Cargo.toml') -p lyric-inference
         if ($LASTEXITCODE -ne 0) { throw "sidecar build failed (exit $LASTEXITCODE)" }
