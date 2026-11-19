@@ -3052,6 +3052,14 @@ html.webkitgtk * {
   position: absolute;
   inset: 0;
 }
+.mv-frame video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 .mv-frame iframe {
   position: absolute;
   top: 50%;
@@ -3089,6 +3097,7 @@ body.mv-on.mv-mix-off #backdrop { opacity: 0; }
 .mvp__body { display: flex; flex-direction: column; gap: 0.6rem; padding: 0 1rem 1rem; }
 .mvp__row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .mvp__link { flex: 1 1 14rem; min-width: 0; }
+.mvp__source { opacity: 0.7; font-size: 0.85em; }
 .mvp__offset { min-width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* 🎬 Director's cut veil (renderer.js playVeil). Opacity is animated with the

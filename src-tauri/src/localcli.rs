@@ -248,7 +248,7 @@ pub fn detect() -> Value {
 /// — Claude's own installer puts it in `~/.local/bin`, which a Hyprland or
 /// GNOME session started by a display manager often does not have. So PATH,
 /// then those directories.
-fn resolve_cmd(cmd: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn resolve_cmd(cmd: &str) -> Option<std::path::PathBuf> {
     if cfg!(windows) {
         let out = run_direct("where", &[cmd.to_string()], DETECT_TIMEOUT, None).ok()?;
         return out.lines().map(str::trim).find(|l| !l.is_empty()).map(std::path::PathBuf::from);

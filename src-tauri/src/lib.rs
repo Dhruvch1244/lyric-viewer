@@ -54,6 +54,7 @@ mod netease;
 mod presets;
 mod stats;
 mod wiki;
+mod video;
 mod youtube;
 #[cfg(target_os = "linux")]
 mod mpris;
@@ -266,6 +267,10 @@ pub fn run() {
             commands::lyrics_cmds::clear_manual_lyrics,
             commands::lyrics_cmds::search_lyrics,
             commands::misc::find_music_video,
+            commands::misc::video_tools,
+            commands::misc::local_video_for,
+            commands::misc::download_music_video,
+            commands::misc::pick_video_file,
             commands::lyrics_cmds::choose_lyrics_candidate,
             commands::misc::resync_smtc,
             commands::playback::open_local_files,

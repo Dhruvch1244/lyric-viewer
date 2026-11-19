@@ -310,3 +310,53 @@ pub(crate) fn find_music_video(artist: String, title: String, duration_ms: u64) 
         Err(message) => json!({ "status": "error", "message": message }),
     }
 }
+
+/// What ▶ Video's local mode can do here: whether the user has their own
+/// yt-dlp (video.rs explains why the app never ships one). `(async)`: the
+/// lookup can shell out to `where` on Windows.
+#[tauri::command(async)]
+pub(crate) fn video_tools() -> Value {
+    json!({ "ytdlp": crate::video::ytdlp().is_some() })
+}
+
+/// A finished download for this YouTube id, if one is on disk.
+#[tauri::command(async)]
+pub(crate) fn local_video_for(app: AppHandle, id: String) -> Value {
+    let path = crate::video::videos_dir(&app).and_then(|d| crate::video::cached_in(&d, &id));
+    json!({ "path": path.map(|p| p.to_string_lossy().into_owned()) })
+}
+
+/// Download a music video with the user's yt-dlp, as a job (progress arrives
+/// as `video-download` events). Returns at once.
+#[tauri::command(async)]
+pub(crate) fn download_music_video(app: AppHandle, id: String) -> Value {
+    if !crate::video::valid_id(&id) {
+        return json!({ "status": "error", "message": "not a YouTube video id" });
+    }
+    let Some(dir) = crate::video::videos_dir(&app) else {
+        return json!({ "status": "error", "message": "no app data folder" });
+    };
+    if let Some(path) = crate::video::cached_in(&dir, &id) {
+        return json!({ "status": "done", "path": path.to_string_lossy() });
+    }
+    let Some(exe) = crate::video::ytdlp() else {
+        return json!({ "status": "error", "message": "yt-dlp is not installed" });
+    };
+    let started = crate::jobs::submit(crate::video::DownloadJob { app, id, exe, dir }, crate::jobs::Priority::Now);
+    json!({ "status": if started { "started" } else { "running" } })
+}
+
+/// Pick a video file to link to the playing song. `(async)` for the same
+/// blocking-picker deadlock as `open_local_files`.
+#[tauri::command(async)]
+pub(crate) fn pick_video_file(app: AppHandle) -> Value {
+    use tauri::Manager as _;
+    use tauri_plugin_dialog::DialogExt;
+    let _surfaced = crate::state::AlwaysOnTopGuard::engage(&app);
+    let mut builder = app.dialog().file().add_filter("Video", crate::video::VIDEO_EXTS);
+    if let Some(win) = app.get_webview_window("main") {
+        builder = builder.set_parent(&win);
+    }
+    let path = builder.blocking_pick_file().and_then(|p| p.into_path().ok());
+    json!({ "path": path.map(|p| p.to_string_lossy().into_owned()) })
+}

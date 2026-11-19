@@ -24,6 +24,14 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
   soft visuals in a verse, tightening through a build, neon under full
   visuals with a harder kick punch on the drop, noir in a break.
 
+- **▶ Video can play from your disk.** ⬇ Download saves the song's video
+  with *your own* `yt-dlp` (shown when it is installed — `pacman -S yt-dlp`,
+  `pip install yt-dlp` or `winget install yt-dlp`; the app never ships a
+  downloader) and plays it from there; 📁 Open file… links any video you
+  already have. A file is kept in time far more tightly than the YouTube
+  player — it is steered by its playback speed instead of re-seeked, and
+  learns how late a seek lands — works offline, and is remembered per song.
+
 ## 0.62.2 — 2026-11-19
 
 - **Fix: ▶ Video showed YouTube's "Video player configuration error" on
