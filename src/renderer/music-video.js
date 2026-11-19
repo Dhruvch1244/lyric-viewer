@@ -199,11 +199,11 @@
      switch under the veil. */
   const SECTION_LOOK = {
     intro: { grade: 'dream', mix: 'off', punch: 0.3, ramp: 0.3, fx: 'none' },
-    outro: { grade: 'dream', mix: 'soft', punch: 0.3, ramp: 0.3, fx: 'mirror' },
+    outro: { grade: 'dream', mix: 'soft', punch: 0.3, ramp: 0.3, fx: 'echo' },
     break: { grade: 'none', mix: 'off', punch: 0.35, ramp: 0.3, fx: 'edges' },
     verse: { grade: 'song', mix: 'soft', punch: 0.5, ramp: 0.3, fx: 'none' },
-    build: { grade: 'neon', mix: 'soft', punch: 0.75, ramp: 8, fx: 'split' },
-    drop: { grade: 'neon', mix: 'full', punch: 1, ramp: 0.15, fx: 'kaleido' },
+    build: { grade: 'neon', mix: 'soft', punch: 0.75, ramp: 8, fx: 'zoomblur' },
+    drop: { grade: 'neon', mix: 'full', punch: 1, ramp: 0.15, fx: 'neonglow' },
   };
   let directedLook = null;
   let directedAt = 0;
@@ -227,6 +227,13 @@
     dream: 'blur(2px) saturate(1.35) brightness(0.85)',
     vhs: 'sepia(0.35) saturate(1.5) hue-rotate(-12deg) contrast(1.12) blur(0.6px)',
     song: 'saturate(0.6) contrast(1.1)',
+    // The neon family, pushed further: pinks and cyans, acid greens, a hot
+    // sunset, and a negative where the darks glow.
+    ultra: 'saturate(2.6) contrast(1.35) brightness(1.08)',
+    cyber: 'saturate(2.2) contrast(1.3) hue-rotate(-30deg) brightness(1.05)',
+    acid: 'saturate(3) hue-rotate(95deg) contrast(1.25)',
+    sunset: 'sepia(0.55) saturate(2.4) hue-rotate(-25deg) contrast(1.15)',
+    negative: 'invert(1) hue-rotate(180deg) saturate(2.2) contrast(1.15)',
   };
 
   function remember() {

@@ -291,7 +291,22 @@
       in the Overlay mode with the other looks built from the song itself,
       not in the Shaders rotation — `family` says so.
     */
-    { id: 'cover3d', name: 'Cover 3D', cost: 2, engine: 'isf', shader: 'Cover 3D', family: 'overlay', soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    { id: 'cover3d', name: 'Cover 3D', cost: 2, engine: 'isf', shader: 'Cover 3D', family: 'overlay', coverArt: true, soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    /*
+      Cover Earth: an endless Google Earth-style dive into the cover, which
+      holds a smaller copy of itself at its centre (shaders/cover-earth.fs).
+      Its zoom is integrated in renderer.js (coverEarthParams), not derived
+      from TIME, so the dive can surge on a kick and reverse on a drop
+      without ever jumping.
+    */
+    { id: 'coverearth', name: 'Cover Earth', cost: 2, engine: 'isf', shader: 'Cover Earth', family: 'overlay', coverArt: true, soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
+    /*
+      Cover Glass: the Apple Music look — a flowing wash of the cover's own
+      colours behind the sharp cover card, which breathes and slowly zooms
+      (shaders/cover-glass.fs; the wash's blurred copy comes from
+      renderer.js's feedCoverArt).
+    */
+    { id: 'coverglass', name: 'Cover Glass', cost: 2, engine: 'isf', shader: 'Cover Glass', family: 'overlay', coverArt: true, soloLayer: true, transparentBg: true, layers: {}, swirl: {} },
   ];
 
   const DEFAULT_ID = 'liquid';

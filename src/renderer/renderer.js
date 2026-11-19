@@ -3118,13 +3118,29 @@ function applyShaderScale(now) {
 }
 
 /*
-  Cover 3D's pictures: the cover and its depth map (cover3d.js), built once
-  per cover — the depth pass reads the image back (getImageData), which is a
-  few milliseconds on a 128px copy and must not happen per frame. A song with
-  no art gets a placeholder in the accent hue until its cover arrives.
+  The cover looks' pictures (Cover 3D, Cover Earth, Cover Glass): the cover,
+  its depth map (cover3d.js) and a soft, blurred copy, built once per cover —
+  the depth pass reads the image back (getImageData), which is a few
+  milliseconds on a 128px copy and must not happen per frame. A song with no
+  art gets a placeholder in the accent hue until its cover arrives.
+
+  The soft copy is the cover drawn down to 12px and back up to 128: the
+  bilinear passes do the blurring, so no canvas `filter` (whose support
+  varies across WebView2/WebKitGTK versions) and no per-pixel loop.
 */
 let cover3dSource = null;
-function feedCover3D(fx) {
+function softCover(src) {
+  const tiny = document.createElement('canvas');
+  tiny.width = tiny.height = 12;
+  tiny.getContext('2d').drawImage(src, 0, 0, 12, 12);
+  const soft = document.createElement('canvas');
+  soft.width = soft.height = 128;
+  const g = soft.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(tiny, 0, 0, 128, 128);
+  return soft;
+}
+function feedCoverArt(fx) {
   if (!window.Cover3D || !fx.setImage) return;
   const key = artImage || `none|${currentTrack ? trackLookKey(currentTrack) : ''}`;
   if (key === cover3dSource) return;
@@ -3132,6 +3148,29 @@ function feedCover3D(fx) {
   const pics = window.Cover3D.prepare(artImage, Math.round(bgHue));
   fx.setImage('cover', pics.cover);
   fx.setImage('depthMap', pics.depth);
+  fx.setImage('soft', softCover(pics.cover));
+}
+
+/*
+  Cover Earth's dive, integrated frame to frame so it never jumps: about one
+  nested copy every eight beats at rest (tempo-locked when the beat is
+  known), surging on each kick, and on a drop thrown into reverse — the pull
+  back out to orbit — before easing back into the dive.
+*/
+let earthZoom = 0;
+let earthSpeed = 0;
+let earthAt = 0;
+function coverEarthParams(now, kick) {
+  const dt = earthAt ? Math.min(0.1, (now - earthAt) / 1000) : 0;
+  earthAt = now;
+  const beatSec = beatPeriodMs > 0 ? beatPeriodMs / 1000 : 0.5;
+  const cruise = 1 / (8 * beatSec);              // levels per second
+  let want = cruise * (1 + kick * 2.5);
+  if (dropFlash > 0.5) want = -cruise * 6 * dropFlash;
+  earthSpeed += (want - earthSpeed) * Math.min(1, dt * (want < earthSpeed ? 6 : 2.5));
+  earthZoom += earthSpeed * dt;
+  if (Math.abs(earthZoom) > 500) earthZoom %= 1; // keep the float precise
+  return { zoom: earthZoom, speed: earthSpeed / Math.max(0.05, cruise) };
 }
 
 function drawShaderEngine(preset, now, w, h) {
@@ -3173,7 +3212,10 @@ function drawShaderEngine(preset, now, w, h) {
   const punch = (v) => Math.min(1, Math.pow(Math.max(0, v), vi.shaderCurve) * vi.shaderGain);
   // Prism's mode is three shader inputs, not a shader of its own.
   if (preset.id === 'prism' && window.PrismLibrary) fx.setParams(prismParams(now));
-  if (preset.id === 'cover3d') feedCover3D(fx);
+  if (preset.coverArt) feedCoverArt(fx);
+  if (preset.id === 'coverearth') {
+    fx.setParams(coverEarthParams(now, (live ? audioEnv.kick : Math.min(1, beatFlash * 0.7)) * calm));
+  }
   fx.render({
     bass: punch(live ? audioEnv.bass : 0.25 + intensity * 0.3),
     mid: punch(live ? audioEnv.mid : 0.2),
@@ -5371,6 +5413,10 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.64.0': [
+    '<b>Cover Earth</b> — dive endlessly into the album art, and pull back out on the drop. <b>Cover Glass</b> — the cover over a flowing wash of its own colours.',
+    '<b>Ten new video effects</b> on a downloaded video — Echo trails, Time warp, Datamosh, Neon glow, Neon halftone, Glitch and more — plus five new neon grades.',
+  ],
   '0.63.1': [
     '<b>▶ Video from disk plays smoothly on Linux</b> — downloaded videos no longer stutter or loop (your ffmpeg quietly fixes the file).',
     '<b>Switch between your file and YouTube</b> any time from the ▶ Video panel, remembered per song.',

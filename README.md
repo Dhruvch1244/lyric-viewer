@@ -231,6 +231,9 @@ rather than a random shuffle of layers:
 | **Geometry** | The parametric curves are the subject; the field calms to a backdrop. |
 | **Concert** | Everything on. The loud one, for drops and parties. |
 | **Minimal** | The performance fallback the governor drops to, not an aesthetic. |
+| **Cover 3D** | The cover art as a lit relief the camera flies over, with real parallax from an estimated depth map. |
+| **Cover Earth** | An endless dive into the cover, Google Earth style: the cover holds a smaller copy of itself at its centre, which fades in as the camera nears it, so the loop never jumps and the whole cover stays visible. Tempo-locked, surging on the kick, and pulling back out on a drop. |
+| **Cover Glass** | The Apple Music look: a soft, slowly flowing wash of the cover's own colours behind the sharp, rounded cover, which breathes with the beat, zooms slowly in and out, and catches a sheen of light on a drop. |
 
 Each song remembers its own look. Ghost and Minimal are never assigned at
 random — they are modes you choose.
@@ -284,6 +287,26 @@ in `settings.json` under `%APPDATA%\com.dhruv.lyricoverlay\`.
 Timestamp accuracy is also improved at the source: the poller reports how *old* each
 position reading is (`stalenessMs`), and the Rust backend projects forward from that
 rather than trusting a value that may be seconds stale.
+
+## ▶ Music video effects
+
+A downloaded or linked video's pixels can be read, so the shaders work on the
+footage itself (YouTube's player is a cross-origin frame and cannot be). The
+panel's **Grade** colours it (Neon, Ultra neon, Cyber, Acid, Sunset, Neon
+negative, Song colours, Noir, Dream, VHS) and **Effect** reshapes it:
+
+- **Per frame:** Neon glow, Neon halftone, Neon edges, Glitch, RGB split,
+  Zoom rush, Tunnel, Dive (an endless zoom into the video), Kaleido, Mosaic,
+  Mirror, Thermal.
+- **Across frames** — only possible because the video is on disk: **Echo
+  trails** (each frame drawn over a zooming, turning copy of the last, the VJ
+  feedback loop), **Time warp** (slit-scan: every row shows a different moment
+  of the last second, from a 24-frame history), **Datamosh** (old pixels slide
+  along the motion and only refresh where the video changes).
+
+With 🎬 Director on, **Auto** picks per section: dreamy intro, Zoom rush
+through a build, Neon glow on the drop, Neon edges in a break, Echo trails on
+the way out.
 
 ## Hindi / Punjabi
 
