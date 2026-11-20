@@ -63,7 +63,7 @@
 <main>
   <p class="eyebrow">Legal</p>
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: 13 August 2026</p>
+  <p class="updated">Last updated: 20 November 2026</p>
 
   <p class="lead">Lyric Overlay ("the app") is a Windows application that displays beat-synced lyrics and a music visualizer for whatever is playing on your PC. This policy explains what the app does with your information, and meets the Microsoft Store privacy requirement and the disclosure expectations of the GDPR (EU/UK), the CCPA/CPRA (California), and comparable laws.</p>
   <p><strong>Developer / data controller:</strong> Dhruv Choudhary · <a href="mailto:dhruvchoudhary306@gmail.com">dhruvchoudhary306@gmail.com</a></p>
@@ -71,10 +71,11 @@
   <div class="tldr">
     <h2>The short version</h2>
     <ul>
-      <li>The app runs on your device. There is <strong>no Lyric Overlay account, server, or login</strong>, and we operate <strong>no backend</strong> that receives your data.</li>
-      <li>We run <strong>no analytics, advertising, or tracking</strong>, and we do not sell or share personal information.</li>
-      <li>The audio used for the visualizer is processed <strong>live on your device and is never recorded, saved, or transmitted</strong>.</li>
-      <li>To fetch lyrics, art, and optional AI translation, the app sends only the <strong>current song's title and artist</strong> (and, for AI, the <strong>lyric text</strong>) directly from your device to the third-party services below. It sends nothing that identifies you.</li>
+      <li>The app runs on your device. There is <strong>no Lyric Overlay account or login</strong>. The only server we run receives data <strong>only if you turn on "Send crash reports"</strong> (off by default), or when you play a YouTube video in the app (see below).</li>
+      <li>The app runs <strong>no analytics, advertising, or tracking</strong>, and we do not sell or share personal information.</li>
+      <li>The audio used for the visualizer is processed <strong>live on your device and is never transmitted</strong>. It is saved to disk only temporarily, and only when you use on-device transcription.</li>
+      <li>To fetch lyrics, art, song info, and optional AI features, the app sends the <strong>current song's title and artist</strong> (and, for AI, the <strong>lyric text</strong>) directly from your device to the third-party services below. It sends nothing that identifies you, though, as with any internet request, those services see your IP address.</li>
+      <li><strong>Settings → Privacy → Erase everything</strong> deletes all of the app's local data in one step.</li>
     </ul>
   </div>
 
@@ -86,7 +87,11 @@
     <tr><td>System audio</td><td>Audio playing on your PC, captured via WASAPI loopback</td><td>Drive the real-time visualizer</td><td><strong>No.</strong> Analyzed live; never recorded or sent</td></tr>
     <tr><td>Lyric text</td><td>Lyrics fetched or transcribed for the song</td><td>Display and optionally translate</td><td>Only when you use an AI feature</td></tr>
     <tr><td>Your API keys</td><td>Keys you paste for optional AI providers</td><td>Authenticate your own requests</td><td>Stored locally; sent only to that provider</td></tr>
-    <tr><td>Settings &amp; caches</td><td>Preferences, cached lyrics, artwork, beat maps</td><td>Remember setup, avoid re-downloading</td><td><strong>No.</strong> Stored in your local app-data folder</td></tr>
+    <tr><td>Audio fingerprint</td><td>A compact acoustic fingerprint (Chromaprint) of the song, plus its length</td><td>Identify a song whose title your player reports wrongly</td><td>Only if you add your own AcoustID key; sent to AcoustID</td></tr>
+    <tr><td>Listening history</td><td>Which songs you played and when</td><td>Insights, "Similar songs", next-track prediction</td><td><strong>No.</strong> Local only; "Clear my history" erases it</td></tr>
+    <tr><td>Crash/error log</td><td>Error messages and app version</td><td>Diagnose bugs</td><td>Local by default; sent to us only if you turn on crash reports</td></tr>
+    <tr><td>Music video links</td><td>The YouTube video or local file you link to a song</td><td>Play the video under the visuals</td><td>Only the YouTube video ID, when you play it</td></tr>
+    <tr><td>Settings &amp; caches</td><td>Preferences, cached lyrics, artwork, beat maps, previews, downloaded models</td><td>Remember setup, avoid re-downloading</td><td><strong>No.</strong> Stored in your local app-data folder</td></tr>
   </table>
   <p>The app does <strong>not</strong> collect your name, email, precise location, contacts, browsing history, or any government or financial identifiers.</p>
 
@@ -94,13 +99,23 @@
   <p>When you use the relevant feature, the app makes a direct request from your device to these services. Your data is then handled under <strong>their</strong> policies, not ours.</p>
   <p><strong>Lyrics</strong> (receive song title + artist): <a href="https://lrclib.net">LRCLIB</a>, <a href="https://music.163.com">NetEase Cloud Music</a>, <a href="https://www.kugou.com">KuGou</a>.</p>
   <p><strong>Album artwork</strong> (receive song title + artist): <a href="https://www.apple.com/legal/privacy/">Apple iTunes Search</a>, <a href="https://www.deezer.com/legal/personal-datas">Deezer</a>, <a href="https://metabrainz.org/privacy">MusicBrainz / Cover Art Archive</a>.</p>
-  <p><strong>Optional AI translation and mood</strong> (receive lyric text + song title/artist; only when you enable an AI feature and provide your own key — Devanagari transliteration runs on your device and sends nothing): <a href="https://policies.google.com/privacy">Google Gemini</a>, <a href="https://groq.com/privacy-policy/">Groq</a>, <a href="https://huggingface.co/privacy">Hugging Face</a>.</p>
+  <p><strong>Song identification and info</strong> (receive song title + artist): <a href="https://metabrainz.org/privacy">MusicBrainz</a>, also used to confirm the artist and title; <a href="https://foundation.wikimedia.org/wiki/Policy:Privacy_policy">Wikipedia</a>, only when you open "About this song".</p>
+  <p><strong>Optional song recognition</strong> (receives an audio fingerprint + song length; only if you add your own key): <a href="https://acoustid.org/privacy">AcoustID</a>.</p>
+  <p><strong>Optional AI translation, mood, and lyric correction</strong> (receive lyric text + song title/artist; only when you enable an AI feature and provide your own key or connect a command-line AI tool — Devanagari transliteration runs on your device and sends nothing): <a href="https://policies.google.com/privacy">Google Gemini</a>, <a href="https://www.anthropic.com/legal/privacy">Anthropic Claude</a>, <a href="https://groq.com/privacy-policy/">Groq</a>, <a href="https://huggingface.co/privacy">Hugging Face</a>. If you connect a command-line tool you installed and signed in to yourself (Claude Code, Gemini CLI, GitHub Copilot CLI, or Antigravity), the app hands it the prompt and the tool sends it to its own provider under <strong>your</strong> account. Ollama runs on your own machine and sends nothing.</p>
+  <p><strong>YouTube music videos</strong> (optional; only when you use ▶ Video): with your own YouTube Data API key, the app searches YouTube for the song's video (receives song title + artist; <a href="https://policies.google.com/privacy">Google</a>). Playing a video loads YouTube's official embedded player inside a small relay page on this website, hosted on GitHub Pages. That page receives the video ID and your IP address as part of the normal request. We do not log or keep either; <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a>, as host, may log requests. YouTube then serves the video under Google's policy, which may include its own cookies. If you installed yt-dlp yourself, the app can run it to save a video; yt-dlp contacts YouTube directly, and the app ships no downloader.</p>
+  <p><strong>Model downloads</strong> (one-time, only after you agree to each; receive nothing about you or your music): <a href="https://huggingface.co/privacy">Hugging Face</a>, for the on-device speech (Whisper), vocal-isolation (Demucs), and speaker models.</p>
   <p><strong>Optional Hindi pack</strong> (a one-time file download, only if you choose it; receives nothing about you or your music): <a href="https://huggingface.co/privacy">Hugging Face</a>, hosting AI4Bharat's Aksharantar word list.</p>
   <p><strong>Software updates</strong> (a request for the latest release, nothing about you or your music; at launch and every 6 hours): <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a>. The Microsoft Store version does not self-update; the Store delivers updates.</p>
   <p>Because these providers are based in different countries (including the United States and China), using a given feature may transfer your song title/artist and lyric text to servers in those countries. Choose which features to use accordingly.</p>
 
   <h2>On-device auto-transcription (Whisper)</h2>
-  <p>If you turn on automatic lyric transcription, speech recognition runs <strong>entirely on your device</strong> using a bundled local model. The audio and the resulting transcript are <strong>not uploaded</strong> anywhere.</p>
+  <p>If you turn on automatic lyric transcription, speech recognition runs <strong>entirely on your device</strong> using a downloaded local model. To do this the app briefly writes the song's audio to a temporary file on your device, which it deletes when the transcription finishes (or at next launch, if the app was closed mid-way). The audio and the resulting transcript are <strong>not uploaded</strong> anywhere.</p>
+
+  <h2>Optional crash reports</h2>
+  <p>Every error is written to a local crash log you can open from Settings. If you turn on <strong>Settings → Send crash reports</strong> (off by default), each new entry is also sent to a server we run (a Cloudflare Worker). A report contains only the error message, the app version, and your operating system's name. Before it is sent, the app removes your user-folder path, your account name, and the names of any media files. It never includes song titles, artists, or lyrics. We keep reports for 90 days, then they are deleted automatically, and we use them only to fix bugs. <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>, as our host, processes the request (including your IP address); we do not store the IP address with the report.</p>
+
+  <h2>This website</h2>
+  <p>This site counts page views with a same-origin counter: a page name and a tally, with no cookies, no IP address stored, and no third-party analytics.</p>
 
   <h2>Reporting AI content</h2>
   <p>The app's generative features (translation, transliteration, and mood) can produce text shown to you. To report output you find inappropriate, use the <strong>"Report content"</strong> control in the app's AI-settings panel, or email <a href="mailto:dhruvchoudhary306@gmail.com">dhruvchoudhary306@gmail.com</a>.</p>
@@ -109,16 +124,16 @@
   <p>Where the GDPR applies, we rely on <strong>legitimate interests</strong> to process now-playing metadata and audio locally so the app works as expected, and on <strong>your consent</strong> — given by enabling a feature — for each request the app sends to a third-party lyrics, artwork, or AI provider. Each such provider is an independent controller under its own policy.</p>
 
   <h2>Data retention</h2>
-  <p>Local caches, settings, and API keys remain on your device until you clear the app's cache or uninstall it. We retain nothing, because we receive nothing. Third-party providers retain data per their own policies.</p>
+  <p>Local caches, settings, history, and API keys remain on your device until you erase them (Settings → Privacy → Erase everything) or uninstall the app. Crash reports, if you turned them on, are kept for 90 days; we receive and keep nothing else. Third-party providers retain data per their own policies.</p>
 
   <h2>Your rights</h2>
-  <p>You control your data directly: clear the app's cache or uninstall the app to remove local data, and disable features plus remove your API keys to stop all third-party requests. Depending on where you live (for example, the EU/UK under the GDPR or California under the CCPA/CPRA), you may have rights to access, correct, delete, or port personal data and to object to or restrict processing. Because we hold no data about you on any server, exercise these rights against your local data as above, and against a third-party provider directly for data it holds. We do not sell or "share" personal information as defined by the CCPA/CPRA, and we do not discriminate against anyone for exercising a privacy right.</p>
+  <p>You control your data directly: <strong>Settings → Privacy → Erase everything</strong> deletes every cache, setting, API key, history, preview, and downloaded model, then restarts the app ("Clear my history" erases just the listening history). Uninstalling also removes the app's data folder. Disable features and remove your API keys to stop third-party requests, and turn crash reports off at any time. Crash reports carry no identifier, so we may not be able to tell which ones are yours, but you can email us with the approximate date to have them deleted early. Depending on where you live (for example, the EU/UK under the GDPR or California under the CCPA/CPRA), you may have rights to access, correct, delete, or port personal data and to object to or restrict processing. Apart from anonymous crash reports, we hold no data about you on any server, so exercise these rights against your local data as above, and against a third-party provider directly for data it holds. We do not sell or "share" personal information as defined by the CCPA/CPRA, and we do not discriminate against anyone for exercising a privacy right.</p>
 
   <h2>Children's privacy</h2>
-  <p>The app is not directed to children under 13 (or under 16 in the EU/UK), and we do not knowingly collect personal information from them. Because we operate no account system or server, we do not knowingly hold any such data.</p>
+  <p>The app is not directed to children under 13 (or under 16 in the EU/UK), and we do not knowingly collect personal information from them. Because we operate no account system, we do not knowingly hold any such data.</p>
 
   <h2>Security</h2>
-  <p>Requests to third-party services are made over encrypted HTTPS connections. Your settings and API keys are stored in your Windows user profile and protected by your operating system's account security. No method of transmission or storage is completely secure, so we cannot guarantee absolute security.</p>
+  <p>Requests to third-party services are made over encrypted HTTPS connections. Your settings and API keys are stored in a file in your Windows user profile. They are protected by your operating system's account security but are not separately encrypted, so anyone with access to your Windows account can read them. No method of transmission or storage is completely secure, so we cannot guarantee absolute security.</p>
 
   <h2>Changes to this policy</h2>
   <p>We may update this policy as the app changes. Material changes will be reflected by a new "Last updated" date at the top. Continued use of the app after an update means you accept the revised policy.</p>

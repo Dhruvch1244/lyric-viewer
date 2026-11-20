@@ -7,6 +7,32 @@ All notable changes to Lyric Overlay. Versions follow [semantic versioning](http
 
 
 
+## 0.65.0 — 2026-11-20
+
+- **Erase everything, in one click (well, two).** Settings → Privacy →
+  **Erase everything** deletes every cache, setting, API key, listening
+  history, preview and downloaded model, then restarts. The wipe runs at the
+  next launch, before anything has opened a file — on Windows an open file
+  can't be deleted, and a half-done erase that looks finished is the worst
+  thing a privacy button can do. It only ever touches the app's own folder.
+- **Crash reports carry nothing about you.** The opt-in remote crash report
+  already left out song, artist and lyrics, but the error text itself could
+  name your user folder or a file like `Artist - Title.mp3`. Your home path,
+  account name and every media file name are now stripped before anything
+  leaves the machine. The local crash log keeps the full text.
+- **A privacy policy that matches the app.** Rewritten to cover everything
+  the app actually contacts: AcoustID (audio fingerprint), YouTube search and
+  the video relay page, Wikipedia, Anthropic, the command-line AI tools,
+  model downloads, opt-in crash reports (90-day retention) and the local
+  listening history. A 🔒 Privacy policy button in Settings opens it.
+- **Previews for every look, not just MilkDrop.** ☰ Browse in Overlay,
+  Shaders and Prism now shows a real snapshot of each look the first time it
+  has been on screen for a few seconds, in place of a placeholder gradient.
+  Snapshots are kept locally alongside MilkDrop's.
+- **Readable dropdowns on Linux.** Every select was drawn by the light GTK
+  theme — white on the dark UI. They are dark now, with the accent on the
+  chosen option.
+
 ## 0.64.0 — 2026-11-19
 
 - **The cover, in motion — two new looks.** **Cover Earth** dives endlessly

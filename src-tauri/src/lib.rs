@@ -30,6 +30,7 @@ mod commands;
 mod correct;
 mod crashlog;
 mod distro_update;
+mod erase;
 mod fingerprint;
 mod genius;
 mod genre;
@@ -141,6 +142,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = state::APP_HANDLE.set(handle.clone());
+            // Before anything opens a file in the config dir (erase.rs).
+            erase::apply_pending(&handle);
             crashlog::install_panic_hook(handle.clone());
             let _ = tray::build_tray(&handle);
             tray::register_hotkeys(&handle);
@@ -246,6 +249,7 @@ pub fn run() {
             commands::misc::milkdrop_thumb_put,
             commands::misc::milkdrop_thumb_clear,
             commands::misc::clear_listening_history,
+            erase::erase_all_local_data,
             commands::misc::get_song_info,
             commands::misc::get_similar_songs,
             commands::prefs::set_api_key,

@@ -188,6 +188,11 @@
     // Listening stats (stats.rs) — unlimited local play log behind the
     // Insights panel. `days` omitted covers the whole history.
     clearListeningHistory: () => call('clear_listening_history', {}),
+    eraseAllLocalData: () => call('erase_all_local_data', {}),
+    // The opener plugin's own command; `opener:allow-open-url` is granted in
+    // capabilities/default.json. Opens in the system browser, not the WebView.
+    // Same site as music-video.js's RELAY_ORIGIN and crashlog.rs's endpoint.
+    openPrivacyPolicy: () => call('plugin:opener|open_url', { url: 'https://lyricoverlay.dhruvchoudhary.com/privacy.html' }),
 
     // "About this song" (wiki.rs) — on-demand Wikipedia lookup, cached
     // per-song on the backend so reopening the panel costs nothing.

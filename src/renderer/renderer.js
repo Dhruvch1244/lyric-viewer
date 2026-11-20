@@ -161,8 +161,9 @@ const els = {
   whatever it was in the middle of, invisible to anyone but the person
   watching devtools. Forwarded into the same local crash.log a Rust panic
   lands in (see crashlog.rs), so a bug report has one file to attach instead
-  of "well it broke, I don't know why." Local-only, same as the Rust side —
-  nothing here is sent anywhere on its own. Registered before anything else
+  of "well it broke, I don't know why." Local by default; sent anywhere only
+  if the user turns on "Send crash reports", and then scrubbed of paths,
+  usernames and media file names first (crashlog::scrub). Registered before anything else
   runs so it catches boot-time errors too.
 */
 window.addEventListener('error', (e) => {
@@ -5413,6 +5414,12 @@ if (els.welcomeClose) els.welcomeClose.addEventListener('click', closeWelcome);
 const SEEN_VERSION_KEY = 'seenVersion';
 
 const WHATS_NEW = {
+  '0.65.0': [
+    '<b>Erase everything</b> — Settings → Privacy wipes every cache, key, history and model in one go.',
+    '<b>Previews for every look</b> — ☰ Browse shows a real snapshot of each look once you have seen it.',
+    '<b>Crash reports scrubbed</b> of your user folder, account name and file names before they leave.',
+    '<b>Dark dropdowns on Linux</b>, and a 🔒 Privacy policy button in Settings.',
+  ],
   '0.64.0': [
     '<b>Cover Earth</b> — dive endlessly into the album art, and pull back out on the drop. <b>Cover Glass</b> — the cover over a flowing wash of its own colours.',
     '<b>Ten new video effects</b> on a downloaded video — Echo trails, Time warp, Datamosh, Neon glow, Neon halftone, Glitch and more — plus five new neon grades.',
@@ -6656,6 +6663,50 @@ if (els.wallpaperBtn) {
         clearBtn.disabled = false;
       }
     });
+  }
+}
+
+/* Erase all my data (erase.rs). Two clicks, unlike Clear my history: this
+   one also takes API keys, downloaded models and every setting, and can't be
+   undone. The WebView's own storage is cleared here first — the Rust side
+   can't reach it while this page is alive — then the backend marks the data
+   and restarts into the wipe. */
+{
+  const eraseBtn = document.getElementById('keybox-erase-all');
+  const eraseStatus = document.getElementById('keybox-erase-all-status');
+  let armed = null;
+  if (eraseBtn && window.player && window.player.eraseAllLocalData) {
+    eraseBtn.addEventListener('click', async () => {
+      if (!armed) {
+        eraseBtn.textContent = '⚠ Click again to erase and restart';
+        armed = setTimeout(() => { armed = null; eraseBtn.textContent = '⚠ Erase everything…'; }, 5000);
+        return;
+      }
+      clearTimeout(armed);
+      armed = null;
+      eraseBtn.disabled = true;
+      if (eraseStatus) eraseStatus.textContent = 'erasing…';
+      try { localStorage.clear(); } catch {}
+      try { sessionStorage.clear(); } catch {}
+      try {
+        if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+      } catch {}
+      try {
+        if (indexedDB.databases) {
+          for (const db of await indexedDB.databases()) if (db.name) indexedDB.deleteDatabase(db.name);
+        }
+      } catch {}
+      try {
+        await window.player.eraseAllLocalData(); // restarts on success
+      } catch {
+        eraseBtn.disabled = false;
+        if (eraseStatus) eraseStatus.textContent = 'could not erase';
+      }
+    });
+  }
+  const privacyBtn = document.getElementById('keybox-privacy');
+  if (privacyBtn && window.player && window.player.openPrivacyPolicy) {
+    privacyBtn.addEventListener('click', () => { window.player.openPrivacyPolicy().catch(() => {}); });
   }
 }
 
