@@ -3031,7 +3031,7 @@ html.webkitgtk * {
 .looks__card:hover,
 .looks__card:focus-visible { border-color: rgba(255, 255, 255, 0.45); }
 .looks__card[aria-selected="true"] { border-color: #28e0ec; box-shadow: 0 0 0 1px #28e0ec inset; }
-.looks__swatch { height: 2.6rem; border-radius: 6px; background: rgba(255, 255, 255, 0.08); }
+.looks__swatch { width: 100%; aspect-ratio: 16 / 9; border-radius: 6px; background: rgba(255, 255, 255, 0.08); }
 .looks__name { font-weight: 600; font-size: 0.9em; }
 .looks__meta { opacity: 0.6; font-size: 0.75em; }
 
@@ -3116,3 +3116,42 @@ body.mv-on.mv-mix-off #backdrop { opacity: 0; }
 .cut-veil--flash { background: radial-gradient(circle at 50% 50%, #fff 0%, #fff 35%, rgba(255, 255, 255, 0.85) 100%); }
 .cut-veil--dip { background: #000; }
 .cut-veil--glow { background: radial-gradient(circle at 50% 55%, var(--accent-live, #8af) 0%, rgba(0, 0, 0, 0.92) 85%); }
+
+/* ---------------------------------------------------------------- selects
+   The app is dark-only, but nothing told the engine so: WebKitGTK (Linux)
+   then draws <select> — and, worse, its dropdown list — with the light GTK
+   theme, white on a dark UI. `color-scheme: dark` fixes native widgets on
+   WebView2 and recent WebKitGTK; `appearance: none` stops GTK painting the
+   closed control at all; and option/optgroup get an opaque background
+   because the translucent --chip-bg would show the light popup through it.
+   The arrow is a data: SVG (allowed by img-src in index.html's CSP). */
+:root { color-scheme: dark; }
+
+select,
+select.chip {
+  -webkit-appearance: none;
+  appearance: none;
+  color: var(--ink);
+  background-color: rgba(28, 28, 36, 0.92);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23ffffffb3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6em center;
+  padding-right: 1.8em;
+  cursor: pointer;
+}
+
+select option,
+select optgroup {
+  background-color: #1c1c24;
+  color: #ffffff;
+}
+
+select option:checked {
+  background-color: var(--accent);
+  color: #ffffff;
+}
+
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

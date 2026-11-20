@@ -485,6 +485,27 @@
           <span id="keybox-clear-history-status" class="keybox__status" role="status"></span>
         </div>
 
+        <!-- erase.rs: wipes every local store (caches, keys, history,
+             models, crash log) on a restart, plus the WebView's own storage
+             (renderer.js). The policy's "erase from within the app" claim
+             rests on this button. -->
+        <div class="keybox__section">
+          <span class="keybox__heading">Privacy</span>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">Erase all my data</span>
+          <button id="keybox-erase-all" class="chip" type="button"
+                  title="Delete every cache, setting, API key, history and downloaded model, then restart">⚠ Erase everything…</button>
+          <span id="keybox-erase-all-status" class="keybox__status" role="status"></span>
+        </div>
+
+        <div class="keybox__local">
+          <span class="keybox__label">What the app sends, and where</span>
+          <button id="keybox-privacy" class="chip" type="button"
+                  title="Open the privacy policy in your browser">🔒 Privacy policy</button>
+        </div>
+
         <div class="keybox__section">
           <span class="keybox__heading">Diagnostics</span>
         </div>

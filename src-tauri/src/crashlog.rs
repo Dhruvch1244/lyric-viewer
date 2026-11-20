@@ -49,14 +49,82 @@ const REMOTE_TIMEOUT: Duration = Duration::from_secs(5);
 /// someone was listening to. Just enough to debug the app itself.
 fn send_remote(kind: String, body: String) {
     std::thread::spawn(move || {
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
         let payload = json!({
             "kind": kind,
-            "message": body,
+            "message": scrub(&body, &home),
             "appVersion": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
         });
         let _ = ureq::post(REMOTE_ENDPOINT).timeout(REMOTE_TIMEOUT).send_json(payload);
     });
+}
+
+/// Strip what would identify the person or their music from a message bound
+/// for the remote endpoint. "No track/artist/title" above is a promise about
+/// the payload's *fields*, but the message itself is free text: an error
+/// like `cannot open C:\Users\Asha\Music\Artist - Title.mp3` carries the
+/// account name and the song in one string. So, before anything leaves:
+///
+/// - the home directory (exact match from the environment) becomes `~`;
+/// - any remaining `\Users\<name>` / `/home/<name>` segment loses its name;
+/// - any path component ending in a media extension becomes `<media file>`.
+///
+/// The local crash.log keeps the raw text — it never leaves the machine, and
+/// the person attaching it to a report can see exactly what is in it.
+/// Hand-rolled rather than a regex crate (the "std first" convention); it
+/// only has to be conservative, never perfect, since the send is opt-in.
+pub(crate) fn scrub(message: &str, home: &str) -> String {
+    let mut out = if home.len() > 3 { message.replace(home, "~") } else { message.to_string() };
+    for marker in ["\\Users\\", "/Users/", "/home/", "\\users\\"] {
+        let mut from = 0;
+        while let Some(rel) = out[from..].find(marker) {
+            let start = from + rel + marker.len();
+            let end = out[start..]
+                .find(['\\', '/', '"', '\'', '\n', ':'])
+                .map_or(out.len(), |e| start + e);
+            if end > start && &out[start..end] != "<user>" {
+                out.replace_range(start..end, "<user>");
+            }
+            from = start + "<user>".len().min(out.len() - start);
+        }
+    }
+    const MEDIA: &[&str] = &[
+        ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wma", ".alac", ".aiff",
+        ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".lrc",
+    ];
+    let lower = out.to_lowercase();
+    // Walk matches back to front so earlier byte offsets stay valid. Only
+    // ASCII extensions are searched, and `to_lowercase` of ASCII keeps byte
+    // lengths, but non-ASCII chars elsewhere may not — bail to the safe
+    // whole-message redaction if the lengths ever disagree.
+    if lower.len() != out.len() {
+        return if MEDIA.iter().any(|ext| lower.contains(ext)) { "<redacted: message named a media file>".into() } else { out };
+    }
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    for ext in MEDIA {
+        let mut from = 0;
+        while let Some(rel) = lower[from..].find(ext) {
+            let end = from + rel + ext.len();
+            // Only a real extension: the next char must end the token.
+            let ends = lower[end..].chars().next().map_or(true, |c| !c.is_alphanumeric());
+            if ends {
+                let start = lower[..end]
+                    .rfind(['\\', '/', '"', '\'', '\n', '(', '['])
+                    .map_or(0, |i| i + 1);
+                cuts.push((start, end));
+            }
+            from = end;
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    for (start, end) in cuts.into_iter().rev() {
+        if out.is_char_boundary(start) && out.is_char_boundary(end) {
+            out.replace_range(start..end, "<media file>");
+        }
+    }
+    out
 }
 
 /// Cap so months of use can't grow this file unboundedly. Crossing it drops
@@ -178,6 +246,38 @@ mod tests {
     fn format_entry_includes_kind_and_trims_body() {
         let line = format_entry("panic", 42, "  boom  ");
         assert_eq!(line, "[t+42] panic: boom\n");
+    }
+
+    #[test]
+    fn scrub_removes_home_dir_and_username() {
+        let s = scrub(r"panic at C:\Users\Asha\AppData\x.rs:1:2", r"C:\Users\Asha");
+        assert_eq!(s, r"panic at ~\AppData\x.rs:1:2");
+        let s = scrub("read /home/asha/.config/x failed", "");
+        assert_eq!(s, "read /home/<user>/.config/x failed");
+        let s = scrub(r"D:\Users\Someone Else\x", "");
+        assert_eq!(s, r"D:\Users\<user>\x");
+    }
+
+    #[test]
+    fn scrub_hides_media_file_names() {
+        let s = scrub(r"cannot open D:\Music\Artist - Secret Song.mp3: not found", "");
+        assert_eq!(s, r"cannot open D:\Music\<media file>: not found");
+        let s = scrub("decode \"Other Tune.FLAC\" failed", "");
+        assert_eq!(s, "decode \"<media file>\" failed");
+    }
+
+    #[test]
+    fn scrub_leaves_ordinary_errors_alone() {
+        let msg = "TypeError: x is undefined at renderer.js:12:4";
+        assert_eq!(scrub(msg, "/home/me"), msg);
+        // ".mp3x" is not an extension; "src/mp3.rs" is source, not media.
+        assert_eq!(scrub("bad codec in src/mp3.rs", ""), "bad codec in src/mp3.rs");
+    }
+
+    #[test]
+    fn scrub_survives_non_ascii_text() {
+        let s = scrub("गाना C:\\Music\\गीत.mp3 missing", "");
+        assert!(!s.contains("गीत"), "{s}");
     }
 
     #[test]
